@@ -22,6 +22,7 @@
     <!-- Category -->
 
     <string name="homepage">Página de inicio</string>
+	<string name="subscription">Suscripción</string>
     <string name="whats_hot">Destacado</string>
     <string name="favourite">Favoritos</string>
     <string name="history">Historial</string>
@@ -119,7 +120,7 @@
     <string name="search_specify_tag">Etiquetas específicas</string>
     <string name="search_enable_advance">Habilitar opciones avanzadas</string>
 
-    <string name="search_tip">Búsqueda normal: Solo busca.\n\nUploader especifico: Listar de galerías subidas por el uploader. Otras opciones serán ignoradas.\n\nEtiquetas específicas: Listar las galerías que contienen la etiqueta. Solo se acepta una etiqueta. Otras opciones serán ignoradas.</string>
+    <string name="search_tip">Búsqueda normal: Solo busca.\n\nBúsqueda de suscripción: Buscar etiquetas suscriptas.n\nUploader especifico: Listar de galerías subidas por el uploader. Otras opciones serán ignoradas.\n\nEtiquetas específicas: Listar las galerías que contienen la etiqueta. Solo se acepta una etiqueta. Otras opciones serán ignoradas.</string>
 
     <string name="search_sname">Buscar galerías</string>
     <string name="search_stags">Buscar etiquetas de galería</string>
@@ -130,12 +131,18 @@
     <string name="search_sdt2">Buscar etiquetas pobres</string>
     <string name="search_sh">Mostrar galerías borradas</string>
     <string name="search_sr">Valoración mínima:</string>
-
+    <string name="search_subscription_search">Búsqueda de etiquetas suscritas</string>
     <string name="select_image">Seleccionar imagen</string>
     <string name="search_uss">Usar búsqueda similar</string>
     <string name="search_osc">Buscar solo portadas</string>
     <string name="search_se">Mostrar borrados</string>
     <string name="select_image_first">Seleccione la imagen primero</string>
+	<string name="search_sp">Páginas:</string>
+    <string name="search_sp_to">hasta</string>
+	<string name="search_sf">Deshabilitar filtros para:</string>
+    <string name="search_sfl">Lenguaje</string>
+    <string name="search_sfu">Uploader</string>
+    <string name="search_sft">Etiqueta</string>
 
     <string name="quick_search">Búsqueda rápida</string>
     <string name="quick_search_tip">Pulsar \"+\" para añadir a la búsqueda rápida</string>
@@ -251,7 +258,7 @@
     <string name="check_vote_status">Verificar estado del voto</string>
 
     <!-- Gallery Previews -->
-    <string name="gallery_previews">Vista previa de la galeria</string>
+    <string name="gallery_previews">Vista previa de la galería</string>
     <string name="go_to">Ir a</string>
 
     <!-- Download -->
@@ -274,6 +281,8 @@
     <string name="download_remove_dialog_message">¿Borrar %s de la lista de descargas?</string>
     <string name="download_remove_dialog_message_2">¿Borrar %d galerías de la lista de descargas?</string>
     <string name="download_remove_dialog_check_text">Borrar imágenes</string>
+	<string name="download_reset_reading_progress">Reiniciar progreso de lectura</string>
+    <string name="reset_reading_progress_message">¿Deseas reiniciar el progreso de lectura en todas las galerías?</string>
     <string name="stat_download_action_stop_all">Detener todo</string>
     <string name="drawer_download_label_title">Etiquetas</string>
     <string name="default_download_label_name">Predeterminado</string>
@@ -307,7 +316,7 @@
     <string name="filter_title">Título</string>
     <string name="filter_uploader">Uploader</string>
     <string name="filter_tag">Etiqueta</string>
-    <string name="filter_tag_namespace">Etiqueta de espacio de nombres</string>
+    <string name="filter_tag_namespace">Etiqueta de namespaces</string>
     <string name="tip">Sugerencia</string>
     <string name="show_definition">Mostrar definición</string>
 
@@ -334,6 +343,9 @@
     <string name="settings_eh_sign_out_tip">Sesión cerrada. Reinicie la aplicación para volver iniciar sesión</string>
 	<string name="settings_u_config">Configuración de EHentai</string>
     <string name="settings_u_config_summary">Configurar en la página de EHentai</string>
+	<string name="settings_my_tags">Mis etiquetas</string>
+	<string name="settings_my_tags_summary">Ver página de etiquetas en EHentai</string>
+	<string name="settings_eh_launch_page">Página al iniciar aplicación</string>
     <string name="settings_eh_gallery_site">Seleccionar galería</string>
     <string name="settings_eh_list_mode">Modo lista</string>
     <string name="settings_eh_list_mode_detail">Con detalles</string>
@@ -356,9 +368,12 @@
     <string name="settings_eh_excluded_tag_namespaces">Excluir etiquetas espacios de nombres</string>
     <string name="settings_eh_excluded_tag_namespaces_summary">Excluir ciertos espacios de nombres de una búsqueda de etiquetas por defecto</string>
     <string name="settings_eh_show_jpn_title">Mostrar títulos en japonés</string>
+	<string name="settings_eh_show_jpn_title_summary">Es necesario habilitar los títulos en japonés en la propia página de EHentai</string>
     <string name="settings_eh_show_gallery_pages">Mostrar número de páginas de la galería</string>
     <string name="settings_eh_show_gallery_pages_summary">Se verá cuántas páginas tiene una galería</string>
-    <string name="settings_eh_cellular_network_warning">Advertencia de redes moviles</string>
+	<string name="settings_eh_filter">Filtrado de galerías</string>
+    <string name="settings_eh_filter_summary">Filtrado de galerías por título, uploader y etiquetas. Para más detalles presiona el ícono (i) en la parte superior del menú</string>
+    <string name="settings_eh_cellular_network_warning">Advertencia de redes móviles</string>
 
     <string name="settings_read">Lectura</string>
     <string name="settings_read_screen_rotation">Orientación de la pantalla</string>
@@ -595,6 +610,19 @@
     <string name="error_something_wrong_happened">Ocurrió algo malo</string>
     <string name="dialog_archive_title">H@H Downloader</string>
     <string name="settings_privacy">Privacidad</string>
+	<string name="filter">Bloqueo de galerías</string>
+    <string name="no_filter">Las etiquetas bloqueadas se mostrarán acá</string>
+    <string name="filter_title">Título</string>
+    <string name="filter_uploader">Uploader</string>
+    <string name="filter_tag">Etiqueta</string>
+    <string name="filter_tag_namespace">Etiqueta namespace</string>
+    <string name="delete_filter">¿Borrar \"%s\"?</string>
+    <string name="tip">Tip</string>
+    <string name="add_filter">Añadir etiqueta</string>
+    <string name="show_definition">Ver definición</string>
+    <string name="filter_text">Escribe la etiqueta</string>
+    <string name="filter_tip">Este sistema de bloqueo filtrará las galerías de EHentai que contengan la etiqueta especificada acá.\n\nBloqueo de título: excluye las galerías cuyo título contenga la palabra.\n\nBloqueo de uploader: Excluye las galerías que publicadas por el uploader.\n\nBloqueo de etiqueta: excluye galerías que contengan la etiqueta, tomará más tiempo en obtener la lista de galerías.\n\nBloqueo de etiqueta namespace: excluye galerías que contengan la etiqueta namespace, tomará más tiempo en obtener la lista de galerías. Nota: Con namespace quiere decir etiquetas como "male", "female", "misc", entre otros./string>
+	
     <string name="settings_privacy_secure">Impedir capturas de pantalla</string>
     <string name="settings_privacy_secure_summary">Si habilitas esta opción no podrás hacer captura de pantalla y el sistema no mostrará una previsualización en el multitareas.\n\nDeberás reiniciar la aplicación para activar esta función.</string>
     <string name="page_menu_save_to">Guardar a...</string>
