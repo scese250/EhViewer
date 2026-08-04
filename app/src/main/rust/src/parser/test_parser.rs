@@ -32,9 +32,10 @@ mod tests {
         assert!(!first.simpleTags.is_empty());
         assert!(!first.watchedTags.is_empty());
         assert!(
-            first.watchedTags.iter().any(|t| {
-                t.text == "f:ryona" && t.color.as_deref() == Some("A600FF")
-            }),
+            first
+                .watchedTags
+                .iter()
+                .any(|t| { t.text == "f:ryona" && t.color.as_deref() == Some("A600FF") }),
             "Expected watched tag f:ryona with color A600FF, got {:?}",
             first.watchedTags,
         );
@@ -49,7 +50,10 @@ mod tests {
         );
         for info in &result.galleryInfoList {
             assert!(
-                !info.watchedTags.iter().any(|t| t.text == "english" || t.text == "chinese"),
+                !info
+                    .watchedTags
+                    .iter()
+                    .any(|t| t.text == "english" || t.text == "chinese"),
                 "Language tag should be filtered from watchedTags, got {:?}",
                 info.watchedTags,
             );

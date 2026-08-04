@@ -7,6 +7,7 @@ import androidx.room.PrimaryKey
 import androidx.room.TypeConverters
 import com.ehviewer.core.database.util.SimpleTagsConverter
 import com.ehviewer.core.model.BaseGalleryInfo
+import com.ehviewer.core.model.WatchedTag
 
 @Entity(tableName = "GALLERIES")
 @TypeConverters(SimpleTagsConverter::class)
@@ -51,6 +52,9 @@ class GalleryEntity(
     @ColumnInfo(name = "FAVORITE_SLOT")
     override var favoriteSlot: Int,
 ) : BaseGalleryInfo() {
+
+    @Ignore
+    override var watchedTags: List<WatchedTag>? = null
 
     @Ignore
     override var disowned: Boolean = false
