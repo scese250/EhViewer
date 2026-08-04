@@ -249,6 +249,8 @@
     <string name="settings_eh_detail_size_short">Corto</string>
     <string name="settings_eh_show_jpn_title">Mostrar títulos en japonés</string>
     <string name="settings_eh_show_jpn_title_summary">Es necesario habilitar los títulos en japonés en la propia página de EHentai</string>
+    <string name="settings_eh_show_gallery_tags">Mostrar tags de la galería</string>
+    <string name="settings_eh_show_gallery_tags_summary">Los tags marcados como watched serán visibles en las galerías en modo de lista Detallado</string>
     <string name="settings_eh_show_gallery_pages">Mostrar número de páginas de la galería</string>
     <string name="settings_eh_show_gallery_pages_summary">Se verá cuántas páginas tiene una galería</string>
     <string name="settings_eh_filter">Filtrado de galerías</string>

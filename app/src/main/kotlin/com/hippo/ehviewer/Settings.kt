@@ -88,6 +88,7 @@ object Settings : DataStorePreferences(null) {
     val showTagTranslations = boolPref("show_tag_translations", false).observed(::updateWhenTagTranslationChanges)
     val meteredNetworkWarning = boolPref("cellular_network_warning", false)
     val showJpnTitle = boolPref("show_jpn_title", false)
+    val showGalleryTags = boolPref("show_gallery_tags", false)
     val requestNews = boolPref("request_news", false).observed { updateWhenRequestNewsChanges() }
     val hideHvEvents = boolPref("hide_hv_events", false)
 

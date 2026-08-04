@@ -5,6 +5,10 @@ import java.util.regex.Pattern
 val isRelease: Boolean
     get() = gradle.startParameter.taskNames.any { it.contains("Release") }
 
+// Optional override for releases: -PversionCode=... -PversionName=... (set from the git tag by GitHub Actions)
+val releaseVersionCode: Int? = (findProperty("versionCode") as String?)?.toIntOrNull()
+val releaseVersionName: String? = findProperty("versionName") as String?
+
 plugins {
     alias(libs.plugins.ehviewer.android.application)
     alias(libs.plugins.kotlin.serialization)
@@ -55,9 +59,9 @@ android {
     val snapshot = !hasProperty("release")
 
     defaultConfig {
-        applicationId = "moe.tarsin.ehviewer"
-        versionCode = 180063
-        versionName = if (snapshot) {
+        applicationId = "com.scese250.ehviewer"
+        versionCode = releaseVersionCode ?: 180063
+        versionName = releaseVersionName ?: if (snapshot) {
             "1.15.0-SNAPSHOT"
         } else {
             "1.14.6"

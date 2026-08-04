@@ -10,6 +10,13 @@ use std::borrow::Cow;
 use std::ops::Index;
 use tl::{Node, Parser, VDom};
 
+#[derive(Serialize, Debug)]
+#[allow(non_snake_case)]
+pub struct WatchedTag {
+    pub text: String,
+    pub color: Option<String>,
+}
+
 #[derive(Serialize, Debug, Default)]
 #[allow(non_snake_case)]
 pub struct BaseGalleryInfo {
@@ -25,6 +32,7 @@ pub struct BaseGalleryInfo {
     pub rating: f32,
     pub rated: bool,
     pub simpleTags: Vec<String>,
+    pub watchedTags: Vec<WatchedTag>,
     pub pages: i32,
     pub thumbWidth: i32,
     pub thumbHeight: i32,
@@ -113,6 +121,13 @@ fn parse_thumb_resolution(str: &str) -> (i32, i32) {
     }
 }
 
+fn parse_watched_tag_color(style: &str) -> Option<String> {
+    let cap = regex!(r"border-color:\s*#([0-9a-fA-F]{6})")
+        .captures(style)
+        .or_else(|| regex!(r"radial-gradient\(\s*#([0-9a-fA-F]{6})").captures(style))?;
+    Some(cap[1].to_string())
+}
+
 fn parse_gallery_info(node: &Node, parser: &Parser) -> Option<BaseGalleryInfo> {
     let tag = node.as_tag()?;
     let title = get_first_element_by_class_name(node, parser, "glink")?.inner_text(parser);
@@ -125,6 +140,22 @@ fn parse_gallery_info(node: &Node, parser: &Parser) -> Option<BaseGalleryInfo> {
     let simple_tags = tag
         .query_selector(parser, ".gt, .gtl")?
         .filter_map(|tag| get_node_handle_attr(&tag, parser, "title").map(str::to_string))
+        .collect();
+    let watched_tags = tag
+        .query_selector(parser, ".gt, .gtl")
+        .into_iter()
+        .flatten()
+        .filter_map(|handle| {
+            let node = handle.get(parser)?;
+            // The gallery language (e.g. "english") is already shown next to the page count
+            // ("EN 20P"), so drop the redundant language tag from the chips
+            if get_node_attr(node, "title")?.starts_with("language:") {
+                return None;
+            }
+            let text = node.inner_text(parser).trim().to_string();
+            let color = get_node_attr(node, "style").and_then(parse_watched_tag_color);
+            Some(WatchedTag { text, color })
+        })
         .collect();
     let (thumb, (thumb_height, thumb_width)) =
         match tag.query_selector(parser, "[data-src]")?.next() {
@@ -184,6 +215,7 @@ fn parse_gallery_info(node: &Node, parser: &Parser) -> Option<BaseGalleryInfo> {
         rating: parse_rating(rating),
         rated: ir_c.contains("irr") || ir_c.contains("irg") || ir_c.contains("irb"),
         simpleTags: simple_tags,
+        watchedTags: watched_tags,
         pages,
         thumbWidth: thumb_width,
         thumbHeight: thumb_height,

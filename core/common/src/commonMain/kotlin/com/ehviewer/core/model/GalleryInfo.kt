@@ -28,6 +28,13 @@ interface GalleryInfo {
     var rating: Float
     var rated: Boolean
     var simpleTags: List<String>?
+
+    /**
+     * Tags shown on the gallery list pages, parsed from the page HTML exactly as the website
+     * renders them (watched MyTags plus language tags), carrying the display text and color.
+     * Only populated for network lists; never persisted.
+     */
+    var watchedTags: List<WatchedTag>?
     var pages: Int
     var thumbWidth: Int
     var thumbHeight: Int

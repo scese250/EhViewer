@@ -5,23 +5,28 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.ShapeDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -33,12 +38,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.ehviewer.core.model.GalleryInfo
 import com.ehviewer.core.model.GalleryInfo.Companion.NOT_FAVORITED
+import com.ehviewer.core.model.WatchedTag
 import com.ehviewer.core.ui.component.CrystalCard
 import com.ehviewer.core.ui.component.ElevatedCard
 import com.ehviewer.core.ui.component.GalleryListCardRating
@@ -46,7 +56,9 @@ import com.ehviewer.core.ui.util.SharedElementBox
 import com.ehviewer.core.ui.util.TransitionsVisibilityScope
 import com.ehviewer.core.ui.util.listThumbGenerator
 import com.hippo.ehviewer.EhDB
+import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhUtils
+import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.util.FavouriteStatusRouter
 
@@ -81,6 +93,15 @@ fun GalleryInfoListItem(
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.titleSmall,
             )
+            val showWatchedTags by Settings.showGalleryTags.collectAsState()
+            if (showWatchedTags) {
+                info.watchedTags?.takeIf { it.isNotEmpty() }?.let { tags ->
+                    WatchedTagsRow(
+                        tags = tags,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+            }
             Spacer(modifier = Modifier.weight(1f))
             ProvideTextStyle(MaterialTheme.typography.labelLarge) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -222,6 +243,97 @@ fun GalleryInfoGridItem(
                 )
             }
         }
+    }
+}
+
+@Composable
+fun WatchedTagsRow(
+    tags: List<WatchedTag>,
+    modifier: Modifier = Modifier,
+) {
+    if (tags.isEmpty()) return
+    val textMeasurer = rememberTextMeasurer()
+    val baseFontSize = MaterialTheme.typography.labelSmall.fontSize
+    val smallFontSize = baseFontSize * 0.75f
+    val chipPaddingH = 8.dp
+    val spacing = 4.dp
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        val availableWidth = maxWidth.toPx()
+        fun measureWidth(candidates: List<String>, fontSize: TextUnit): Float {
+            val style = MaterialTheme.typography.labelSmall.copy(fontSize = fontSize)
+            val padH = chipPaddingH.toPx()
+            val space = spacing.toPx()
+            return candidates.sumOf {
+                textMeasurer.measure(AnnotatedString(it), style).size.width + padH * 2
+            }.toFloat() + space * (candidates.size - 1).coerceAtLeast(0)
+        }
+        // Squeeze the font down when there are several tags, then fall back to abbreviated
+        // (3-letter) text when they still cannot fit on a single row
+        val texts = tags.map(WatchedTag::text)
+        val (displayTexts, fontSize) = when {
+            measureWidth(texts, baseFontSize) <= availableWidth -> texts to baseFontSize
+            measureWidth(texts, smallFontSize) <= availableWidth -> texts to smallFontSize
+            else -> texts.map(::abbreviateWatchedTag) to smallFontSize
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(spacing),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            displayTexts.forEachIndexed { index, text ->
+                WatchedTagChip(
+                    text = text,
+                    color = tags[index].color,
+                    fontSize = fontSize,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WatchedTagChip(
+    text: String,
+    color: String?,
+    fontSize: TextUnit,
+) {
+    val bg = color?.parseHexColor()
+    val bgColor = bg ?: MaterialTheme.colorScheme.tertiaryContainer
+    val fgColor = bg?.contrastTextColor() ?: LocalContentColor.current
+    Surface(
+        color = bgColor,
+        contentColor = fgColor,
+        shape = RoundedCornerShape(50),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = fontSize),
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+        )
+    }
+}
+
+private fun String.parseHexColor(): Color? {
+    val hex = removePrefix("#")
+    if (hex.length != 6) return null
+    val argb = hex.toLongOrNull(16) ?: return null
+    return Color(0xFF000000 or argb)
+}
+
+private fun Color.contrastTextColor(): Color {
+    val luminance = 0.299f * red + 0.587f * green + 0.114f * blue
+    return if (luminance > 0.6f) Color(0xFF090909) else Color(0xFFF1F1F1)
+}
+
+// Mimics the website: keep the namespace prefix (excluding the colon) plus the
+// first two letters of the tag name, e.g. "f:futanari" -> "f:fu", "english" -> "eng"
+private fun abbreviateWatchedTag(text: String): String {
+    val colon = text.indexOf(':')
+    return if (colon >= 0) {
+        text.substring(0, colon + 1) + text.substring(colon + 1).take(2)
+    } else {
+        text.take(3).trimEnd()
     }
 }
 

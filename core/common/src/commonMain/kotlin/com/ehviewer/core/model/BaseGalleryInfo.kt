@@ -32,6 +32,7 @@ open class BaseGalleryInfo(
     override var rating: Float = 0f,
     override var rated: Boolean = false,
     override var simpleTags: List<String>? = null,
+    override var watchedTags: List<WatchedTag>? = null,
     override var pages: Int = 0,
     override var thumbWidth: Int = 0,
     override var thumbHeight: Int = 0,
@@ -60,6 +61,7 @@ open class BaseGalleryInfo(
         if (posted != other.posted) return false
         if (uploader != other.uploader) return false
         if (simpleTags != other.simpleTags) return false
+        if (watchedTags != other.watchedTags) return false
         if (simpleLanguage != other.simpleLanguage) return false
         if (favoriteName != other.favoriteName) return false
         if (favoriteNote != other.favoriteNote) return false
@@ -84,6 +86,7 @@ open class BaseGalleryInfo(
         result = 31 * result + (posted?.hashCode() ?: 0)
         result = 31 * result + (uploader?.hashCode() ?: 0)
         result = 31 * result + (simpleTags?.hashCode() ?: 0)
+        result = 31 * result + (watchedTags?.hashCode() ?: 0)
         result = 31 * result + (simpleLanguage?.hashCode() ?: 0)
         result = 31 * result + (favoriteName?.hashCode() ?: 0)
         result = 31 * result + (favoriteNote?.hashCode() ?: 0)

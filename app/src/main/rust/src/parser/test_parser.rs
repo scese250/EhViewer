@@ -19,6 +19,44 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_info_list_with_watched_tags() {
+        let body =
+            fs::read_to_string("test_data/gallery_list.html").expect("Failed to read html file");
+        let dom = tl::parse(&body, ParserOptions::default()).expect("Failed to parse html");
+        let result = parse_info_list(&dom, dom.parser()).expect("Failed to parse info list");
+        assert!(!result.galleryInfoList.is_empty());
+        assert!(result.prev.is_some());
+        assert!(result.next.is_some());
+        let first = &result.galleryInfoList[0];
+        // Watched tags carry both the abbreviated display text and the site color
+        assert!(!first.simpleTags.is_empty());
+        assert!(!first.watchedTags.is_empty());
+        assert!(
+            first.watchedTags.iter().any(|t| {
+                t.text == "f:ryona" && t.color.as_deref() == Some("A600FF")
+            }),
+            "Expected watched tag f:ryona with color A600FF, got {:?}",
+            first.watchedTags,
+        );
+        // The gallery language is shown separately ("EN 20P"), so language tags must not
+        // appear as chips even though they may be present in simpleTags
+        assert!(
+            result
+                .galleryInfoList
+                .iter()
+                .any(|i| i.simpleTags.iter().any(|t| t.starts_with("language:"))),
+            "Fixture should contain a language tag in simpleTags",
+        );
+        for info in &result.galleryInfoList {
+            assert!(
+                !info.watchedTags.iter().any(|t| t.text == "english" || t.text == "chinese"),
+                "Language tag should be filtered from watchedTags, got {:?}",
+                info.watchedTags,
+            );
+        }
+    }
+
+    #[test]
     fn test_parse_archives_with_funds() {
         let body = fs::read_to_string("test_data/archives_with_funds.html")
             .expect("Failed to read html file");

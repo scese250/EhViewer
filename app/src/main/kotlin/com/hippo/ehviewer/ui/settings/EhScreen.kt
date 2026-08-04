@@ -263,6 +263,11 @@ fun AnimatedVisibilityScope.EhScreen(navigator: DestinationsNavigator) = Screen(
                     summary = stringResource(id = R.string.settings_eh_show_jpn_title_summary),
                     state = Settings.showJpnTitle.asMutableState(),
                 )
+                SwitchPreference(
+                    title = stringResource(id = R.string.settings_eh_show_gallery_tags),
+                    summary = stringResource(id = R.string.settings_eh_show_gallery_tags_summary),
+                    state = Settings.showGalleryTags.asMutableState(),
+                )
                 val reqNews = Settings.requestNews.asMutableState()
                 SwitchPreference(
                     title = stringResource(id = R.string.settings_eh_request_news),

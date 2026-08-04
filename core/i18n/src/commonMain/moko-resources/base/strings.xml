@@ -14,7 +14,7 @@
   ~ limitations under the License.
   -->
 <resources>
-    <string name="app_name" translatable="false">EhViewer</string>
+    <string name="app_name" translatable="false">EhViewer Tags</string>
     <string name="site_e" translatable="false">e-hentai</string>
     <string name="site_ex" translatable="false">exhentai</string>
     <!-- Theme -->
@@ -315,6 +315,8 @@
     <string name="settings_eh_thumb_columns">Thumb columns</string>
     <string name="settings_eh_show_jpn_title">Show Japanese title</string>
     <string name="settings_eh_show_jpn_title_summary">Require enabling Japanese Title in Settings on EHentai website</string>
+    <string name="settings_eh_show_gallery_tags">Show gallery tags</string>
+    <string name="settings_eh_show_gallery_tags_summary">Watched tags will be visible on galleries in Detail list mode</string>
     <string name="settings_eh_show_gallery_pages">Show gallery pages</string>
     <string name="settings_eh_show_gallery_pages_summary">Display the number of pages in the gallery list</string>
     <string name="settings_eh_show_reading_progress">Show reading progress</string>
