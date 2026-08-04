@@ -260,6 +260,7 @@ fun WatchedTagsRow(
     val spacing = 4.dp
     BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
         val availableWidth = with(density) { maxWidth.toPx() }
+        @Composable
         fun measureWidth(candidates: List<String>, fontSize: TextUnit): Float {
             val style = MaterialTheme.typography.labelSmall.copy(fontSize = fontSize)
             val padH = with(density) { chipPaddingH.toPx() }
