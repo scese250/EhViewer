@@ -253,19 +253,21 @@ fun WatchedTagsRow(
 ) {
     if (tags.isEmpty()) return
     val textMeasurer = rememberTextMeasurer()
+    val density = androidx.compose.ui.platform.LocalDensity.current
     val baseFontSize = MaterialTheme.typography.labelSmall.fontSize
     val smallFontSize = baseFontSize * 0.75f
     val chipPaddingH = 8.dp
     val spacing = 4.dp
     BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
-        val availableWidth = maxWidth.toPx()
+        val availableWidth = with(density) { maxWidth.toPx() }
         fun measureWidth(candidates: List<String>, fontSize: TextUnit): Float {
             val style = MaterialTheme.typography.labelSmall.copy(fontSize = fontSize)
-            val padH = chipPaddingH.toPx()
-            val space = spacing.toPx()
-            return candidates.sumOf {
-                textMeasurer.measure(AnnotatedString(it), style).size.width + padH * 2
-            }.toFloat() + space * (candidates.size - 1).coerceAtLeast(0)
+            val padH = with(density) { chipPaddingH.toPx() }
+            val space = with(density) { spacing.toPx() }
+            val chipsWidth = candidates.fold(0f) { total, candidate ->
+                total + textMeasurer.measure(AnnotatedString(candidate), style).size.width + padH * 2
+            }
+            return chipsWidth + space * (candidates.size - 1).coerceAtLeast(0)
         }
         // Squeeze the font down when there are several tags, then fall back to abbreviated
         // (3-letter) text when they still cannot fit on a single row
