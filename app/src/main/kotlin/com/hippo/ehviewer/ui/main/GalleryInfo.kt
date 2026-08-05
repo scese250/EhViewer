@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -262,25 +263,35 @@ fun WatchedTagsRow(
         val availableWidth = with(density) { maxWidth.toPx() }
 
         @Composable
-        fun measureWidth(candidates: List<String>, fontSize: TextUnit): Float {
+        fun rowsNeeded(candidates: List<String>, fontSize: TextUnit): Int {
+            if (candidates.isEmpty()) return 0
             val style = MaterialTheme.typography.labelSmall.copy(fontSize = fontSize)
             val padH = with(density) { chipPaddingH.toPx() }
             val space = with(density) { spacing.toPx() }
-            val chipsWidth = candidates.fold(0f) { total, candidate ->
-                total + textMeasurer.measure(AnnotatedString(candidate), style).size.width + padH * 2
+            var rows = 1
+            var rowWidth = 0f
+            candidates.forEach { candidate ->
+                val chipWidth = textMeasurer.measure(AnnotatedString(candidate), style).size.width + padH * 2
+                val nextWidth = if (rowWidth == 0f) chipWidth else rowWidth + space + chipWidth
+                if (rowWidth > 0f && nextWidth > availableWidth) {
+                    rows++
+                    rowWidth = chipWidth
+                } else {
+                    rowWidth = nextWidth
+                }
             }
-            return chipsWidth + space * (candidates.size - 1).coerceAtLeast(0)
+            return rows
         }
-        // Squeeze the font down when there are several tags, then fall back to abbreviated
-        // (3-letter) text when they still cannot fit on a single row
+        // Use the vertical space below the title for up to two rows before abbreviating tags.
         val texts = tags.map(WatchedTag::text)
         val (displayTexts, fontSize) = when {
-            measureWidth(texts, baseFontSize) <= availableWidth -> texts to baseFontSize
-            measureWidth(texts, smallFontSize) <= availableWidth -> texts to smallFontSize
+            rowsNeeded(texts, baseFontSize) <= MAX_TAG_ROWS -> texts to baseFontSize
+            rowsNeeded(texts, smallFontSize) <= MAX_TAG_ROWS -> texts to smallFontSize
             else -> texts.map(::abbreviateWatchedTag) to smallFontSize
         }
-        Row(
+        FlowRow(
             horizontalArrangement = Arrangement.spacedBy(spacing),
+            verticalArrangement = Arrangement.spacedBy(spacing),
             modifier = Modifier.fillMaxWidth(),
         ) {
             displayTexts.forEachIndexed { index, text ->
