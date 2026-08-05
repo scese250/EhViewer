@@ -354,4 +354,5 @@ private fun abbreviateWatchedTag(text: String): String {
 
 private const val MIN_RATIO = 0.5F
 private const val MAX_RATIO = 1.5F
+private const val MAX_TAG_ROWS = 2
 const val DEFAULT_RATIO = 0.67F
