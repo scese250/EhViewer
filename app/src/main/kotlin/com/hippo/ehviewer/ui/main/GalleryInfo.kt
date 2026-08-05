@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -261,45 +260,64 @@ fun WatchedTagsRow(
     val spacing = 4.dp
     BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
         val availableWidth = with(density) { maxWidth.toPx() }
+        val style = MaterialTheme.typography.labelSmall
+        val horizontalPadding = with(density) { (chipPaddingH * 2).toPx() }
+        val rowSpacing = with(density) { spacing.toPx() }
 
-        @Composable
-        fun rowsNeeded(candidates: List<String>, fontSize: TextUnit): Int {
-            if (candidates.isEmpty()) return 0
-            val style = MaterialTheme.typography.labelSmall.copy(fontSize = fontSize)
-            val padH = with(density) { chipPaddingH.toPx() }
-            val space = with(density) { spacing.toPx() }
-            var rows = 1
-            var rowWidth = 0f
-            candidates.forEach { candidate ->
-                val chipWidth = textMeasurer.measure(AnnotatedString(candidate), style).size.width + padH * 2
-                val nextWidth = if (rowWidth == 0f) chipWidth else rowWidth + space + chipWidth
-                if (rowWidth > 0f && nextWidth > availableWidth) {
-                    rows++
-                    rowWidth = chipWidth
+        fun packRows(candidates: List<String>, fontSize: TextUnit): List<List<Int>> {
+            val rows = mutableListOf<MutableList<Int>>()
+            var current = mutableListOf<Int>()
+            var currentWidth = 0f
+            candidates.forEachIndexed { index, candidate ->
+                val width = textMeasurer.measure(
+                    AnnotatedString(candidate),
+                    style.copy(fontSize = fontSize),
+                ).size.width + horizontalPadding
+                val nextWidth = if (current.isEmpty()) width else currentWidth + rowSpacing + width
+                if (current.isNotEmpty() && nextWidth > availableWidth) {
+                    rows += current
+                    current = mutableListOf(index)
+                    currentWidth = width
                 } else {
-                    rowWidth = nextWidth
+                    current += index
+                    currentWidth = nextWidth
                 }
             }
+            if (current.isNotEmpty()) rows += current
             return rows
         }
-        // Use the vertical space below the title for up to two rows before abbreviating tags.
+
+        // Keep the real labels whenever they fit in the two rows available above the metadata.
+        // Shrink them for this gallery first; abbreviate only when the compact labels are needed.
         val texts = tags.map(WatchedTag::text)
-        val (displayTexts, fontSize) = when {
-            rowsNeeded(texts, baseFontSize) <= MAX_TAG_ROWS -> texts to baseFontSize
-            rowsNeeded(texts, smallFontSize) <= MAX_TAG_ROWS -> texts to smallFontSize
-            else -> texts.map(::abbreviateWatchedTag) to smallFontSize
+        val abbreviated = texts.map(::abbreviateWatchedTag)
+        val fullRows = packRows(texts, baseFontSize)
+        val smallRows = packRows(texts, smallFontSize)
+        val (displayTexts, fontSize, rows) = when {
+            fullRows.size <= MAX_TAG_ROWS -> Triple(texts, baseFontSize, fullRows)
+            smallRows.size <= MAX_TAG_ROWS -> Triple(texts, smallFontSize, smallRows)
+            else -> Triple(abbreviated, smallFontSize, packRows(abbreviated, smallFontSize))
         }
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(spacing),
+
+        // Render the measured rows explicitly so the layout cannot create a third row and
+        // push the rating/category metadata out of the fixed-height gallery card.
+        Column(
             verticalArrangement = Arrangement.spacedBy(spacing),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            displayTexts.forEachIndexed { index, text ->
-                WatchedTagChip(
-                    text = text,
-                    color = tags[index].color,
-                    fontSize = fontSize,
-                )
+            rows.take(MAX_TAG_ROWS).forEach { row ->
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(spacing),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    row.forEach { index ->
+                        WatchedTagChip(
+                            text = displayTexts[index],
+                            color = tags[index].color,
+                            fontSize = fontSize,
+                        )
+                    }
+                }
             }
         }
     }
