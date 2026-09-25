@@ -18,19 +18,15 @@ plugins {
     alias(libs.plugins.baselineprofile)
 }
 
-val supportedAbis = arrayOf("arm64-v8a", "x86_64", "armeabi-v7a")
+val supportedAbis = arrayOf("armeabi-v7a")
 
 android {
     splits {
         abi {
             isEnable = true
             reset()
-            if (isRelease) {
-                include(*supportedAbis)
-                isUniversalApk = true
-            } else {
-                include("arm64-v8a", "x86_64")
-            }
+            include(*supportedAbis)
+            isUniversalApk = false
         }
     }
 
@@ -72,9 +68,7 @@ android {
         buildConfigField("long", "COMMIT_TIME", commitTime)
         buildConfigField("String", "REPO_NAME", "\"$repoName\"")
         ndk {
-            if (isRelease) {
-                abiFilters.addAll(supportedAbis)
-            }
+            abiFilters.addAll(supportedAbis)
             debugSymbolLevel = "FULL"
         }
     }
