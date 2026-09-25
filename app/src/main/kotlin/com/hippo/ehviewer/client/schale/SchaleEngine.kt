@@ -181,38 +181,32 @@ object SchaleEngine {
 
     // ---------- URL builders ----------
 
-    private fun buildBooksUrl(page: Int, cat: Int): String {
-        return URLBuilder(
-            protocol = URLProtocol.HTTPS,
-            host = SCHALE_API_HOST,
-            pathSegments = listOf("books"),
-        ).apply {
-            parameters.append("page", page.toString())
-            parameters.append("limit", PAGE_SIZE.toString())
-            parameters.append("s", "cat:$cat")
-            appendClearanceToken()
-        }.buildString()
-    }
+    private fun buildBooksUrl(page: Int, cat: Int): String = URLBuilder(
+        protocol = URLProtocol.HTTPS,
+        host = SCHALE_API_HOST,
+        pathSegments = listOf("books"),
+    ).apply {
+        parameters.append("page", page.toString())
+        parameters.append("limit", PAGE_SIZE.toString())
+        parameters.append("s", "cat:$cat")
+        appendClearanceToken()
+    }.buildString()
 
-    private fun buildDetailUrl(id: Long, key: String): String {
-        return URLBuilder(
-            protocol = URLProtocol.HTTPS,
-            host = SCHALE_API_HOST,
-            pathSegments = listOf("books", "detail", id.toString(), key),
-        ).apply {
-            appendClearanceToken()
-        }.buildString()
-    }
+    private fun buildDetailUrl(id: Long, key: String): String = URLBuilder(
+        protocol = URLProtocol.HTTPS,
+        host = SCHALE_API_HOST,
+        pathSegments = listOf("books", "detail", id.toString(), key),
+    ).apply {
+        appendClearanceToken()
+    }.buildString()
 
-    private fun buildImageDataUrl(id: Long, key: String, dataId: Int, pubKey: String, quality: String): String {
-        return URLBuilder(
-            protocol = URLProtocol.HTTPS,
-            host = SCHALE_API_HOST,
-            pathSegments = listOf("books", "data", id.toString(), key, dataId.toString(), pubKey, quality),
-        ).apply {
-            appendClearanceToken()
-        }.buildString()
-    }
+    private fun buildImageDataUrl(id: Long, key: String, dataId: Int, pubKey: String, quality: String): String = URLBuilder(
+        protocol = URLProtocol.HTTPS,
+        host = SCHALE_API_HOST,
+        pathSegments = listOf("books", "data", id.toString(), key, dataId.toString(), pubKey, quality),
+    ).apply {
+        appendClearanceToken()
+    }.buildString()
 
     private fun URLBuilder.appendClearanceToken() {
         Settings.schaleClearanceToken.value?.let { crt ->
