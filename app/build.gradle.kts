@@ -68,7 +68,6 @@ android {
         buildConfigField("long", "COMMIT_TIME", commitTime)
         buildConfigField("String", "REPO_NAME", "\"$repoName\"")
         ndk {
-            abiFilters.addAll(supportedAbis)
             debugSymbolLevel = "FULL"
         }
     }
