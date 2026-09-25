@@ -459,7 +459,13 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
         fun obtainSpiderQueen(galleryInfo: GalleryInfo, @Mode mode: Int): SpiderQueen {
             val gid = galleryInfo.gid
             val existing = sQueenMap[gid]
-            val queen = if (existing != null && existing.prepareJob.isCompleted && existing.prepareJob.getCompletionExceptionOrNull() != null) {
+            val queen = if (existing != null && (
+                    // Recreate if prepareJob threw an uncaught exception
+                    (existing.prepareJob.isCompleted && existing.prepareJob.getCompletionExceptionOrNull() != null) ||
+                    // Recreate if prepare completed but stored an error (doPrepare catches internally)
+                    (existing.prepareJob.isCompleted && existing.prepareError != null && EhUtils.isSchaleNetwork)
+                )
+            ) {
                 sQueenMap.remove(gid)
                 SpiderQueen(galleryInfo).also { sQueenMap[gid] = it }
             } else {
@@ -559,18 +565,25 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
 
         private suspend fun doInJob(index: Int, force: Boolean, orgImg: Boolean, skipHath: Boolean) {
             suspend fun getPToken(index: Int): String? {
-                if (EhUtils.isSchaleNetwork && (!isReady || spiderInfo.pTokenMap.isEmpty())) {
-                    runSuspendCatching {
-                        val freshInfo = readSpiderInfoFromInternet()
-                        spiderInfo = freshInfo
-                        prepareError = null
-                        if (pageStates.size != freshInfo.pages) {
-                            pageStates = IntArray(freshInfo.pages)
-                            notifyGetPages(freshInfo.pages)
+                if (EhUtils.isSchaleNetwork) {
+                    // For Schale, pTokenMap stores direct CDN URLs set during prepare.
+                    // If the map is empty (prepare failed), retry fetching from internet.
+                    // Never fall through to EH/EX pToken methods.
+                    if (!isReady || spiderInfo.pTokenMap.isEmpty()) {
+                        runSuspendCatching {
+                            val freshInfo = readSpiderInfoFromInternet()
+                            spiderInfo = freshInfo
+                            prepareError = null
+                            if (pageStates.size != freshInfo.pages) {
+                                pageStates = IntArray(freshInfo.pages)
+                                notifyGetPages(freshInfo.pages)
+                            }
+                        }.onFailure {
+                            prepareError = it.displayString()
                         }
-                    }.onFailure {
-                        prepareError = it.displayString()
                     }
+                    if (!isReady || index !in 0 until size) return null
+                    return spiderInfo.pTokenMap[index]
                 }
                 if (!isReady || index !in 0 until size) return null
                 return spiderInfo.pTokenMap[index]

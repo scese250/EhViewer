@@ -45,11 +45,11 @@ object SchaleEngine {
      * @param cat  Category id (2 = manga is the default browse view)
      */
     suspend fun getSchaleGalleryList(page: Int = 1, cat: Int = 2): GalleryListResult {
-        checkClearanceToken()
+        // Public endpoint — no crt token required
         val url = buildBooksUrl(page = page, cat = cat)
         val responseText = ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE)
             .executeSafely { resp ->
-                checkResponseStatus(resp)
+                checkPublicResponseStatus(resp)
                 resp.bodyAsText()
             }
         val books = responseText.parseAs<SchaleBooks>()
@@ -64,11 +64,11 @@ object SchaleEngine {
      * Fetch detail and previews for a single Schale gallery entry.
      */
     suspend fun getSchaleGalleryDetail(id: Long, key: String): GalleryDetail {
-        checkClearanceToken()
+        // Public endpoint — no crt token required
         val url = buildDetailUrl(id, key)
         val responseText = ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE)
             .executeSafely { resp ->
-                checkResponseStatus(resp)
+                checkPublicResponseStatus(resp)
                 resp.bodyAsText()
             }
         val detail = responseText.parseAs<SchaleMangaDetail>()
@@ -126,8 +126,10 @@ object SchaleEngine {
      * Fetch full image URLs for a Schale gallery in page order (used by reader/spider).
      */
     suspend fun getSchaleImageUrls(id: Long, key: String): List<String> {
+        // Protected endpoint — crt token required
         checkClearanceToken()
-        val detailUrl = buildDetailUrl(id, key)
+        val token = Settings.schaleClearanceToken.value!!
+        val detailUrl = buildDetailUrlWithCrt(id, key, token)
         val mangaDataText = ehRequest(detailUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
             method = HttpMethod.Post
             header(HttpHeaders.Accept, "*/*")
@@ -145,7 +147,7 @@ object SchaleEngine {
         val dataKey = chosenQuality?.let { data[it] }
 
         if (chosenQuality != null && dataKey != null && dataKey.id != 0 && dataKey.key.isNotBlank()) {
-            val dataUrl = buildImageDataUrl(id, key, dataKey.id, dataKey.key, chosenQuality)
+            val dataUrl = buildImageDataUrl(id, key, dataKey.id, dataKey.key, chosenQuality, token)
             val imagesText = ehRequest(dataUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
                 header(HttpHeaders.Accept, "*/*")
             }.executeSafely { resp ->
@@ -168,6 +170,14 @@ object SchaleEngine {
         }
     }
 
+    /** For public endpoints: any non-2xx is a generic IO error (403 is not a clearance issue). */
+    private fun checkPublicResponseStatus(resp: HttpResponse) {
+        if (!resp.status.isSuccess()) {
+            throw IOException("Schale API error: ${resp.status.value} ${resp.status.description}")
+        }
+    }
+
+    /** For protected endpoints: 403 specifically means the clearance token expired. */
     private fun checkResponseStatus(resp: HttpResponse) {
         if (resp.status == HttpStatusCode.Forbidden) {
             throw SchaleClearanceException("La verificación de Cloudflare expiró. Por favor re-verifica en Configuración > EH > Verificación de Schale Network.")
@@ -179,6 +189,7 @@ object SchaleEngine {
 
     // ---------- URL builders ----------
 
+    // Public endpoint — no crt param
     private fun buildBooksUrl(page: Int, cat: Int): String = URLBuilder(
         protocol = URLProtocol.HTTPS,
         host = SCHALE_API_HOST,
@@ -187,30 +198,31 @@ object SchaleEngine {
         parameters.append("page", page.toString())
         parameters.append("limit", PAGE_SIZE.toString())
         parameters.append("s", "cat:$cat")
-        appendClearanceToken()
     }.buildString()
 
+    // Public endpoint (GET) — no crt param
     private fun buildDetailUrl(id: Long, key: String): String = URLBuilder(
         protocol = URLProtocol.HTTPS,
         host = SCHALE_API_HOST,
         pathSegments = listOf("books", "detail", id.toString(), key),
+    ).buildString()
+
+    // Protected endpoint (POST + GET data) — crt param required
+    private fun buildDetailUrlWithCrt(id: Long, key: String, crt: String): String = URLBuilder(
+        protocol = URLProtocol.HTTPS,
+        host = SCHALE_API_HOST,
+        pathSegments = listOf("books", "detail", id.toString(), key),
     ).apply {
-        appendClearanceToken()
+        parameters.append("crt", crt)
     }.buildString()
 
-    private fun buildImageDataUrl(id: Long, key: String, dataId: Int, pubKey: String, quality: String): String = URLBuilder(
+    private fun buildImageDataUrl(id: Long, key: String, dataId: Int, pubKey: String, quality: String, crt: String): String = URLBuilder(
         protocol = URLProtocol.HTTPS,
         host = SCHALE_API_HOST,
         pathSegments = listOf("books", "data", id.toString(), key, dataId.toString(), pubKey, quality),
     ).apply {
-        appendClearanceToken()
+        parameters.append("crt", crt)
     }.buildString()
-
-    private fun URLBuilder.appendClearanceToken() {
-        Settings.schaleClearanceToken.value?.let { crt ->
-            if (crt.isNotBlank()) parameters.append("crt", crt)
-        }
-    }
 
     // ---------- Model conversions ----------
 
