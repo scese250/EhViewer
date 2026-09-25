@@ -174,19 +174,6 @@ object SchaleEngine {
         throw IOException("No se encontraron resoluciones válidas para el manga protegido.")
     }
 
-    suspend fun verifyClearanceToken(token: String): Boolean = runCatching {
-        ehRequest(
-            url = "https://auth.schale.network/clearance",
-            referer = EhUrl.REFERER_SCHALE,
-            origin = EhUrl.ORIGIN_SCHALE,
-            verbose = false,
-        ) {
-            header(HttpHeaders.Authorization, "Bearer $token")
-        }.executeSafely { resp ->
-            resp.status.isSuccess()
-        }
-    }.getOrDefault(false)
-
     fun isValidClearanceToken(token: String?): Boolean = !token.isNullOrBlank() && token != "{}" && token != "null"
 
     fun checkClearanceToken() {

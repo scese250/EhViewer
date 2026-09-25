@@ -40,12 +40,10 @@ import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import moe.tarsin.tip
 
 private const val JS_OUTER_SIZE_FIX = """
@@ -58,18 +56,22 @@ private const val JS_OBSERVER_INJECTION = """
         if (!window.outerWidth) Object.defineProperty(window, 'outerWidth', { get: () => window.innerWidth || 1080 });
         if (!window.outerHeight) Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight || 1920 });
 
+        try {
+            if (!window.__schaleInitialCleaned) {
+                window.__schaleInitialCleaned = true;
+                window.localStorage.removeItem('clearance');
+            }
+        } catch(e) {}
+
         if (window.__schaleObserverInstalled) return;
         window.__schaleObserverInstalled = true;
 
-        function checkAndNotify() {
-            try {
-                const token = window.localStorage.getItem('clearance');
-                if (token && typeof token === 'string' && token.length >= 8 && token !== 'null' && token !== '{}') {
-                    if (window.SchaleBridge) {
-                        window.SchaleBridge.onClearanceToken(token);
-                    }
+        function notifyApp(token) {
+            if (token && typeof token === 'string' && token.length >= 8 && token !== 'null' && token !== '{}') {
+                if (window.SchaleBridge) {
+                    window.SchaleBridge.onClearanceToken(token);
                 }
-            } catch(e) {}
+            }
         }
 
         try {
@@ -77,13 +79,18 @@ private const val JS_OBSERVER_INJECTION = """
             Storage.prototype.setItem = function(key, val) {
                 origSetItem.apply(this, arguments);
                 if (key === 'clearance') {
-                    checkAndNotify();
+                    notifyApp(val);
                 }
             };
         } catch(e) {}
 
-        setInterval(checkAndNotify, 500);
-        checkAndNotify();
+        setInterval(function() {
+            if (!window.__schaleInitialCleaned) return;
+            try {
+                const token = window.localStorage.getItem('clearance');
+                notifyApp(token);
+            } catch(e) {}
+        }, 500);
     })();
 """
 
@@ -102,38 +109,16 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
     val coroutineScope = rememberCoroutineScope()
     val state = rememberWebViewState(url = EhUrl.HOST_SCHALE)
     val tokenHandled = remember { AtomicBoolean(false) }
-    val lastCheckedToken = remember { AtomicReference<String?>(null) }
-    val isVerifying = remember { AtomicBoolean(false) }
 
     fun handleClearanceToken(raw: String?) {
         val token = raw?.trim()?.removeSurrounding("\"") ?: return
-        if (token.isNotBlank() && token != "null" && token != "{}" && token != lastCheckedToken.get()) {
-            if (tokenHandled.get()) return
-            if (!isVerifying.compareAndSet(false, true)) return
-            lastCheckedToken.set(token)
-            coroutineScope.launch(Dispatchers.IO) {
-                try {
-                    val isValid = SchaleEngine.verifyClearanceToken(token)
-                    if (isValid) {
-                        if (tokenHandled.compareAndSet(false, true)) {
-                            Settings.schaleClearanceToken.value = token
-                            EhCookieStore.flush()
-                            withContext(Dispatchers.Main) {
-                                tip(R.string.schale_verification_success)
-                                navigator.popBackStack()
-                            }
-                        }
-                    } else {
-                        // The token is invalid/expired. Remove it and reload so Cloudflare Turnstile displays
-                        withContext(Dispatchers.Main) {
-                            state.webView?.evaluateJavascript(
-                                "try { window.localStorage.removeItem('clearance'); window.location.reload(); } catch(e) {}",
-                                null,
-                            )
-                        }
-                    }
-                } finally {
-                    isVerifying.set(false)
+        if (SchaleEngine.isValidClearanceToken(token)) {
+            if (tokenHandled.compareAndSet(false, true)) {
+                Settings.schaleClearanceToken.value = token
+                EhCookieStore.flush()
+                coroutineScope.launch(Dispatchers.Main) {
+                    tip(R.string.schale_verification_success)
+                    navigator.popBackStack()
                 }
             }
         }
@@ -158,7 +143,9 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
     LaunchedEffect(Unit) {
         while (isActive && !tokenHandled.get()) {
             delay(1000)
-            state.webView?.evaluateJavascript("(function() { try { return window.localStorage.getItem('clearance') || ''; } catch(e) { return ''; } })()") { raw ->
+            state.webView?.evaluateJavascript(
+                "(function() { try { return window.__schaleInitialCleaned ? (window.localStorage.getItem('clearance') || '') : ''; } catch(e) { return ''; } })()",
+            ) { raw ->
                 handleClearanceToken(raw)
             }
         }
@@ -172,8 +159,10 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
                 actions = {
                     IconButton(
                         onClick = {
-                            state.webView?.evaluateJavascript("window.localStorage.removeItem('clearance');", null)
-                            state.webView?.reload()
+                            state.webView?.evaluateJavascript(
+                                "try { window.localStorage.removeItem('clearance'); window.location.reload(); } catch(e) {}",
+                                null,
+                            )
                         },
                     ) {
                         Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
