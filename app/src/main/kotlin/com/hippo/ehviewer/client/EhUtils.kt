@@ -105,6 +105,9 @@ object EhUtils {
     val isExHentai: Boolean
         get() = Settings.gallerySite.value == EhUrl.SITE_EX
 
+    val isSchaleNetwork: Boolean
+        get() = Settings.gallerySite.value == EhUrl.SITE_SCHALE
+
     val isMpvAvailable
         get() = EhCookieStore.getHathPerks()?.contains('q') == true
 

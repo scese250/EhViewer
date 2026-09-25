@@ -43,6 +43,7 @@ import com.hippo.ehviewer.ui.destinations.MyTagsScreenDestination
 import com.hippo.ehviewer.ui.destinations.UConfigScreenDestination
 import com.hippo.ehviewer.ui.main.NavigationIcon
 import com.hippo.ehviewer.ui.tools.awaitConfirmationOrCancel
+import com.hippo.ehviewer.ui.tools.awaitInputText
 import com.hippo.ehviewer.ui.tools.awaitSelectItem
 import com.hippo.ehviewer.ui.tools.awaitSelectTime
 import com.hippo.ehviewer.util.copyTextToClipboard
@@ -116,13 +117,32 @@ fun AnimatedVisibilityScope.EhScreen(navigator: DestinationsNavigator) = Screen(
                         EhUtils.signOut()
                     }
                 }
-                val gallerySite = Settings.gallerySite.asMutableState()
-                SimpleMenuPreferenceInt(
-                    title = stringResource(id = R.string.settings_eh_gallery_site),
-                    entry = com.hippo.ehviewer.R.array.gallery_site_entries,
-                    entryValueRes = com.hippo.ehviewer.R.array.gallery_site_entry_values,
-                    state = gallerySite,
-                )
+            }
+            val gallerySite = Settings.gallerySite.asMutableState()
+            SimpleMenuPreferenceInt(
+                title = stringResource(id = R.string.settings_eh_gallery_site),
+                entry = com.hippo.ehviewer.R.array.gallery_site_entries,
+                entryValueRes = com.hippo.ehviewer.R.array.gallery_site_entry_values,
+                state = gallerySite,
+            )
+            if (EhUtils.isSchaleNetwork) {
+                var crt by Settings.schaleClearanceToken.asMutableState()
+                Preference(
+                    title = "Clearance Token",
+                    summary = crt?.takeIf { it.isNotBlank() } ?: stringResource(id = R.string.none),
+                ) {
+                    launch {
+                        val input = awaitInputText(
+                            initial = crt.orEmpty(),
+                            title = "Clearance Token",
+                            hint = "Token from niyaniya.moe",
+                        )
+                        crt = input.trim().ifEmpty { null }
+                    }
+                }
+            }
+            // EH-specific settings are only shown when not on Schale Network
+            if (hasSignedIn && !EhUtils.isSchaleNetwork) {
                 Preference(
                     title = stringResource(id = R.string.settings_u_config),
                     summary = stringResource(id = R.string.settings_u_config_summary),
@@ -132,6 +152,7 @@ fun AnimatedVisibilityScope.EhScreen(navigator: DestinationsNavigator) = Screen(
                     summary = stringResource(id = R.string.settings_my_tags_summary),
                 ) { navigate(MyTagsScreenDestination) }
             }
+
             var defaultFavSlot by Settings.defaultFavSlot.asMutableState()
             val disabled = stringResource(id = R.string.disabled_nav)
             val localFav = stringResource(id = R.string.local_favorites)

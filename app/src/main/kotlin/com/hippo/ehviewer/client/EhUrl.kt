@@ -24,8 +24,10 @@ import io.ktor.http.URLProtocol
 object EhUrl {
     const val SITE_E = 0
     const val SITE_EX = 1
+    const val SITE_SCHALE = 2
     const val DOMAIN_EX = "exhentai.org"
     const val DOMAIN_E = "e-hentai.org"
+    const val DOMAIN_SCHALE = "niyaniya.moe"
     const val HOST_EX = "https://$DOMAIN_EX/"
     const val API_EX = "https://s.exhentai.org/api.php"
     const val FAV_PATH = "favorites.php"
@@ -51,11 +53,16 @@ object EhUrl {
     const val ORIGIN_EX = REFERER_EX
     const val REFERER_E = "https://$DOMAIN_E"
     const val ORIGIN_E = REFERER_E
+    const val HOST_SCHALE = "https://$DOMAIN_SCHALE/"
+    const val API_SCHALE = "https://api.schale.network"
+    const val REFERER_SCHALE = "https://$DOMAIN_SCHALE"
+    const val ORIGIN_SCHALE = REFERER_SCHALE
 
     val domain: String
         get() = when (Settings.gallerySite.value) {
             SITE_E -> DOMAIN_E
             SITE_EX -> DOMAIN_EX
+            SITE_SCHALE -> DOMAIN_SCHALE
             else -> DOMAIN_E
         }
 
@@ -70,6 +77,7 @@ object EhUrl {
         get() = when (Settings.gallerySite.value) {
             SITE_E -> REFERER_E
             SITE_EX -> REFERER_EX
+            SITE_SCHALE -> REFERER_SCHALE
             else -> REFERER_E
         }
 
@@ -77,6 +85,7 @@ object EhUrl {
         get() = when (Settings.gallerySite.value) {
             SITE_E -> ORIGIN_E
             SITE_EX -> ORIGIN_EX
+            SITE_SCHALE -> ORIGIN_SCHALE
             else -> ORIGIN_E
         }
 

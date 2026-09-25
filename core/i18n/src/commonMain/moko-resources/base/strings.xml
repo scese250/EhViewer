@@ -14,9 +14,10 @@
   ~ limitations under the License.
   -->
 <resources>
-    <string name="app_name" translatable="false">EhViewer Tags</string>
+    <string name="app_name" translatable="false">EhViewer (Schale)</string>
     <string name="site_e" translatable="false">e-hentai</string>
     <string name="site_ex" translatable="false">exhentai</string>
+    <string name="site_schale" translatable="false">Schale Network</string>
     <!-- Theme -->
     <!-- Category -->
     <string name="doujinshi" translatable="false">DOUJINSHI</string>

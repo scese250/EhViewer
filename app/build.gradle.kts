@@ -59,7 +59,7 @@ android {
     val snapshot = !hasProperty("release")
 
     defaultConfig {
-        applicationId = "com.scese250.ehviewer"
+        applicationId = "com.scese250.ehviewer.schale"
         versionCode = releaseVersionCode ?: 180063
         versionName = releaseVersionName ?: if (snapshot) {
             "1.15.0-SNAPSHOT"

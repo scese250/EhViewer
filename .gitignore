@@ -8,3 +8,5 @@ build
 .idea
 .vscode
 /captures
+/gallery-dl
+/extensions

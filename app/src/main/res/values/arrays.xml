@@ -43,11 +43,13 @@
     <string-array name="gallery_site_entries" translatable="false">
         <item>@string/site_e</item>
         <item>@string/site_ex</item>
+        <item>@string/site_schale</item>
     </string-array>
 
     <integer-array name="gallery_site_entry_values" translatable="false">
         <item>0</item>
         <item>1</item>
+        <item>2</item>
     </integer-array>
 
     <string-array name="launch_page_entries" translatable="false">

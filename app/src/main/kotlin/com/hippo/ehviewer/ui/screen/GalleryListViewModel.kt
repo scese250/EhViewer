@@ -13,9 +13,12 @@ import androidx.paging.cachedIn
 import androidx.savedstate.compose.serialization.serializers.MutableStateSerializer
 import com.ehviewer.core.model.BaseGalleryInfo
 import com.ehviewer.core.util.withIOContext
+import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhEngine
+import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.client.data.ListUrlBuilder
 import com.hippo.ehviewer.client.data.ListUrlBuilder.Companion.MODE_TOPLIST
+import com.hippo.ehviewer.client.schale.SchaleEngine
 import com.hippo.ehviewer.ui.tools.foldToLoadResult
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -33,6 +36,16 @@ class GalleryListViewModel(lub: ListUrlBuilder, savedStateHandle: SavedStateHand
         object : PagingSource<String, BaseGalleryInfo>() {
             override fun getRefreshKey(state: PagingState<String, BaseGalleryInfo>): String? = null
             override suspend fun load(params: LoadParams<String>) = withIOContext {
+                // Route to Schale Network if the current gallery site is SITE_SCHALE
+                if (Settings.gallerySite.value == EhUrl.SITE_SCHALE) {
+                    val page = params.key?.toIntOrNull() ?: 1
+                    return@withIOContext runSuspendCatching {
+                        SchaleEngine.getSchaleGalleryList(page = page)
+                    }.foldToLoadResult { result ->
+                        LoadResult.Page(result.galleryInfoList, result.prev, result.next)
+                    }
+                }
+
                 val urlBuilder = urlBuilder.value
                 if (urlBuilder.mode == MODE_TOPLIST) {
                     // TODO: Since we know total pages, let pager support jump

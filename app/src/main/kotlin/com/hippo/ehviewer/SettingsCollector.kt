@@ -9,6 +9,7 @@ import com.ehviewer.core.util.logcat
 import com.ehviewer.core.util.withIOContext
 import com.hippo.ehviewer.client.EhEngine
 import com.hippo.ehviewer.client.EhTagDatabase
+import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.dailycheck.updateDailyCheckWork
 import com.hippo.ehviewer.ui.keepNoMediaFileStatus
 import kotlinx.coroutines.CoroutineScope
@@ -58,7 +59,7 @@ fun updateWhenRequestNewsChanges() {
 }
 
 suspend fun updateWhenGallerySiteChanges(gallerySite: Int) {
-    if (Settings.hasSignedIn.value) {
+    if (Settings.hasSignedIn.value && gallerySite != EhUrl.SITE_SCHALE) {
         catch {
             EhEngine.getUConfig(gallerySite)
         }.onLeft {

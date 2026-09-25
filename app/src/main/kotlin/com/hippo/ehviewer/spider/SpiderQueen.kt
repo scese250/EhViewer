@@ -33,6 +33,7 @@ import com.hippo.ehviewer.client.EhUrl.referer
 import com.hippo.ehviewer.client.EhUtils
 import com.hippo.ehviewer.client.exception.FatalException
 import com.hippo.ehviewer.client.exception.QuotaExceededException
+import com.hippo.ehviewer.client.schale.SchaleEngine
 import com.hippo.ehviewer.util.displayString
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.decrementAndFetch
@@ -331,12 +332,25 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
         }
     }
 
-    private suspend fun readSpiderInfoFromInternet() = EhEngine.getPreviewList(
-        getGalleryDetailUrl(galleryInfo.gid, galleryInfo.token),
-    ).run {
-        val spiderInfo = SpiderInfo(galleryInfo.gid, galleryInfo.token, total)
-        readPreviews(previews, 0, spiderInfo)
-        spiderInfo
+    private suspend fun readSpiderInfoFromInternet(): SpiderInfo {
+        // For Schale Network galleries, fetch image URLs directly from their API
+        if (EhUtils.isSchaleNetwork) {
+            val imageUrls = SchaleEngine.getSchaleImageUrls(galleryInfo.gid, galleryInfo.token)
+            check(imageUrls.isNotEmpty()) { "No images found for Schale gallery ${galleryInfo.gid}" }
+            val spiderInfo = SpiderInfo(galleryInfo.gid, galleryInfo.token, imageUrls.size)
+            imageUrls.forEachIndexed { index, url ->
+                spiderInfo.pTokenMap[index] = url
+            }
+            return spiderInfo
+        }
+        // EH / EX path: fetch preview list to get pTokens and page count
+        return EhEngine.getPreviewList(
+            getGalleryDetailUrl(galleryInfo.gid, galleryInfo.token),
+        ).run {
+            val spiderInfo = SpiderInfo(galleryInfo.gid, galleryInfo.token, total)
+            readPreviews(previews, 0, spiderInfo)
+            spiderInfo
+        }
     }
 
     private val isMpvAvailable = EhUtils.isMpvAvailable
@@ -557,10 +571,28 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
             }
             updatePageState(index, STATE_DOWNLOADING)
 
+            // Schale Network: pToken is a direct image URL — download it immediately
+            if (EhUtils.isSchaleNetwork) {
+                runSuspendCatching {
+                    spiderDen.makeHttpCallAndSaveImage(
+                        index,
+                        pToken,
+                        EhUrl.REFERER_SCHALE,
+                        this@SpiderQueen::notifyPageDownload.partially1(index),
+                    )
+                    updatePageState(index, STATE_FINISHED)
+                }.onFailure { error ->
+                    spiderDen.removeIntermediateFiles(index)
+                    updatePageState(index, STATE_FAILED, error.displayString())
+                }
+                return
+            }
+
             var skipHathKey: String? = null
             var originImageUrl: String? = null
             var error: String? = null
             var forceHtml = false
+
             val original = Settings.downloadOriginImage.value || orgImg
             runSuspendCatching {
                 repeat(3) { retries ->

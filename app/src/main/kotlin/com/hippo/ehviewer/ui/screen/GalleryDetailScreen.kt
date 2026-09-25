@@ -55,6 +55,7 @@ import com.hippo.ehviewer.client.EhEngine
 import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.client.EhUtils
 import com.hippo.ehviewer.client.data.fillInfo
+import com.hippo.ehviewer.client.schale.SchaleEngine
 import com.hippo.ehviewer.coil.justDownload
 import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.ktbuilder.executeIn
@@ -108,7 +109,13 @@ fun AnimatedVisibilityScope.GalleryDetailScreen(args: GalleryDetailScreenArgs, n
             is TokenArgs -> args.gid to args.token
         }
     }
-    val galleryDetailUrl = remember(gid, token) { EhUrl.getGalleryDetailUrl(gid, token) }
+    val galleryDetailUrl = remember(gid, token) {
+        if (EhUtils.isSchaleNetwork) {
+            "https://${EhUrl.DOMAIN_SCHALE}/books/$gid/$token"
+        } else {
+            EhUrl.getGalleryDetailUrl(gid, token)
+        }
+    }
     contextOf<MainActivity>().ProvideAssistContent(galleryDetailUrl)
 
     var galleryInfo by rememberInVM {
@@ -133,7 +140,13 @@ fun AnimatedVisibilityScope.GalleryDetailScreen(args: GalleryDetailScreenArgs, n
         LaunchedEffect(Unit) {
             val galleryDetail = detailCache[gid]
                 ?: runSuspendCatching {
-                    withIOContext { EhEngine.getGalleryDetail(galleryDetailUrl) }
+                    withIOContext {
+                        if (EhUtils.isSchaleNetwork) {
+                            SchaleEngine.getSchaleGalleryDetail(gid, token)
+                        } else {
+                            EhEngine.getGalleryDetail(galleryDetailUrl)
+                        }
+                    }
                 }.onSuccess { galleryDetail ->
                     detailCache[galleryDetail.gid] = galleryDetail
                 }.onFailure { e ->
