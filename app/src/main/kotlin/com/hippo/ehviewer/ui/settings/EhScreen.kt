@@ -36,7 +36,7 @@ import androidx.compose.ui.text.fromHtml
 import com.ehviewer.core.i18n.R
 import com.ehviewer.core.network.EhCookieStore
 import com.ehviewer.core.util.isAtLeastT
-import kotlinx.coroutines.launch
+import com.ehviewer.core.util.launch
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.asMutableState
 import com.hippo.ehviewer.client.EhTagDatabase
@@ -134,7 +134,6 @@ fun AnimatedVisibilityScope.EhScreen(navigator: DestinationsNavigator) = Screen(
             )
             if (EhUtils.isSchaleNetwork) {
                 val crt by Settings.schaleClearanceToken.collectAsState()
-                val coroutineScope = rememberCoroutineScope()
                 var testDialogText by remember { mutableStateOf<String?>(null) }
                 Preference(
                     title = stringResource(id = R.string.schale_verification_title),
@@ -148,7 +147,7 @@ fun AnimatedVisibilityScope.EhScreen(navigator: DestinationsNavigator) = Screen(
                     title = "Probar Conexión Schale (Diagnóstico)",
                     summary = "Ejecuta una petición de prueba real contra la API de Schale con el token actual para verificar si Cloudflare lo acepta.",
                 ) {
-                    coroutineScope.launch {
+                    launch {
                         testDialogText = "Ejecutando prueba contra api.schale.network...\nPor favor espera."
                         testDialogText = SchaleEngine.testToken(crt)
                     }
@@ -171,7 +170,7 @@ fun AnimatedVisibilityScope.EhScreen(navigator: DestinationsNavigator) = Screen(
                         dismissButton = {
                             TextButton(
                                 onClick = {
-                                    copyTextToClipboard(diagnosticInfo)
+                                    copyTextToClipboard(diagnosticInfo, false)
                                 },
                             ) {
                                 Text(text = "Copiar Reporte")

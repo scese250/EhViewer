@@ -177,7 +177,7 @@ fun PagerItem(
                         }
                         state.message?.let { errMsg ->
                             Button(
-                                onClick = { copyTextToClipboard(errMsg) },
+                                onClick = { copyTextToClipboard(errMsg, false) },
                                 shapes = ButtonDefaults.shapes(),
                             ) {
                                 Text(text = "Copiar Error")
