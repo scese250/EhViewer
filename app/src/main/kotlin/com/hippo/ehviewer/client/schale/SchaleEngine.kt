@@ -141,8 +141,7 @@ object SchaleEngine {
         val detailUrl = buildDetailUrlWithCrt(id, key, token)
         val mangaDataText = ehRequest(detailUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
             method = HttpMethod.Post
-            header(HttpHeaders.Accept, "application/json, */*")
-            header(HttpHeaders.ContentType, "application/json")
+            header(HttpHeaders.Accept, "*/*")
         }.executeSafely { resp ->
             val body = resp.bodyAsText()
             if (resp.status == HttpStatusCode.Forbidden) {
@@ -175,8 +174,20 @@ object SchaleEngine {
         throw IOException("No se encontraron resoluciones válidas para el manga protegido.")
     }
 
-    fun isValidClearanceToken(token: String?): Boolean =
-        !token.isNullOrBlank() && token != "{}" && token != "null"
+    suspend fun verifyClearanceToken(token: String): Boolean = runCatching {
+        ehRequest(
+            url = "https://auth.schale.network/clearance",
+            referer = EhUrl.REFERER_SCHALE,
+            origin = EhUrl.ORIGIN_SCHALE,
+            verbose = false,
+        ) {
+            header(HttpHeaders.Authorization, "Bearer $token")
+        }.executeSafely { resp ->
+            resp.status.isSuccess()
+        }
+    }.getOrDefault(false)
+
+    fun isValidClearanceToken(token: String?): Boolean = !token.isNullOrBlank() && token != "{}" && token != "null"
 
     fun checkClearanceToken() {
         val token = Settings.schaleClearanceToken.value
@@ -195,6 +206,7 @@ object SchaleEngine {
     /** For protected endpoints: 403 specifically means the clearance token expired. */
     private fun checkResponseStatus(resp: HttpResponse) {
         if (resp.status == HttpStatusCode.Forbidden) {
+            Settings.schaleClearanceToken.value = null
             throw SchaleClearanceException("La verificación de Cloudflare expiró. Por favor re-verifica en Configuración > EH > Verificación de Schale Network.")
         }
         if (!resp.status.isSuccess()) {

@@ -31,16 +31,21 @@ import com.google.accompanist.web.WebView
 import com.google.accompanist.web.rememberWebViewState
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhUrl
+import com.hippo.ehviewer.client.schale.SchaleEngine
+import com.hippo.ehviewer.ktor.CHROME_MOBILE_USER_AGENT
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.main.NavigationIcon
 import com.hippo.ehviewer.util.setDefaultSettings
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import moe.tarsin.tip
 
 private const val JS_OUTER_SIZE_FIX = """
@@ -96,17 +101,39 @@ class SchaleBridge(private val onTokenValid: (String) -> Unit) {
 fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigator) = Screen(navigator) {
     val coroutineScope = rememberCoroutineScope()
     val state = rememberWebViewState(url = EhUrl.HOST_SCHALE)
-    val tokenHandled = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    val tokenHandled = remember { AtomicBoolean(false) }
+    val lastCheckedToken = remember { AtomicReference<String?>(null) }
+    val isVerifying = remember { AtomicBoolean(false) }
 
     fun handleClearanceToken(raw: String?) {
         val token = raw?.trim()?.removeSurrounding("\"") ?: return
-        if (token.isNotBlank() && token != "null" && token != "{}") {
-            if (tokenHandled.compareAndSet(false, true)) {
-                Settings.schaleClearanceToken.value = token
-                EhCookieStore.flush()
-                coroutineScope.launch(Dispatchers.Main) {
-                    tip(R.string.schale_verification_success)
-                    navigator.popBackStack()
+        if (token.isNotBlank() && token != "null" && token != "{}" && token != lastCheckedToken.get()) {
+            if (tokenHandled.get()) return
+            if (!isVerifying.compareAndSet(false, true)) return
+            lastCheckedToken.set(token)
+            coroutineScope.launch(Dispatchers.IO) {
+                try {
+                    val isValid = SchaleEngine.verifyClearanceToken(token)
+                    if (isValid) {
+                        if (tokenHandled.compareAndSet(false, true)) {
+                            Settings.schaleClearanceToken.value = token
+                            EhCookieStore.flush()
+                            withContext(Dispatchers.Main) {
+                                tip(R.string.schale_verification_success)
+                                navigator.popBackStack()
+                            }
+                        }
+                    } else {
+                        // The token is invalid/expired. Remove it and reload so Cloudflare Turnstile displays
+                        withContext(Dispatchers.Main) {
+                            state.webView?.evaluateJavascript(
+                                "try { window.localStorage.removeItem('clearance'); window.location.reload(); } catch(e) {}",
+                                null,
+                            )
+                        }
+                    }
+                } finally {
+                    isVerifying.set(false)
                 }
             }
         }
@@ -178,6 +205,7 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
                         databaseEnabled = true
                         useWideViewPort = true
                         loadWithOverviewMode = true
+                        userAgentString = CHROME_MOBILE_USER_AGENT
                     }
                     webView.addJavascriptInterface(
                         SchaleBridge { token -> handleClearanceToken(token) },
