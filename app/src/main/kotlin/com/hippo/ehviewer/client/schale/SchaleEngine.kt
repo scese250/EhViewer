@@ -166,9 +166,42 @@ object SchaleEngine {
         if (!isValidClearanceToken(token)) {
             return "[Diagnóstico Schale]\nToken inválido o vacío en Settings: '$token'"
         }
-        val testUrl = buildDetailUrlWithCrt(27643, "f65c885cfa75", token!!)
-        return try {
-            val (status, body, headers) = ehRequest(testUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
+        val nonNullToken = token!!
+        val testUrl = buildDetailUrlWithCrt(27643, "f65c885cfa75", nonNullToken)
+        val authUrl = "https://auth.schale.network/clearance"
+        val report = StringBuilder()
+        report.appendLine("[Diagnóstico Schale Network]")
+        report.appendLine("Token (len=${nonNullToken.length}): $nonNullToken\n")
+
+        // Test 1: Auth check
+        report.appendLine("--- 1. Servidor de Auth ($authUrl) ---")
+        try {
+            val (authStatus, authBody, authHeaders) = ehRequest(authUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
+                method = HttpMethod.Get
+                header(HttpHeaders.Authorization, "Bearer $nonNullToken")
+                header(HttpHeaders.Accept, "*/*")
+                header("Sec-Fetch-Dest", "empty")
+                header("Sec-Fetch-Mode", "cors")
+                header("Sec-Fetch-Site", "cross-site")
+            }.executeSafely { resp ->
+                Triple(
+                    resp.status,
+                    resp.bodyAsText(),
+                    resp.headers.entries().joinToString("\n") { "  ${it.key}: ${it.value.joinToString(", ")}" },
+                )
+            }
+            report.appendLine("HTTP Status: ${authStatus.value} ${authStatus.description}")
+            report.appendLine("Resultado: ${if (authStatus.isSuccess()) "ÉXITO (Auth reconoció el token)" else "FALLÓ (${authStatus.value})"}")
+            report.appendLine("Headers:\n$authHeaders")
+            if (authBody.isNotBlank()) report.appendLine("Cuerpo: ${authBody.take(400)}")
+        } catch (e: Throwable) {
+            report.appendLine("Error al conectar con Auth: ${e::class.simpleName}: ${e.message}")
+        }
+
+        // Test 2: API detail check
+        report.appendLine("\n--- 2. Petición POST a Books Detail ($testUrl) ---")
+        try {
+            val (apiStatus, apiBody, apiHeaders) = ehRequest(testUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
                 method = HttpMethod.Post
                 header(HttpHeaders.Accept, "*/*")
                 header("Sec-Fetch-Dest", "empty")
@@ -181,24 +214,15 @@ object SchaleEngine {
                     resp.headers.entries().joinToString("\n") { "  ${it.key}: ${it.value.joinToString(", ")}" },
                 )
             }
-            buildString {
-                appendLine("[Diagnóstico Schale Network]")
-                appendLine("HTTP Status: ${status.value} ${status.description}")
-                appendLine("Resultado: ${if (status.isSuccess()) "ÉXITO (Token VÁLIDO)" else "FALLÓ (${status.value})"}")
-                appendLine("URL: $testUrl")
-                appendLine("Token (len=${token.length}): $token")
-                appendLine("Headers de respuesta:\n$headers")
-                appendLine("Cuerpo de respuesta:\n${body.take(500)}")
-            }
+            report.appendLine("HTTP Status: ${apiStatus.value} ${apiStatus.description}")
+            report.appendLine("Resultado: ${if (apiStatus.isSuccess()) "ÉXITO (API aceptó el token)" else "FALLÓ (${apiStatus.value})"}")
+            report.appendLine("Headers:\n$apiHeaders")
+            if (apiBody.isNotBlank()) report.appendLine("Cuerpo: ${apiBody.take(400)}")
         } catch (e: Throwable) {
-            buildString {
-                appendLine("[Diagnóstico Schale Network - ERROR DE CONEXIÓN]")
-                appendLine("Excepción: ${e::class.qualifiedName}")
-                appendLine("Mensaje: ${e.message}")
-                appendLine("URL: $testUrl")
-                appendLine("Token (len=${token.length}): $token")
-            }
+            report.appendLine("Error al conectar con API: ${e::class.simpleName}: ${e.message}")
         }
+
+        return report.toString()
     }
 
     private suspend fun getProtectedImageUrls(id: Long, key: String, token: String): List<String> {
@@ -330,6 +354,13 @@ object SchaleEngine {
             throw IOException(
                 "[Error de Configuración Schale]\nEl token de verificación no está configurado o es inválido.\nToken actual en Settings: '$token' (longitud: ${token?.length ?: 0})\nVe a Configuración > EH > Verificación de Schale Network.",
             )
+        }
+    }
+
+    /** For public endpoints: any non-2xx is a generic IO error. */
+    private fun checkPublicResponseStatus(resp: HttpResponse) {
+        if (!resp.status.isSuccess()) {
+            throw IOException("Schale API error: ${resp.status.value} ${resp.status.description}")
         }
     }
 

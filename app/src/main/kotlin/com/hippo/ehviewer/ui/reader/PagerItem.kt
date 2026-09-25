@@ -7,13 +7,17 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularWavyProgressIndicator
@@ -57,6 +61,7 @@ import com.hippo.ehviewer.gallery.progressObserved
 import com.hippo.ehviewer.gallery.statusObserved
 import com.hippo.ehviewer.image.Image
 import com.hippo.ehviewer.util.AdsPlaceholderFile
+import com.hippo.ehviewer.util.copyTextToClipboard
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.drop
 
@@ -154,7 +159,7 @@ fun PagerItem(
         is PageStatus.Error -> {
             Box(modifier = modifier.fillMaxWidth().aspectRatio(DEFAULT_ASPECT)) {
                 Column(
-                    modifier = Modifier.align(Alignment.Center),
+                    modifier = Modifier.align(Alignment.Center).padding(8.dp).verticalScroll(rememberScrollState()),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
@@ -163,12 +168,21 @@ fun PagerItem(
                         textAlign = TextAlign.Center,
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    Button(
-                        onClick = { pageLoader.retryPage(page.index) },
-                        shapes = ButtonDefaults.shapes(),
-                        modifier = Modifier.padding(8.dp),
-                    ) {
-                        Text(text = stringResource(id = R.string.action_retry))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { pageLoader.retryPage(page.index) },
+                            shapes = ButtonDefaults.shapes(),
+                        ) {
+                            Text(text = stringResource(id = R.string.action_retry))
+                        }
+                        state.message?.let { errMsg ->
+                            Button(
+                                onClick = { copyTextToClipboard(errMsg) },
+                                shapes = ButtonDefaults.shapes(),
+                            ) {
+                                Text(text = "Copiar Error")
+                            }
+                        }
                     }
                 }
             }

@@ -36,7 +36,7 @@ import androidx.compose.ui.text.fromHtml
 import com.ehviewer.core.i18n.R
 import com.ehviewer.core.network.EhCookieStore
 import com.ehviewer.core.util.isAtLeastT
-import com.ehviewer.core.util.launch
+import kotlinx.coroutines.launch
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.asMutableState
 import com.hippo.ehviewer.client.EhTagDatabase
@@ -166,6 +166,15 @@ fun AnimatedVisibilityScope.EhScreen(navigator: DestinationsNavigator) = Screen(
                         confirmButton = {
                             TextButton(onClick = { testDialogText = null }) {
                                 Text(text = stringResource(id = android.R.string.ok))
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = {
+                                    copyTextToClipboard(diagnosticInfo)
+                                },
+                            ) {
+                                Text(text = "Copiar Reporte")
                             }
                         },
                     )
