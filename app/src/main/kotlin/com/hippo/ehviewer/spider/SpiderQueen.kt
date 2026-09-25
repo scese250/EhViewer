@@ -462,9 +462,9 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
             val queen = if (existing != null && (
                     // Recreate if prepareJob threw an uncaught exception
                     (existing.prepareJob.isCompleted && existing.prepareJob.getCompletionExceptionOrNull() != null) ||
-                    // Recreate if prepare completed but stored an error (doPrepare catches internally)
-                    (existing.prepareJob.isCompleted && existing.prepareError != null && EhUtils.isSchaleNetwork)
-                )
+                        // Recreate if prepare completed but stored an error (doPrepare catches internally)
+                        (existing.prepareJob.isCompleted && existing.prepareError != null && EhUtils.isSchaleNetwork)
+                    )
             ) {
                 sQueenMap.remove(gid)
                 SpiderQueen(galleryInfo).also { sQueenMap[gid] = it }
