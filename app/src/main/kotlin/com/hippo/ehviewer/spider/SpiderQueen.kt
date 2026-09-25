@@ -552,6 +552,14 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
 
         private suspend fun doInJob(index: Int, force: Boolean, orgImg: Boolean, skipHath: Boolean) {
             suspend fun getPToken(index: Int): String? {
+                if (!isReady && EhUtils.isSchaleNetwork) {
+                    runSuspendCatching {
+                        spiderInfo = readSpiderInfoFromInternet()
+                        prepareError = null
+                    }.onFailure {
+                        prepareError = it.displayString()
+                    }
+                }
                 if (!isReady || index !in 0 until size) return null
                 return spiderInfo.pTokenMap[index]
                     ?: getPTokenFromMultiPageViewer(index)
