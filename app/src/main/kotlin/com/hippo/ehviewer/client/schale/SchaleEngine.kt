@@ -10,7 +10,6 @@ import com.ehviewer.core.model.PowerStatus
 import com.ehviewer.core.model.TagNamespace
 import com.ehviewer.core.model.V1GalleryPreview
 import com.ehviewer.core.model.VoteStatus
-import com.ehviewer.core.util.logcat
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.client.ehRequest
@@ -18,7 +17,6 @@ import com.hippo.ehviewer.client.executeSafely
 import com.hippo.ehviewer.client.parseAs
 import com.hippo.ehviewer.client.parser.GalleryListResult
 import io.ktor.client.request.header
-import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
@@ -124,42 +122,18 @@ object SchaleEngine {
     }
 
     /**
-     * Fetch full image URLs for a Schale gallery in page order (used by reader/spider).
-     * If a valid Cloudflare clearance token is present, requests full quality (1280/1600/original).
-     * If clearance is missing, expired, or fails, gracefully falls back to public high-res pages (896p)
-     * so that the reader ALWAYS loads without Cloudflare errors.
+     * Fetch full-quality image URLs for a Schale gallery in page order (used by reader/spider).
+     * Always requires a valid Cloudflare clearance token — no low-res fallback.
+     * Prefers 1280p, then 1600p, then original; throws [SchaleClearanceException] if token is missing or expired.
      */
     suspend fun getSchaleImageUrls(id: Long, key: String): List<String> {
         val token = Settings.schaleClearanceToken.value
-        if (isValidClearanceToken(token)) {
-            runCatching {
-                return getProtectedImageUrls(id, key, token!!)
-            }.onFailure { e ->
-                logcat("SchaleEngine") { "Protected image URLs failed ($e), falling back to public gallery detail" }
-            }
+        if (!isValidClearanceToken(token)) {
+            throw SchaleClearanceException(
+                "Verificación de Cloudflare requerida. Ve a Configuración > EH > Verificación de Schale Network.",
+            )
         }
-        return getPublicImageUrls(id, key)
-    }
-
-    suspend fun getPublicImageUrls(id: Long, key: String): List<String> {
-        val url = buildDetailUrl(id, key)
-        val responseText = ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE)
-            .executeSafely { resp ->
-                checkPublicResponseStatus(resp)
-                resp.bodyAsText()
-            }
-        val detail = responseText.parseAs<SchaleMangaDetail>()
-        val thumbnails = detail.thumbnails
-        if (thumbnails != null && thumbnails.entries.isNotEmpty()) {
-            val base = thumbnails.base.trimEnd('/')
-            // Use 896.jpg (high resolution manga page) from public thumbnails
-            return thumbnails.entries.map { entry ->
-                val p = entry.path.trimStart('/')
-                val highResPath = if (p.endsWith("320.jpg")) p.replace("320.jpg", "896.jpg") else p
-                "$base/$highResPath"
-            }
-        }
-        throw IOException("No se pudieron obtener las imágenes del manga de Schale Network.")
+        return getProtectedImageUrls(id, key, token!!)
     }
 
     private suspend fun getProtectedImageUrls(id: Long, key: String, token: String): List<String> {
