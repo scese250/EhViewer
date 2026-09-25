@@ -3,6 +3,7 @@ package com.hippo.ehviewer.ui.settings
 import android.graphics.Bitmap
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
+import android.webkit.WebStorage
 import android.webkit.WebView as AndroidWebView
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.foundation.layout.Column
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -56,13 +58,6 @@ private const val JS_OBSERVER_INJECTION = """
         if (!window.outerWidth) Object.defineProperty(window, 'outerWidth', { get: () => window.innerWidth || 1080 });
         if (!window.outerHeight) Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight || 1920 });
 
-        try {
-            if (!window.__schaleInitialCleaned) {
-                window.__schaleInitialCleaned = true;
-                window.localStorage.removeItem('clearance');
-            }
-        } catch(e) {}
-
         if (window.__schaleObserverInstalled) return;
         window.__schaleObserverInstalled = true;
 
@@ -85,7 +80,6 @@ private const val JS_OBSERVER_INJECTION = """
         } catch(e) {}
 
         setInterval(function() {
-            if (!window.__schaleInitialCleaned) return;
             try {
                 const token = window.localStorage.getItem('clearance');
                 notifyApp(token);
@@ -141,10 +135,15 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
     }
 
     LaunchedEffect(Unit) {
+        WebStorage.getInstance().deleteAllData()
+        state.webView?.evaluateJavascript(
+            "try { window.localStorage.removeItem('clearance'); } catch(e) {}",
+            null,
+        )
         while (isActive && !tokenHandled.get()) {
-            delay(1000)
+            delay(500)
             state.webView?.evaluateJavascript(
-                "(function() { try { return window.__schaleInitialCleaned ? (window.localStorage.getItem('clearance') || '') : ''; } catch(e) { return ''; } })()",
+                "(function() { try { return window.localStorage.getItem('clearance') || ''; } catch(e) { return ''; } })()",
             ) { raw ->
                 handleClearanceToken(raw)
             }
@@ -166,6 +165,24 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
                         },
                     ) {
                         Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
+                    }
+                    IconButton(
+                        onClick = {
+                            state.webView?.evaluateJavascript(
+                                "(function() { try { return window.localStorage.getItem('clearance') || ''; } catch(e) { return ''; } })()",
+                            ) { raw ->
+                                val token = raw?.trim()?.removeSurrounding("\"")
+                                if (SchaleEngine.isValidClearanceToken(token)) {
+                                    handleClearanceToken(raw)
+                                } else {
+                                    coroutineScope.launch(Dispatchers.Main) {
+                                        tip(R.string.schale_verification_not_verified)
+                                    }
+                                }
+                            }
+                        },
+                    ) {
+                        Icon(imageVector = Icons.Default.Check, contentDescription = null)
                     }
                 },
             )
