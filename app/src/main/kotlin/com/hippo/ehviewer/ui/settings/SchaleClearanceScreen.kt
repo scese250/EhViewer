@@ -59,23 +59,25 @@ private const val JS_OBSERVER_INJECTION = """
         function checkAndNotify() {
             try {
                 const token = window.localStorage.getItem('clearance');
-                if (token && token.length >= 32 && token !== 'null' && token !== '{}') {
-                    fetch('https://auth.schale.network/clearance', {
-                        headers: { 'Authorization': 'Bearer ' + token }
-                    }).then(function(res) {
-                        if (res.status === 200) {
-                            if (window.SchaleBridge) {
-                                window.SchaleBridge.onClearanceToken(token);
-                            }
-                        } else {
-                            window.localStorage.removeItem('clearance');
-                        }
-                    }).catch(function() {});
+                if (token && typeof token === 'string' && token.length >= 32 && token !== 'null' && token !== '{}') {
+                    if (window.SchaleBridge) {
+                        window.SchaleBridge.onClearanceToken(token);
+                    }
                 }
             } catch(e) {}
         }
 
-        setInterval(checkAndNotify, 1000);
+        try {
+            const origSetItem = Storage.prototype.setItem;
+            Storage.prototype.setItem = function(key, val) {
+                origSetItem.apply(this, arguments);
+                if (key === 'clearance') {
+                    checkAndNotify();
+                }
+            };
+        } catch(e) {}
+
+        setInterval(checkAndNotify, 500);
         checkAndNotify();
     })();
 """
@@ -94,15 +96,18 @@ class SchaleBridge(private val onTokenValid: (String) -> Unit) {
 fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigator) = Screen(navigator) {
     val coroutineScope = rememberCoroutineScope()
     val state = rememberWebViewState(url = EhUrl.HOST_SCHALE)
+    val tokenHandled = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
 
     fun handleClearanceToken(raw: String?) {
         val token = raw?.trim()?.removeSurrounding("\"") ?: return
         if (token.length in 32..64 && token.all { it.isLetterOrDigit() || it == '-' }) {
-            Settings.schaleClearanceToken.value = token
-            EhCookieStore.flush()
-            coroutineScope.launch(Dispatchers.Main) {
-                tip(R.string.schale_verification_success)
-                navigator.popBackStack()
+            if (tokenHandled.compareAndSet(false, true)) {
+                Settings.schaleClearanceToken.value = token
+                EhCookieStore.flush()
+                coroutineScope.launch(Dispatchers.Main) {
+                    tip(R.string.schale_verification_success)
+                    navigator.popBackStack()
+                }
             }
         }
     }
@@ -124,9 +129,11 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
     }
 
     LaunchedEffect(Unit) {
-        while (isActive) {
-            delay(1500)
-            state.webView?.evaluateJavascript(JS_OBSERVER_INJECTION, null)
+        while (isActive && !tokenHandled.get()) {
+            delay(1000)
+            state.webView?.evaluateJavascript("(function() { try { return window.localStorage.getItem('clearance') || ''; } catch(e) { return ''; } })()") { raw ->
+                handleClearanceToken(raw)
+            }
         }
     }
 
