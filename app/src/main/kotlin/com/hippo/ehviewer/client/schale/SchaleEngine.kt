@@ -195,8 +195,7 @@ object SchaleEngine {
         throw IOException("No se encontraron resoluciones válidas para el manga protegido.")
     }
 
-    fun isValidClearanceToken(token: String?): Boolean =
-        !token.isNullOrBlank() && token != "{}" && token != "null" && token.length in 32..64 && token.all { it.isLetterOrDigit() || it == '-' }
+    fun isValidClearanceToken(token: String?): Boolean = !token.isNullOrBlank() && token != "{}" && token != "null" && token.length in 32..64 && token.all { it.isLetterOrDigit() || it == '-' }
 
     fun checkClearanceToken() {
         val token = Settings.schaleClearanceToken.value
