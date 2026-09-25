@@ -102,13 +102,14 @@ object SchaleEngine {
             )
         }
 
+        val pageCount = if (previewList.isNotEmpty()) previewList.size else (detail.thumbnails?.entries?.size ?: 0)
         val baseInfo = BaseGalleryInfo(
             gid = id,
             token = key,
             title = detail.title,
             thumbKey = thumbKey,
             category = 0x4, // MANGA
-            pages = previewList.size,
+            pages = pageCount,
             rating = -1f,
             posted = "",
         )
@@ -161,7 +162,8 @@ object SchaleEngine {
     }
 
     private fun checkClearanceToken() {
-        if (Settings.schaleClearanceToken.value.isNullOrBlank()) {
+        val token = Settings.schaleClearanceToken.value
+        if (token.isNullOrBlank() || token == "{}" || token == "null" || token.length < 32 || !token.all { it.isLetterOrDigit() || it == '-' }) {
             throw SchaleClearanceException("Verificación de Cloudflare requerida. Ve a Configuración > EH > Verificación de Schale Network.")
         }
     }
@@ -218,6 +220,7 @@ object SchaleEngine {
             gid = id.toLong(),
             token = key,
             title = title,
+            pages = pages,
             thumbKey = fullThumbUrl,
             category = 0x4, // MANGA
             posted = "",

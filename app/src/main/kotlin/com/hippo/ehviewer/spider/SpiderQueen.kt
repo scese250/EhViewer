@@ -458,7 +458,14 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
 
         fun obtainSpiderQueen(galleryInfo: GalleryInfo, @Mode mode: Int): SpiderQueen {
             val gid = galleryInfo.gid
-            return (sQueenMap.getOrPut(gid) { SpiderQueen(galleryInfo) }).apply {
+            val existing = sQueenMap[gid]
+            val queen = if (existing != null && existing.prepareJob.isCompleted && existing.prepareJob.getCompletionExceptionOrNull() != null) {
+                sQueenMap.remove(gid)
+                SpiderQueen(galleryInfo).also { sQueenMap[gid] = it }
+            } else {
+                sQueenMap.getOrPut(gid) { SpiderQueen(galleryInfo) }
+            }
+            return queen.apply {
                 setMode(mode)
                 launch { updateMode() }
             }
@@ -552,10 +559,15 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
 
         private suspend fun doInJob(index: Int, force: Boolean, orgImg: Boolean, skipHath: Boolean) {
             suspend fun getPToken(index: Int): String? {
-                if (!isReady && EhUtils.isSchaleNetwork) {
+                if (EhUtils.isSchaleNetwork && (!isReady || spiderInfo.pTokenMap.isEmpty())) {
                     runSuspendCatching {
-                        spiderInfo = readSpiderInfoFromInternet()
+                        val freshInfo = readSpiderInfoFromInternet()
+                        spiderInfo = freshInfo
                         prepareError = null
+                        if (pageStates.size != freshInfo.pages) {
+                            pageStates = IntArray(freshInfo.pages)
+                            notifyGetPages(freshInfo.pages)
+                        }
                     }.onFailure {
                         prepareError = it.displayString()
                     }

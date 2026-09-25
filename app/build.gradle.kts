@@ -18,7 +18,7 @@ plugins {
     alias(libs.plugins.baselineprofile)
 }
 
-val supportedAbis = arrayOf("armeabi-v7a")
+val supportedAbis = arrayOf("arm64-v8a")
 
 android {
     splits {
@@ -69,6 +69,11 @@ android {
         buildConfigField("String", "REPO_NAME", "\"$repoName\"")
         ndk {
             debugSymbolLevel = "FULL"
+        }
+        externalNativeBuild {
+            cmake {
+                abiFilters.addAll(supportedAbis)
+            }
         }
     }
 

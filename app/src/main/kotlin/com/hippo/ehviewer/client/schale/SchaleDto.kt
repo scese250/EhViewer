@@ -18,6 +18,7 @@ data class SchaleEntry(
     val id: Int,
     val key: String,
     val title: String,
+    val pages: Int = 0,
     val thumbnail: SchaleThumbnail = SchaleThumbnail(),
 )
 
