@@ -43,8 +43,8 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
 
     fun handleClearanceToken(raw: String?) {
         val token = raw?.takeUnless { it == "null" || it.isBlank() }?.removeSurrounding("\"")
-        if (!token.isNullOrBlank() && token != Settings.schaleClearanceToken) {
-            Settings.schaleClearanceToken = token
+        if (!token.isNullOrBlank() && token != Settings.schaleClearanceToken.value) {
+            Settings.schaleClearanceToken.value = token
             EhCookieStore.flush()
             tip(R.string.schale_verification_success)
             navigator.popBackStack()

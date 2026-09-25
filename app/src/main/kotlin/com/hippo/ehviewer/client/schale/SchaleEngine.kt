@@ -6,8 +6,10 @@ import com.ehviewer.core.model.GalleryDetail
 import com.ehviewer.core.model.GalleryPreview
 import com.ehviewer.core.model.GalleryTag
 import com.ehviewer.core.model.GalleryTagGroup
+import com.ehviewer.core.model.PowerStatus
 import com.ehviewer.core.model.TagNamespace
 import com.ehviewer.core.model.V1GalleryPreview
+import com.ehviewer.core.model.VoteStatus
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.client.ehRequest
@@ -68,12 +70,12 @@ object SchaleEngine {
 
         val thumbnails = detail.thumbnails
         val baseThumbUrl = thumbnails?.base?.trimEnd('/') ?: "https://$SCHALE_API_HOST"
-        val thumbKey = thumbnails?.main?.let { "${baseThumbUrl}/${it.path.trimStart('/')}" }
+        val thumbKey = thumbnails?.main?.let { "$baseThumbUrl/${it.path.trimStart('/')}" }
             ?: "https://$SCHALE_API_HOST/books/$id/$key/thumbnail"
 
         val previewList: List<GalleryPreview> = thumbnails?.entries?.mapIndexed { index, entry ->
             V1GalleryPreview(
-                url = "${baseThumbUrl}/${entry.path.trimStart('/')}",
+                url = "$baseThumbUrl/${entry.path.trimStart('/')}",
                 position = index,
                 pToken = entry.path,
             )
@@ -91,7 +93,7 @@ object SchaleEngine {
             }
             GalleryTagGroup(
                 namespace = ns,
-                tags = tags.map { GalleryTag(it.name, 0) },
+                tags = tags.map { GalleryTag(it.name, PowerStatus.Solid, VoteStatus.None) },
             )
         }
 
@@ -135,10 +137,10 @@ object SchaleEngine {
 
         if (dataId != null && pubKey != null) {
             val realQuality = when (dataId) {
-                data.`1600`?.id -> "1600"
-                data.`1280`?.id -> "1280"
-                data.`980`?.id -> "980"
-                data.`780`?.id -> "780"
+                data?.`1600`?.id -> "1600"
+                data?.`1280`?.id -> "1280"
+                data?.`980`?.id -> "980"
+                data?.`780`?.id -> "780"
                 else -> "0"
             }
             val dataUrl = buildImageDataUrl(id, key, dataId, pubKey, realQuality)
@@ -149,7 +151,7 @@ object SchaleEngine {
                 }
             val imagesInfo = imagesText.parseAs<SchaleImagesInfo>()
             val base = imagesInfo.base.trimEnd('/')
-            val urls = imagesInfo.entries.map { "${base}/${it.path.trimStart('/')}?w=$realQuality" }
+            val urls = imagesInfo.entries.map { "$base/${it.path.trimStart('/')}?w=$realQuality" }
             if (urls.isNotEmpty()) return urls
         }
 
@@ -161,22 +163,21 @@ object SchaleEngine {
             }
         val detail = getDetailText.parseAs<SchaleMangaDetail>()
         val base = detail.thumbnails?.base?.trimEnd('/') ?: "https://$SCHALE_API_HOST"
-        return detail.thumbnails?.entries?.map { "${base}/${it.path.trimStart('/')}" }.orEmpty()
+        return detail.thumbnails?.entries?.map { "$base/${it.path.trimStart('/')}" }.orEmpty()
     }
 
     private fun checkClearanceToken() {
-        if (Settings.schaleClearanceToken.isNullOrBlank()) {
+        if (Settings.schaleClearanceToken.value.isNullOrBlank()) {
             throw SchaleClearanceException("Verificación de Cloudflare requerida. Ve a Configuración > EH > Verificación de Schale Network.")
         }
     }
 
     private fun checkResponseStatus(resp: HttpResponse) {
         if (resp.status == HttpStatusCode.BadRequest || resp.status == HttpStatusCode.Forbidden) {
-            Settings.schaleClearanceToken = null
+            Settings.schaleClearanceToken.value = null
             throw SchaleClearanceException("La verificación de Cloudflare expiró. Por favor re-verifica en Configuración > EH > Verificación de Schale Network.")
         }
     }
-
 
     // ---------- URL builders ----------
 
@@ -214,7 +215,7 @@ object SchaleEngine {
     }
 
     private fun URLBuilder.appendClearanceToken() {
-        Settings.schaleClearanceToken?.let { crt ->
+        Settings.schaleClearanceToken.value?.let { crt ->
             if (crt.isNotBlank()) parameters.append("crt", crt)
         }
     }
