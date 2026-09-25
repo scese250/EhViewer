@@ -40,6 +40,7 @@ import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.destinations.FilterScreenDestination
 import com.hippo.ehviewer.ui.destinations.MyTagsScreenDestination
+import com.hippo.ehviewer.ui.destinations.SchaleClearanceScreenDestination
 import com.hippo.ehviewer.ui.destinations.UConfigScreenDestination
 import com.hippo.ehviewer.ui.main.NavigationIcon
 import com.hippo.ehviewer.ui.tools.awaitConfirmationOrCancel
@@ -126,20 +127,13 @@ fun AnimatedVisibilityScope.EhScreen(navigator: DestinationsNavigator) = Screen(
                 state = gallerySite,
             )
             if (EhUtils.isSchaleNetwork) {
-                var crt by Settings.schaleClearanceToken.asMutableState()
+                val crt by Settings.schaleClearanceToken.collectAsState()
                 Preference(
-                    title = "Clearance Token",
-                    summary = crt?.takeIf { it.isNotBlank() } ?: stringResource(id = R.string.none),
-                ) {
-                    launch {
-                        val input = awaitInputText(
-                            initial = crt.orEmpty(),
-                            title = "Clearance Token",
-                            hint = "Token from niyaniya.moe",
-                        )
-                        crt = input.trim().ifEmpty { null }
-                    }
-                }
+                    title = stringResource(id = R.string.schale_verification_title),
+                    summary = stringResource(
+                        id = if (!crt.isNullOrBlank()) R.string.schale_verification_verified else R.string.schale_verification_not_verified,
+                    ),
+                ) { navigate(SchaleClearanceScreenDestination) }
             }
             // EH-specific settings are only shown when not on Schale Network
             if (hasSignedIn && !EhUtils.isSchaleNetwork) {

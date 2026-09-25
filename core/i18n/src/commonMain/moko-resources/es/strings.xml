@@ -370,4 +370,8 @@
     <string name="u_config">Ajustes EHentai</string>
     <string name="apply_tip">Toca la marca de verificación para guardar los cambios</string>
     <string name="dark_theme_follow_system">Sigue el sistema</string>
+    <string name="schale_verification_title">Verificación de Schale Network</string>
+    <string name="schale_verification_verified">Verificado (tocar para re-verificar)</string>
+    <string name="schale_verification_not_verified">No verificado (tocar para resolver Captcha)</string>
+    <string name="schale_verification_success">¡Verificación de Schale completada!</string>
 </resources>

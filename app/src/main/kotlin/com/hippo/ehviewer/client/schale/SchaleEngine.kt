@@ -14,10 +14,14 @@ import com.hippo.ehviewer.client.ehRequest
 import com.hippo.ehviewer.client.executeSafely
 import com.hippo.ehviewer.client.parseAs
 import com.hippo.ehviewer.client.parser.GalleryListResult
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpMethod
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLBuilder
 import io.ktor.http.URLProtocol
+
+class SchaleClearanceException(message: String) : Exception(message)
 
 private const val PAGE_SIZE = 25
 private const val SCHALE_API_HOST = "api.schale.network"
@@ -34,9 +38,13 @@ object SchaleEngine {
      * @param cat  Category id (2 = manga is the default browse view)
      */
     suspend fun getSchaleGalleryList(page: Int = 1, cat: Int = 2): GalleryListResult {
+        checkClearanceToken()
         val url = buildBooksUrl(page = page, cat = cat)
         val responseText = ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE)
-            .executeSafely { it.bodyAsText() }
+            .executeSafely { resp ->
+                checkResponseStatus(resp)
+                resp.bodyAsText()
+            }
         val books = responseText.parseAs<SchaleBooks>()
         val galleryInfoList = books.entries.map { it.toBaseGalleryInfo() }
         val hasMore = books.page * books.limit < books.total
@@ -49,9 +57,13 @@ object SchaleEngine {
      * Fetch detail and previews for a single Schale gallery entry.
      */
     suspend fun getSchaleGalleryDetail(id: Long, key: String): GalleryDetail {
+        checkClearanceToken()
         val url = buildDetailUrl(id, key)
         val responseText = ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE)
-            .executeSafely { it.bodyAsText() }
+            .executeSafely { resp ->
+                checkResponseStatus(resp)
+                resp.bodyAsText()
+            }
         val detail = responseText.parseAs<SchaleMangaDetail>()
 
         val thumbnails = detail.thumbnails
@@ -106,10 +118,14 @@ object SchaleEngine {
      * Fetch full image URLs for a Schale gallery in page order (used by reader/spider).
      */
     suspend fun getSchaleImageUrls(id: Long, key: String): List<String> {
+        checkClearanceToken()
         val detailUrl = buildDetailUrl(id, key)
         val mangaDataText = ehRequest(detailUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
             method = HttpMethod.Post
-        }.executeSafely { it.bodyAsText() }
+        }.executeSafely { resp ->
+            checkResponseStatus(resp)
+            resp.bodyAsText()
+        }
 
         val mangaData = mangaDataText.parseAs<SchaleMangaData>()
         val data = mangaData.data
@@ -127,7 +143,10 @@ object SchaleEngine {
             }
             val dataUrl = buildImageDataUrl(id, key, dataId, pubKey, realQuality)
             val imagesText = ehRequest(dataUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE)
-                .executeSafely { it.bodyAsText() }
+                .executeSafely { resp ->
+                    checkResponseStatus(resp)
+                    resp.bodyAsText()
+                }
             val imagesInfo = imagesText.parseAs<SchaleImagesInfo>()
             val base = imagesInfo.base.trimEnd('/')
             val urls = imagesInfo.entries.map { "${base}/${it.path.trimStart('/')}?w=$realQuality" }
@@ -136,11 +155,28 @@ object SchaleEngine {
 
         // Fallback: fetch thumbnails entries from detail if image data endpoint is unavailable
         val getDetailText = ehRequest(detailUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE)
-            .executeSafely { it.bodyAsText() }
+            .executeSafely { resp ->
+                checkResponseStatus(resp)
+                resp.bodyAsText()
+            }
         val detail = getDetailText.parseAs<SchaleMangaDetail>()
         val base = detail.thumbnails?.base?.trimEnd('/') ?: "https://$SCHALE_API_HOST"
         return detail.thumbnails?.entries?.map { "${base}/${it.path.trimStart('/')}" }.orEmpty()
     }
+
+    private fun checkClearanceToken() {
+        if (Settings.schaleClearanceToken.isNullOrBlank()) {
+            throw SchaleClearanceException("Verificación de Cloudflare requerida. Ve a Configuración > EH > Verificación de Schale Network.")
+        }
+    }
+
+    private fun checkResponseStatus(resp: HttpResponse) {
+        if (resp.status == HttpStatusCode.BadRequest || resp.status == HttpStatusCode.Forbidden) {
+            Settings.schaleClearanceToken = null
+            throw SchaleClearanceException("La verificación de Cloudflare expiró. Por favor re-verifica en Configuración > EH > Verificación de Schale Network.")
+        }
+    }
+
 
     // ---------- URL builders ----------
 

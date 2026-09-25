@@ -18,6 +18,10 @@
     <string name="site_e" translatable="false">e-hentai</string>
     <string name="site_ex" translatable="false">exhentai</string>
     <string name="site_schale" translatable="false">Schale Network</string>
+    <string name="schale_verification_title">Schale Network Verification</string>
+    <string name="schale_verification_verified">Verified (tap to re-verify)</string>
+    <string name="schale_verification_not_verified">Not verified (tap to solve Captcha)</string>
+    <string name="schale_verification_success">Schale verification successful!</string>
     <!-- Theme -->
     <!-- Category -->
     <string name="doujinshi" translatable="false">DOUJINSHI</string>
