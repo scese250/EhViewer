@@ -11,16 +11,21 @@ import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -36,6 +41,7 @@ import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.asMutableState
 import com.hippo.ehviewer.client.EhTagDatabase
 import com.hippo.ehviewer.client.EhUtils
+import com.hippo.ehviewer.client.schale.SchaleEngine
 import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.destinations.FilterScreenDestination
@@ -128,12 +134,42 @@ fun AnimatedVisibilityScope.EhScreen(navigator: DestinationsNavigator) = Screen(
             )
             if (EhUtils.isSchaleNetwork) {
                 val crt by Settings.schaleClearanceToken.collectAsState()
+                val coroutineScope = rememberCoroutineScope()
+                var testDialogText by remember { mutableStateOf<String?>(null) }
                 Preference(
                     title = stringResource(id = R.string.schale_verification_title),
-                    summary = stringResource(
-                        id = if (!crt.isNullOrBlank()) R.string.schale_verification_verified else R.string.schale_verification_not_verified,
-                    ),
+                    summary = if (!crt.isNullOrBlank()) {
+                        "Token guardado: $crt (longitud: ${crt!!.length})"
+                    } else {
+                        "No configurado (tocar para resolver Captcha)"
+                    },
                 ) { navigate(SchaleClearanceScreenDestination) }
+                Preference(
+                    title = "Probar Conexión Schale (Diagnóstico)",
+                    summary = "Ejecuta una petición de prueba real contra la API de Schale con el token actual para verificar si Cloudflare lo acepta.",
+                ) {
+                    coroutineScope.launch {
+                        testDialogText = "Ejecutando prueba contra api.schale.network...\nPor favor espera."
+                        testDialogText = SchaleEngine.testToken(crt)
+                    }
+                }
+                testDialogText?.let { diagnosticInfo ->
+                    AlertDialog(
+                        onDismissRequest = { testDialogText = null },
+                        title = { Text(text = "Diagnóstico Schale Network") },
+                        text = {
+                            Text(
+                                text = diagnosticInfo,
+                                modifier = Modifier.verticalScroll(rememberScrollState()),
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { testDialogText = null }) {
+                                Text(text = stringResource(id = android.R.string.ok))
+                            }
+                        },
+                    )
+                }
             }
             // EH-specific settings are only shown when not on Schale Network
             if (hasSignedIn && !EhUtils.isSchaleNetwork) {

@@ -111,7 +111,7 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
                 Settings.schaleClearanceToken.value = token
                 EhCookieStore.flush()
                 coroutineScope.launch(Dispatchers.Main) {
-                    tip(R.string.schale_verification_success)
+                    tip("¡Verificación exitosa!\nToken: $token (len=${token.length})")
                     navigator.popBackStack()
                 }
             }
@@ -176,7 +176,7 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
                                     handleClearanceToken(raw)
                                 } else {
                                     coroutineScope.launch(Dispatchers.Main) {
-                                        tip(R.string.schale_verification_not_verified)
+                                        tip("localStorage['clearance'] = '$token' (no es un token válido aún)")
                                     }
                                 }
                             }
