@@ -10,6 +10,7 @@ import com.ehviewer.core.model.PowerStatus
 import com.ehviewer.core.model.TagNamespace
 import com.ehviewer.core.model.V1GalleryPreview
 import com.ehviewer.core.model.VoteStatus
+import com.ehviewer.core.util.logcat
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.client.ehRequest
@@ -140,10 +141,15 @@ object SchaleEngine {
         val detailUrl = buildDetailUrlWithCrt(id, key, token)
         val mangaDataText = ehRequest(detailUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
             method = HttpMethod.Post
-            header(HttpHeaders.Accept, "*/*")
+            header(HttpHeaders.Accept, "application/json, */*")
+            header(HttpHeaders.ContentType, "application/json")
         }.executeSafely { resp ->
+            val body = resp.bodyAsText()
+            if (resp.status == HttpStatusCode.Forbidden) {
+                logcat("SchaleEngine") { "POST detail 403 body: $body | token_len=${token.length}" }
+            }
             checkResponseStatus(resp)
-            resp.bodyAsText()
+            body
         }
 
         val mangaData = mangaDataText.parseAs<SchaleMangaData>()
@@ -169,7 +175,8 @@ object SchaleEngine {
         throw IOException("No se encontraron resoluciones válidas para el manga protegido.")
     }
 
-    fun isValidClearanceToken(token: String?): Boolean = !token.isNullOrBlank() && token != "{}" && token != "null" && token.length in 32..64 && token.all { it.isLetterOrDigit() || it == '-' }
+    fun isValidClearanceToken(token: String?): Boolean =
+        !token.isNullOrBlank() && token != "{}" && token != "null"
 
     fun checkClearanceToken() {
         val token = Settings.schaleClearanceToken.value

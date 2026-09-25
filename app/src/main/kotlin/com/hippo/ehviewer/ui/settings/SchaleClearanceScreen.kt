@@ -59,7 +59,7 @@ private const val JS_OBSERVER_INJECTION = """
         function checkAndNotify() {
             try {
                 const token = window.localStorage.getItem('clearance');
-                if (token && typeof token === 'string' && token.length >= 32 && token !== 'null' && token !== '{}') {
+                if (token && typeof token === 'string' && token.length >= 8 && token !== 'null' && token !== '{}') {
                     if (window.SchaleBridge) {
                         window.SchaleBridge.onClearanceToken(token);
                     }
@@ -100,7 +100,7 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
 
     fun handleClearanceToken(raw: String?) {
         val token = raw?.trim()?.removeSurrounding("\"") ?: return
-        if (token.length in 32..64 && token.all { it.isLetterOrDigit() || it == '-' }) {
+        if (token.isNotBlank() && token != "null" && token != "{}") {
             if (tokenHandled.compareAndSet(false, true)) {
                 Settings.schaleClearanceToken.value = token
                 EhCookieStore.flush()
