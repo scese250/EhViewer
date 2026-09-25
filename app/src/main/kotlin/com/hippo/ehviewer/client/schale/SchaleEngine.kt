@@ -16,12 +16,17 @@ import com.hippo.ehviewer.client.ehRequest
 import com.hippo.ehviewer.client.executeSafely
 import com.hippo.ehviewer.client.parseAs
 import com.hippo.ehviewer.client.parser.GalleryListResult
+import io.ktor.client.request.header
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLBuilder
 import io.ktor.http.URLProtocol
+import io.ktor.http.isSuccess
+import java.io.IOException
 
 class SchaleClearanceException(message: String) : Exception(message)
 
@@ -124,6 +129,9 @@ object SchaleEngine {
         val detailUrl = buildDetailUrl(id, key)
         val mangaDataText = ehRequest(detailUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
             method = HttpMethod.Post
+            header(HttpHeaders.Accept, "*/*")
+            header(HttpHeaders.ContentLength, "0")
+            setBody(ByteArray(0))
         }.executeSafely { resp ->
             checkResponseStatus(resp)
             resp.bodyAsText()
@@ -131,39 +139,25 @@ object SchaleEngine {
 
         val mangaData = mangaDataText.parseAs<SchaleMangaData>()
         val data = mangaData.data
-        val dataKey = data?.`1280` ?: data?.`1600` ?: data?.`0` ?: data?.`980` ?: data?.`780`
-        val dataId = dataKey?.id
-        val pubKey = dataKey?.key
+        val preferredResolutions = listOf("1280", "1600", "0", "980", "780")
+        val chosenQuality = preferredResolutions.firstOrNull { it in data } ?: data.keys.firstOrNull()
+        val dataKey = chosenQuality?.let { data[it] }
 
-        if (dataId != null && pubKey != null) {
-            val realQuality = when (dataId) {
-                data?.`1600`?.id -> "1600"
-                data?.`1280`?.id -> "1280"
-                data?.`980`?.id -> "980"
-                data?.`780`?.id -> "780"
-                else -> "0"
-            }
-            val dataUrl = buildImageDataUrl(id, key, dataId, pubKey, realQuality)
-            val imagesText = ehRequest(dataUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE)
-                .executeSafely { resp ->
-                    checkResponseStatus(resp)
-                    resp.bodyAsText()
-                }
-            val imagesInfo = imagesText.parseAs<SchaleImagesInfo>()
-            val base = imagesInfo.base.trimEnd('/')
-            val urls = imagesInfo.entries.map { "$base/${it.path.trimStart('/')}?w=$realQuality" }
-            if (urls.isNotEmpty()) return urls
-        }
-
-        // Fallback: fetch thumbnails entries from detail if image data endpoint is unavailable
-        val getDetailText = ehRequest(detailUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE)
-            .executeSafely { resp ->
+        if (chosenQuality != null && dataKey != null && dataKey.id != 0 && dataKey.key.isNotBlank()) {
+            val dataUrl = buildImageDataUrl(id, key, dataKey.id, dataKey.key, chosenQuality)
+            val imagesText = ehRequest(dataUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
+                header(HttpHeaders.Accept, "*/*")
+            }.executeSafely { resp ->
                 checkResponseStatus(resp)
                 resp.bodyAsText()
             }
-        val detail = getDetailText.parseAs<SchaleMangaDetail>()
-        val base = detail.thumbnails?.base?.trimEnd('/') ?: "https://$SCHALE_API_HOST"
-        return detail.thumbnails?.entries?.map { "$base/${it.path.trimStart('/')}" }.orEmpty()
+            val imagesInfo = imagesText.parseAs<SchaleImagesInfo>()
+            val base = imagesInfo.base.trimEnd('/')
+            val urls = imagesInfo.entries.map { "$base/${it.path.trimStart('/')}" }
+            if (urls.isNotEmpty()) return urls
+        }
+
+        throw IOException("No se pudieron obtener las imágenes del manga de Schale Network.")
     }
 
     private fun checkClearanceToken() {
@@ -173,9 +167,11 @@ object SchaleEngine {
     }
 
     private fun checkResponseStatus(resp: HttpResponse) {
-        if (resp.status == HttpStatusCode.BadRequest || resp.status == HttpStatusCode.Forbidden) {
-            Settings.schaleClearanceToken.value = null
+        if (resp.status == HttpStatusCode.Forbidden) {
             throw SchaleClearanceException("La verificación de Cloudflare expiró. Por favor re-verifica en Configuración > EH > Verificación de Schale Network.")
+        }
+        if (!resp.status.isSuccess()) {
+            throw IOException("Schale API error: ${resp.status.value} ${resp.status.description}")
         }
     }
 

@@ -66,24 +66,14 @@ data class SchaleTag(
  */
 @Serializable
 data class SchaleMangaData(
-    val data: SchaleData? = null,
-    val similar: List<SchaleEntry> = emptyList(),
-)
-
-@Serializable
-data class SchaleData(
-    val `0`: SchaleDataKey? = null,
-    val `780`: SchaleDataKey? = null,
-    val `980`: SchaleDataKey? = null,
-    val `1280`: SchaleDataKey? = null,
-    val `1600`: SchaleDataKey? = null,
+    val data: Map<String, SchaleDataKey> = emptyMap(),
 )
 
 @Serializable
 data class SchaleDataKey(
-    val id: Int? = null,
-    val size: Double = 0.0,
-    val key: String? = null,
+    val id: Int = 0,
+    val key: String = "",
+    val size: Long = 0L,
 )
 
 /**
@@ -92,6 +82,7 @@ data class SchaleDataKey(
 @Serializable
 data class SchaleImagesInfo(
     val base: String = "",
+    val fallback: String? = null,
     val entries: List<SchaleImagePath> = emptyList(),
 )
 

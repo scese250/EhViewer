@@ -220,6 +220,8 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
         notifyAllPageDownloaded(failed)
     }
 
+    private var prepareError: String? = null
+
     private suspend fun doPrepare() {
         spiderDen.initDownloadDirIfExist()
         val pages = Either.catch {
@@ -227,6 +229,7 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
             spiderInfo.pages
         }.getOrElse {
             logcat(it)
+            prepareError = it.displayString()
             galleryInfo.pages
         }
         check(pages > 0)
@@ -562,7 +565,7 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
                 if (!force && index in spiderDen) {
                     return updatePageState(index, STATE_FINISHED)
                 }
-                pToken = getPToken(index) ?: return updatePageState(index, STATE_FAILED, pTokenFailedMessage)
+                pToken = getPToken(index) ?: return updatePageState(index, STATE_FAILED, prepareError ?: pTokenFailedMessage)
                 previousPToken = getPToken(index - 1)
 
                 // The lock for delay should be acquired before anything else to maintain FIFO order
