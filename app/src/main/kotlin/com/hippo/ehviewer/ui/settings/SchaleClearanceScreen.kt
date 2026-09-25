@@ -3,7 +3,6 @@ package com.hippo.ehviewer.ui.settings
 import android.graphics.Bitmap
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
-import android.webkit.WebStorage
 import android.webkit.WebView as AndroidWebView
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.foundation.layout.Column
@@ -20,7 +19,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
@@ -43,8 +41,6 @@ import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import moe.tarsin.tip
 
@@ -61,12 +57,26 @@ private const val JS_OBSERVER_INJECTION = """
         if (window.__schaleObserverInstalled) return;
         window.__schaleObserverInstalled = true;
 
-        function notifyApp(token) {
-            if (token && typeof token === 'string' && token.length >= 8 && token !== 'null' && token !== '{}') {
-                if (window.SchaleBridge) {
-                    window.SchaleBridge.onClearanceToken(token);
-                }
+        function verifyAndNotify(token) {
+            if (!token || typeof token !== 'string' || token.length < 10 || token === 'null' || token === '{}') {
+                return;
             }
+            fetch('https://auth.schale.network/clearance', {
+                method: 'GET',
+                headers: {
+                    'Authorization': 'Bearer ' + token,
+                    'Origin': 'https://niyaniya.moe',
+                    'Referer': 'https://niyaniya.moe/'
+                }
+            }).then(function(resp) {
+                if (resp.status === 200) {
+                    if (window.SchaleBridge) {
+                        window.SchaleBridge.onClearanceToken(token);
+                    }
+                } else {
+                    try { window.localStorage.removeItem('clearance'); } catch(e) {}
+                }
+            }).catch(function(err) {});
         }
 
         try {
@@ -74,25 +84,35 @@ private const val JS_OBSERVER_INJECTION = """
             Storage.prototype.setItem = function(key, val) {
                 origSetItem.apply(this, arguments);
                 if (key === 'clearance') {
-                    notifyApp(val);
+                    verifyAndNotify(val);
                 }
             };
         } catch(e) {}
 
-        setInterval(function() {
-            try {
-                const token = window.localStorage.getItem('clearance');
-                notifyApp(token);
-            } catch(e) {}
-        }, 500);
+        try {
+            const existing = window.localStorage.getItem('clearance');
+            if (existing) {
+                verifyAndNotify(existing);
+            }
+        } catch(e) {}
     })();
 """
 
-class SchaleBridge(private val onTokenValid: (String) -> Unit) {
+class SchaleBridge(
+    private val onTokenValid: (String) -> Unit,
+    private val onStatus: (String) -> Unit,
+) {
     @JavascriptInterface
     fun onClearanceToken(token: String?) {
         if (!token.isNullOrBlank()) {
             onTokenValid(token)
+        }
+    }
+
+    @JavascriptInterface
+    fun onStatus(msg: String?) {
+        if (!msg.isNullOrBlank()) {
+            onStatus(msg)
         }
     }
 }
@@ -111,10 +131,16 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
                 Settings.schaleClearanceToken.value = token
                 EhCookieStore.flush()
                 coroutineScope.launch(Dispatchers.Main) {
-                    tip("¡Verificación exitosa!\nToken: $token (len=${token.length})")
+                    tip("¡Verificación exitosa!\nToken verificado: ${token.take(8)}... (200 OK)")
                     navigator.popBackStack()
                 }
             }
+        }
+    }
+
+    fun handleStatus(msg: String) {
+        coroutineScope.launch(Dispatchers.Main) {
+            tip(msg)
         }
     }
 
@@ -134,22 +160,6 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
         }
     }
 
-    LaunchedEffect(Unit) {
-        WebStorage.getInstance().deleteAllData()
-        state.webView?.evaluateJavascript(
-            "try { window.localStorage.removeItem('clearance'); } catch(e) {}",
-            null,
-        )
-        while (isActive && !tokenHandled.get()) {
-            delay(500)
-            state.webView?.evaluateJavascript(
-                "(function() { try { return window.localStorage.getItem('clearance') || ''; } catch(e) { return ''; } })()",
-            ) { raw ->
-                handleClearanceToken(raw)
-            }
-        }
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -159,7 +169,14 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
                     IconButton(
                         onClick = {
                             state.webView?.evaluateJavascript(
-                                "try { window.localStorage.removeItem('clearance'); window.location.reload(); } catch(e) {}",
+                                """
+                                try {
+                                    window.localStorage.removeItem('clearance');
+                                    window.location.reload();
+                                } catch(e) {
+                                    window.location.reload();
+                                }
+                                """.trimIndent(),
                                 null,
                             )
                         },
@@ -169,17 +186,38 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
                     IconButton(
                         onClick = {
                             state.webView?.evaluateJavascript(
-                                "(function() { try { return window.localStorage.getItem('clearance') || ''; } catch(e) { return ''; } })()",
-                            ) { raw ->
-                                val token = raw?.trim()?.removeSurrounding("\"")
-                                if (SchaleEngine.isValidClearanceToken(token)) {
-                                    handleClearanceToken(raw)
-                                } else {
-                                    coroutineScope.launch(Dispatchers.Main) {
-                                        tip("localStorage['clearance'] = '$token' (no es un token válido aún)")
+                                """
+                                (function() {
+                                    try {
+                                        const token = window.localStorage.getItem('clearance');
+                                        if (!token || token === 'null' || token === '{}') {
+                                            if (window.SchaleBridge) window.SchaleBridge.onStatus("No hay token guardado. Resuelve el captcha en pantalla.");
+                                            return;
+                                        }
+                                        fetch('https://auth.schale.network/clearance', {
+                                            method: 'GET',
+                                            headers: {
+                                                'Authorization': 'Bearer ' + token,
+                                                'Origin': 'https://niyaniya.moe',
+                                                'Referer': 'https://niyaniya.moe/'
+                                            }
+                                        }).then(function(r) {
+                                            if (r.status === 200) {
+                                                if (window.SchaleBridge) window.SchaleBridge.onClearanceToken(token);
+                                            } else {
+                                                try { window.localStorage.removeItem('clearance'); } catch(e) {}
+                                                if (window.SchaleBridge) window.SchaleBridge.onStatus("Token inválido o expirado (HTTP " + r.status + "). Resuelve el captcha.");
+                                            }
+                                        }).catch(function(e) {
+                                            if (window.SchaleBridge) window.SchaleBridge.onStatus("Error comprobando token: " + e);
+                                        });
+                                    } catch(e) {
+                                        if (window.SchaleBridge) window.SchaleBridge.onStatus("Error: " + e);
                                     }
-                                }
-                            }
+                                })()
+                                """.trimIndent(),
+                                null,
+                            )
                         },
                     ) {
                         Icon(imageVector = Icons.Default.Check, contentDescription = null)
@@ -214,7 +252,10 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
                         userAgentString = CHROME_MOBILE_USER_AGENT
                     }
                     webView.addJavascriptInterface(
-                        SchaleBridge { token -> handleClearanceToken(token) },
+                        SchaleBridge(
+                            onTokenValid = { token -> handleClearanceToken(token) },
+                            onStatus = { msg -> handleStatus(msg) },
+                        ),
                         "SchaleBridge",
                     )
                     val cookieManager = CookieManager.getInstance()
@@ -225,3 +266,4 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
         }
     }
 }
+
