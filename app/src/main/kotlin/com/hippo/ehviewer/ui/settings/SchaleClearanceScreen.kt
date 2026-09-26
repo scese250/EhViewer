@@ -266,4 +266,3 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
         }
     }
 }
-
