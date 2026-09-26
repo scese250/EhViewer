@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,75 +43,44 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import moe.tarsin.tip
 
-private const val JS_OUTER_SIZE_FIX = """
-    if (!window.outerWidth) Object.defineProperty(window, 'outerWidth', { get: () => window.innerWidth || 1080 });
-    if (!window.outerHeight) Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight || 1920 });
-"""
-
+/**
+ * JS injected on every page load.
+ * - Clears the old (possibly expired) clearance token immediately on load so Turnstile is forced
+ *   to issue a fresh one.
+ * - Intercepts localStorage.setItem('clearance', ...) so we capture the exact moment the site
+ *   writes a new token after Turnstile resolves.  The site only writes it after its own server
+ *   validation, so we can trust it directly.
+ */
 private const val JS_OBSERVER_INJECTION = """
     (function() {
         if (!window.outerWidth) Object.defineProperty(window, 'outerWidth', { get: () => window.innerWidth || 1080 });
         if (!window.outerHeight) Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight || 1920 });
 
+        // Remove stale token so Turnstile always shows a fresh challenge.
+        try { window.localStorage.removeItem('clearance'); } catch(e) {}
+
         if (window.__schaleObserverInstalled) return;
         window.__schaleObserverInstalled = true;
-
-        function verifyAndNotify(token) {
-            if (!token || typeof token !== 'string' || token.length < 10 || token === 'null' || token === '{}') {
-                return;
-            }
-            fetch('https://auth.schale.network/clearance', {
-                method: 'GET',
-                headers: {
-                    'Authorization': 'Bearer ' + token,
-                    'Origin': 'https://niyaniya.moe',
-                    'Referer': 'https://niyaniya.moe/'
-                }
-            }).then(function(resp) {
-                if (resp.status === 200) {
-                    if (window.SchaleBridge) {
-                        window.SchaleBridge.onClearanceToken(token);
-                    }
-                } else {
-                    try { window.localStorage.removeItem('clearance'); } catch(e) {}
-                }
-            }).catch(function(err) {});
-        }
 
         try {
             const origSetItem = Storage.prototype.setItem;
             Storage.prototype.setItem = function(key, val) {
                 origSetItem.apply(this, arguments);
-                if (key === 'clearance') {
-                    verifyAndNotify(val);
+                if (key === 'clearance' && val && val.length >= 10 && val !== 'null' && val !== '{}') {
+                    if (window.SchaleBridge) {
+                        window.SchaleBridge.onClearanceToken(val);
+                    }
                 }
             };
-        } catch(e) {}
-
-        try {
-            const existing = window.localStorage.getItem('clearance');
-            if (existing) {
-                verifyAndNotify(existing);
-            }
         } catch(e) {}
     })();
 """
 
-class SchaleBridge(
-    private val onTokenValid: (String) -> Unit,
-    private val onStatus: (String) -> Unit,
-) {
+class SchaleBridge(private val onTokenValid: (String) -> Unit) {
     @JavascriptInterface
     fun onClearanceToken(token: String?) {
         if (!token.isNullOrBlank()) {
             onTokenValid(token)
-        }
-    }
-
-    @JavascriptInterface
-    fun onStatus(msg: String?) {
-        if (!msg.isNullOrBlank()) {
-            onStatus(msg)
         }
     }
 }
@@ -124,23 +92,16 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
     val state = rememberWebViewState(url = EhUrl.HOST_SCHALE)
     val tokenHandled = remember { AtomicBoolean(false) }
 
-    fun handleClearanceToken(raw: String?) {
-        val token = raw?.trim()?.removeSurrounding("\"") ?: return
+    fun handleClearanceToken(token: String) {
         if (SchaleEngine.isValidClearanceToken(token)) {
             if (tokenHandled.compareAndSet(false, true)) {
                 Settings.schaleClearanceToken.value = token
                 EhCookieStore.flush()
                 coroutineScope.launch(Dispatchers.Main) {
-                    tip("¡Verificación exitosa!\nToken verificado: ${token.take(8)}... (200 OK)")
+                    tip("¡Verificación exitosa!\nToken: ${token.take(8)}... (len=${token.length})")
                     navigator.popBackStack()
                 }
             }
-        }
-    }
-
-    fun handleStatus(msg: String) {
-        coroutineScope.launch(Dispatchers.Main) {
-            tip(msg)
         }
     }
 
@@ -148,13 +109,11 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
         object : AccompanistWebViewClient() {
             override fun onPageStarted(view: AndroidWebView, url: String?, favicon: Bitmap?) {
                 super.onPageStarted(view, url, favicon)
-                view.evaluateJavascript(JS_OUTER_SIZE_FIX, null)
                 view.evaluateJavascript(JS_OBSERVER_INJECTION, null)
             }
 
             override fun onPageFinished(view: AndroidWebView, url: String?) {
                 super.onPageFinished(view, url)
-                view.evaluateJavascript(JS_OUTER_SIZE_FIX, null)
                 view.evaluateJavascript(JS_OBSERVER_INJECTION, null)
             }
         }
@@ -168,59 +127,14 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
                 actions = {
                     IconButton(
                         onClick = {
+                            tokenHandled.set(false)
                             state.webView?.evaluateJavascript(
-                                """
-                                try {
-                                    window.localStorage.removeItem('clearance');
-                                    window.location.reload();
-                                } catch(e) {
-                                    window.location.reload();
-                                }
-                                """.trimIndent(),
+                                "try { window.localStorage.removeItem('clearance'); window.location.reload(); } catch(e) { window.location.reload(); }",
                                 null,
                             )
                         },
                     ) {
                         Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
-                    }
-                    IconButton(
-                        onClick = {
-                            state.webView?.evaluateJavascript(
-                                """
-                                (function() {
-                                    try {
-                                        const token = window.localStorage.getItem('clearance');
-                                        if (!token || token === 'null' || token === '{}') {
-                                            if (window.SchaleBridge) window.SchaleBridge.onStatus("No hay token guardado. Resuelve el captcha en pantalla.");
-                                            return;
-                                        }
-                                        fetch('https://auth.schale.network/clearance', {
-                                            method: 'GET',
-                                            headers: {
-                                                'Authorization': 'Bearer ' + token,
-                                                'Origin': 'https://niyaniya.moe',
-                                                'Referer': 'https://niyaniya.moe/'
-                                            }
-                                        }).then(function(r) {
-                                            if (r.status === 200) {
-                                                if (window.SchaleBridge) window.SchaleBridge.onClearanceToken(token);
-                                            } else {
-                                                try { window.localStorage.removeItem('clearance'); } catch(e) {}
-                                                if (window.SchaleBridge) window.SchaleBridge.onStatus("Token inválido o expirado (HTTP " + r.status + "). Resuelve el captcha.");
-                                            }
-                                        }).catch(function(e) {
-                                            if (window.SchaleBridge) window.SchaleBridge.onStatus("Error comprobando token: " + e);
-                                        });
-                                    } catch(e) {
-                                        if (window.SchaleBridge) window.SchaleBridge.onStatus("Error: " + e);
-                                    }
-                                })()
-                                """.trimIndent(),
-                                null,
-                            )
-                        },
-                    ) {
-                        Icon(imageVector = Icons.Default.Check, contentDescription = null)
                     }
                 },
             )
@@ -252,10 +166,7 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
                         userAgentString = CHROME_MOBILE_USER_AGENT
                     }
                     webView.addJavascriptInterface(
-                        SchaleBridge(
-                            onTokenValid = { token -> handleClearanceToken(token) },
-                            onStatus = { msg -> handleStatus(msg) },
-                        ),
+                        SchaleBridge { token -> handleClearanceToken(token) },
                         "SchaleBridge",
                     )
                     val cookieManager = CookieManager.getInstance()

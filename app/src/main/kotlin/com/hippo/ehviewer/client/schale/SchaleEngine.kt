@@ -1,8 +1,5 @@
 package com.hippo.ehviewer.client.schale
 
-import android.webkit.JavascriptInterface
-import android.webkit.WebView as AndroidWebView
-import android.webkit.WebViewClient
 import com.ehviewer.core.model.BaseGalleryInfo
 import com.ehviewer.core.model.GalleryCommentList
 import com.ehviewer.core.model.GalleryDetail
@@ -20,8 +17,6 @@ import com.hippo.ehviewer.client.ehRequest
 import com.hippo.ehviewer.client.executeSafely
 import com.hippo.ehviewer.client.parseAs
 import com.hippo.ehviewer.client.parser.GalleryListResult
-import com.hippo.ehviewer.ktor.CHROME_MOBILE_USER_AGENT
-import com.hippo.ehviewer.util.setDefaultSettings
 import io.ktor.client.request.header
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
@@ -32,11 +27,6 @@ import io.ktor.http.URLBuilder
 import io.ktor.http.URLProtocol
 import io.ktor.http.isSuccess
 import java.io.IOException
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
-import splitties.init.appCtx
 
 class SchaleTechnicalException(
     val stage: String,
@@ -68,66 +58,6 @@ class SchaleTechnicalException(
     },
     originalCause,
 )
-
-private object SchaleBridgeHelper {
-    suspend fun fetch(url: String, method: String = "GET"): Pair<Int, String> = withContext(Dispatchers.Main) {
-        val deferred = CompletableDeferred<Pair<Int, String>>()
-        val webView = AndroidWebView(appCtx)
-        webView.setDefaultSettings()
-        webView.settings.domStorageEnabled = true
-        webView.settings.userAgentString = CHROME_MOBILE_USER_AGENT
-
-        class Bridge {
-            @JavascriptInterface
-            fun onResult(status: Int, body: String?) {
-                if (deferred.isActive) {
-                    deferred.complete(Pair(status, body.orEmpty()))
-                }
-            }
-
-            @JavascriptInterface
-            fun onError(err: String?) {
-                if (deferred.isActive) {
-                    deferred.complete(Pair(0, err.orEmpty()))
-                }
-            }
-        }
-        webView.addJavascriptInterface(Bridge(), "SchaleBridgeHelper")
-
-        val jsCode = """
-            fetch('$url', {
-                method: '$method',
-                headers: {
-                    'Origin': 'https://niyaniya.moe',
-                    'Referer': 'https://niyaniya.moe/',
-                    'Accept': '*/*'
-                }
-            }).then(function(r) {
-                const s = r.status;
-                r.text().then(function(t) {
-                    if (window.SchaleBridgeHelper) window.SchaleBridgeHelper.onResult(s, t);
-                });
-            }).catch(function(e) {
-                if (window.SchaleBridgeHelper) window.SchaleBridgeHelper.onError(e.toString());
-            });
-        """.trimIndent()
-
-        webView.webViewClient = object : WebViewClient() {
-            override fun onPageFinished(view: AndroidWebView?, pageUrl: String?) {
-                view?.evaluateJavascript(jsCode, null)
-            }
-        }
-        webView.loadUrl(EhUrl.HOST_SCHALE)
-
-        try {
-            withTimeout(15000) {
-                deferred.await()
-            }
-        } finally {
-            webView.destroy()
-        }
-    }
-}
 
 private const val PAGE_SIZE = 25
 private const val SCHALE_API_HOST = "api.schale.network"
@@ -302,67 +232,38 @@ object SchaleEngine {
     private suspend fun getProtectedImageUrls(id: Long, key: String, token: String): List<String> {
         val detailUrl = buildDetailUrlWithCrt(id, key, token)
         val mangaDataText = try {
-            val (apiStatus, apiBody) = ehRequest(detailUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
+            ehRequest(detailUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
                 method = HttpMethod.Post
                 header(HttpHeaders.Accept, "*/*")
                 header("Sec-Fetch-Dest", "empty")
                 header("Sec-Fetch-Mode", "cors")
                 header("Sec-Fetch-Site", "cross-site")
             }.executeSafely { resp ->
-                Pair(resp.status, resp.bodyAsText())
-            }
-
-            if (apiStatus.isSuccess()) {
-                apiBody
-            } else if (apiStatus.value == 403) {
-                val bridgeResult = try {
-                    SchaleBridgeHelper.fetch(detailUrl, "POST")
-                } catch (_: Throwable) {
-                    Pair(0, "")
-                }
-                if (bridgeResult.first in 200..299 && bridgeResult.second.isNotBlank()) {
-                    bridgeResult.second
-                } else {
+                val body = resp.bodyAsText()
+                if (!resp.status.isSuccess()) {
                     throw SchaleTechnicalException(
                         stage = "POST books/detail",
                         url = detailUrl,
-                        httpStatus = apiStatus.value,
-                        httpDescription = apiStatus.description,
+                        httpStatus = resp.status.value,
+                        httpDescription = resp.status.description,
                         token = token,
-                        responseBody = if (bridgeResult.second.isNotBlank()) bridgeResult.second else apiBody,
+                        responseBody = body,
                     )
                 }
-            } else {
-                throw SchaleTechnicalException(
-                    stage = "POST books/detail",
-                    url = detailUrl,
-                    httpStatus = apiStatus.value,
-                    httpDescription = apiStatus.description,
-                    token = token,
-                    responseBody = apiBody,
-                )
+                body
             }
         } catch (e: SchaleTechnicalException) {
             throw e
         } catch (e: Throwable) {
-            val bridgeResult = try {
-                SchaleBridgeHelper.fetch(detailUrl, "POST")
-            } catch (_: Throwable) {
-                Pair(0, "")
-            }
-            if (bridgeResult.first in 200..299 && bridgeResult.second.isNotBlank()) {
-                bridgeResult.second
-            } else {
-                throw SchaleTechnicalException(
-                    stage = "POST books/detail (conexión)",
-                    url = detailUrl,
-                    httpStatus = null,
-                    httpDescription = null,
-                    token = token,
-                    responseBody = null,
-                    originalCause = e,
-                )
-            }
+            throw SchaleTechnicalException(
+                stage = "POST books/detail (conexión)",
+                url = detailUrl,
+                httpStatus = null,
+                httpDescription = null,
+                token = token,
+                responseBody = null,
+                originalCause = e,
+            )
         }
 
         val mangaData = try {
@@ -387,66 +288,37 @@ object SchaleEngine {
         if (chosenQuality != null && dataKey != null && dataKey.id != 0 && dataKey.key.isNotBlank()) {
             val dataUrl = buildImageDataUrl(id, key, dataKey.id, dataKey.key, chosenQuality, token)
             val imagesText = try {
-                val (apiStatus, apiBody) = ehRequest(dataUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
+                ehRequest(dataUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
                     header(HttpHeaders.Accept, "*/*")
                     header("Sec-Fetch-Dest", "empty")
                     header("Sec-Fetch-Mode", "cors")
                     header("Sec-Fetch-Site", "cross-site")
                 }.executeSafely { resp ->
-                    Pair(resp.status, resp.bodyAsText())
-                }
-
-                if (apiStatus.isSuccess()) {
-                    apiBody
-                } else if (apiStatus.value == 403) {
-                    val bridgeResult = try {
-                        SchaleBridgeHelper.fetch(dataUrl, "GET")
-                    } catch (_: Throwable) {
-                        Pair(0, "")
-                    }
-                    if (bridgeResult.first in 200..299 && bridgeResult.second.isNotBlank()) {
-                        bridgeResult.second
-                    } else {
+                    val body = resp.bodyAsText()
+                    if (!resp.status.isSuccess()) {
                         throw SchaleTechnicalException(
                             stage = "GET books/data ($chosenQuality)",
                             url = dataUrl,
-                            httpStatus = apiStatus.value,
-                            httpDescription = apiStatus.description,
+                            httpStatus = resp.status.value,
+                            httpDescription = resp.status.description,
                             token = token,
-                            responseBody = if (bridgeResult.second.isNotBlank()) bridgeResult.second else apiBody,
+                            responseBody = body,
                         )
                     }
-                } else {
-                    throw SchaleTechnicalException(
-                        stage = "GET books/data ($chosenQuality)",
-                        url = dataUrl,
-                        httpStatus = apiStatus.value,
-                        httpDescription = apiStatus.description,
-                        token = token,
-                        responseBody = apiBody,
-                    )
+                    body
                 }
             } catch (e: SchaleTechnicalException) {
                 throw e
             } catch (e: Throwable) {
-                val bridgeResult = try {
-                    SchaleBridgeHelper.fetch(dataUrl, "GET")
-                } catch (_: Throwable) {
-                    Pair(0, "")
-                }
-                if (bridgeResult.first in 200..299 && bridgeResult.second.isNotBlank()) {
-                    bridgeResult.second
-                } else {
-                    throw SchaleTechnicalException(
-                        stage = "GET books/data ($chosenQuality) (conexión)",
-                        url = dataUrl,
-                        httpStatus = null,
-                        httpDescription = null,
-                        token = token,
-                        responseBody = null,
-                        originalCause = e,
-                    )
-                }
+                throw SchaleTechnicalException(
+                    stage = "GET books/data ($chosenQuality) (conexión)",
+                    url = dataUrl,
+                    httpStatus = null,
+                    httpDescription = null,
+                    token = token,
+                    responseBody = null,
+                    originalCause = e,
+                )
             }
 
             val imagesInfo = try {
