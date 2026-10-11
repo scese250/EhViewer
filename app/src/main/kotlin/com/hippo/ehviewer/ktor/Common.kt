@@ -3,6 +3,7 @@ package com.hippo.ehviewer.ktor
 import androidx.webkit.WebViewCompat
 import com.ehviewer.core.network.EhCookieStore
 import com.hippo.ehviewer.Settings
+import com.hippo.ehviewer.client.EhUrl
 import io.ktor.client.HttpClientConfig
 import io.ktor.client.engine.HttpClientEngineConfig
 import io.ktor.client.plugins.HttpTimeout
@@ -41,7 +42,9 @@ fun <T : HttpClientEngineConfig> HttpClientConfig<T>.configureCommon(redirect: B
 
 private val UserAgent = createClientPlugin("UserAgent") {
     onRequest { request, _ ->
-        val userAgent = if (Settings.desktopSite.value) {
+        // Schale Network validates its clearance token against the exact User-Agent that solved
+        // the Cloudflare challenge, so always use the WebView's mobile UA there.
+        val userAgent = if (Settings.desktopSite.value && Settings.gallerySite.value != EhUrl.SITE_SCHALE) {
             CHROME_USER_AGENT
         } else {
             CHROME_MOBILE_USER_AGENT

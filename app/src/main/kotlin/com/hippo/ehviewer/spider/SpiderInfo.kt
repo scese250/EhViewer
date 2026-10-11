@@ -27,6 +27,9 @@ class SpiderInfo(
 
     val pTokenMap: MutableMap<Int, String> = hashMapOf(),
 
+    /** Fallback CDN URLs for Schale Network galleries, indexed like [pTokenMap]. */
+    val fallbackPTokenMap: MutableMap<Int, String> = hashMapOf(),
+
     var previewPerPage: Int = -1,
 )
 

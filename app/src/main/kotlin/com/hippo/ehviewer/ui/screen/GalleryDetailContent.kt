@@ -790,7 +790,7 @@ private fun List<GalleryTagGroup>.artistTag() = find { (ns, _) -> ns == TagNames
 @Composable
 context(_: Context)
 private fun GalleryDetail.collectPreviewItems() = rememberInVM(previewList) {
-    val pageSize = previewList.size
+    val pageSize = previewList.size.coerceAtLeast(1)
     val pages = pages
     val previewPagesMap = previewList.associateBy { it.position } as MutableMap
     Pager(
@@ -808,7 +808,11 @@ private fun GalleryDetail.collectPreviewItems() = rememberInVM(previewList) {
                 val up = getOffset(params, key, pages)
                 val end = (up + getLimit(params, key) - 1).coerceAtMost(pages - 1)
                 runSuspendCatching {
-                    (up..end).filterNot { it in previewPagesMap }.map { it / pageSize }.toSet()
+                    val missing = (up..end).filterNot { it in previewPagesMap }
+                    if (missing.isNotEmpty() && EhUtils.isSchaleNetwork) {
+                        error("Schale Network: faltan miniaturas de vista previa (${missing.size} posiciones)")
+                    }
+                    missing.map { it / pageSize }.toSet()
                         .parMap(concurrency = Settings.multiThreadDownload.value) { page ->
                             val url = EhUrl.getGalleryDetailUrl(gid, token, page)
                             EhEngine.getPreviewList(url).previews

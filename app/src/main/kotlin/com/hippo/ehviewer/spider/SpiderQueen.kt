@@ -225,7 +225,11 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
     private suspend fun doPrepare() {
         spiderDen.initDownloadDirIfExist()
         val pages = Either.catch {
-            spiderInfo = readSpiderInfoFromLocal() ?: readSpiderInfoFromInternet()
+            spiderInfo = if (EhUtils.isSchaleNetwork) {
+                readSpiderInfoFromLocal()?.takeIf { isUsableSchaleSpiderInfo(it) } ?: readSpiderInfoFromInternet()
+            } else {
+                readSpiderInfoFromLocal() ?: readSpiderInfoFromInternet()
+            }
             spiderInfo.pages
         }.getOrElse {
             logcat(it)
@@ -322,6 +326,15 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
     }
         ?: readFromCache(galleryInfo.gid)?.takeIf { it.gid == galleryInfo.gid && it.token == galleryInfo.token }
 
+    /**
+     * A cached Schale spider info is only trusted when it carries a complete, URL-shaped page map.
+     * This prevents a stale cache (for example a single page) from pinning the reader forever.
+     */
+    private fun isUsableSchaleSpiderInfo(info: SpiderInfo): Boolean =
+        info.pages > 0 &&
+            info.pTokenMap.size >= info.pages &&
+            (0 until info.pages).all { info.pTokenMap[it]?.startsWith("http") == true }
+
     private fun readPreviews(previews: List<GalleryPreview>, index: Int, spiderInfo: SpiderInfo) {
         if (index == 0) {
             spiderInfo.previewPerPage = previews.size
@@ -338,11 +351,17 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
     private suspend fun readSpiderInfoFromInternet(): SpiderInfo {
         // For Schale Network galleries, fetch image URLs directly from their API
         if (EhUtils.isSchaleNetwork) {
-            val imageUrls = SchaleEngine.getSchaleImageUrls(galleryInfo.gid, galleryInfo.token)
-            check(imageUrls.isNotEmpty()) { "No images found for Schale gallery ${galleryInfo.gid}" }
-            val spiderInfo = SpiderInfo(galleryInfo.gid, galleryInfo.token, imageUrls.size)
-            imageUrls.forEachIndexed { index, url ->
+            val urls = SchaleEngine.getSchaleImageUrls(galleryInfo.gid, galleryInfo.token)
+            check(urls.primary.isNotEmpty()) { "No images found for Schale gallery ${galleryInfo.gid}" }
+            val spiderInfo = SpiderInfo(galleryInfo.gid, galleryInfo.token, urls.primary.size)
+            urls.primary.forEachIndexed { index, url ->
                 spiderInfo.pTokenMap[index] = url
+            }
+            urls.fallback.forEachIndexed { index, url ->
+                spiderInfo.fallbackPTokenMap[index] = url
+            }
+            logcat(SCHALE_DEBUG_TAG) {
+                "Schale gallery ${galleryInfo.gid}: ${urls.primary.size} pages @ ${urls.quality}, fallback=${urls.fallback.isNotEmpty()}"
             }
             return spiderInfo
         }
@@ -618,8 +637,25 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
                     )
                     updatePageState(index, STATE_FINISHED)
                 }.onFailure { error ->
-                    spiderDen.removeIntermediateFiles(index)
-                    updatePageState(index, STATE_FAILED, error.displayString())
+                    val fallbackUrl = spiderInfo.fallbackPTokenMap[index]?.takeIf { it != pToken }
+                    if (fallbackUrl != null && error !is CancellationException) {
+                        logcat(SCHALE_DEBUG_TAG) { "Page $index failed on primary CDN, retrying fallback" }
+                        runSuspendCatching {
+                            spiderDen.makeHttpCallAndSaveImage(
+                                index,
+                                fallbackUrl,
+                                EhUrl.REFERER_SCHALE,
+                                this@SpiderQueen::notifyPageDownload.partially1(index),
+                            )
+                            updatePageState(index, STATE_FINISHED)
+                        }.onFailure { fallbackError ->
+                            spiderDen.removeIntermediateFiles(index)
+                            updatePageState(index, STATE_FAILED, fallbackError.displayString())
+                        }
+                    } else {
+                        spiderDen.removeIntermediateFiles(index)
+                        updatePageState(index, STATE_FAILED, error.displayString())
+                    }
                 }
                 return
             }
@@ -729,6 +765,7 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
 private val Url509Regex = Regex("https://(?:ehgt\\.org/|exhentai\\.org/im)g/509s?\\.gif")
 private const val FORCE_RETRY = "Force retry"
 private const val WORKER_DEBUG_TAG = "SpiderQueenWorker"
+private const val SCHALE_DEBUG_TAG = "SpiderQueenSchale"
 
 private fun check509(url: String) {
     if (Url509Regex.matches(url)) throw QuotaExceededException()

@@ -55,6 +55,7 @@ object EhUrl {
     const val ORIGIN_E = REFERER_E
     const val HOST_SCHALE = "https://$DOMAIN_SCHALE/"
     const val API_SCHALE = "https://api.schale.network"
+    const val AUTH_SCHALE = "https://auth.schale.network"
     const val REFERER_SCHALE = "https://$DOMAIN_SCHALE/"
     const val ORIGIN_SCHALE = "https://$DOMAIN_SCHALE"
 

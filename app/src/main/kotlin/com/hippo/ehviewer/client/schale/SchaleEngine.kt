@@ -22,11 +22,12 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
-import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLBuilder
 import io.ktor.http.URLProtocol
 import io.ktor.http.isSuccess
 import java.io.IOException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 
 class SchaleTechnicalException(
     val stage: String,
@@ -59,8 +60,28 @@ class SchaleTechnicalException(
     originalCause,
 )
 
-private const val PAGE_SIZE = 25
+/** Thrown when the Cloudflare clearance token is missing, expired or rejected by the server. */
+class SchaleClearanceException(message: String) : IOException(message)
+
+/** Page image URLs of a Schale gallery: chosen quality plus primary and fallback CDN variants. */
+data class SchaleImageUrls(
+    val quality: String,
+    val primary: List<String>,
+    val fallback: List<String>,
+)
+
+private const val TAG = "SchaleEngine"
+private const val PAGE_SIZE = 40
+private const val MAX_ATTEMPTS = 3
 private const val SCHALE_API_HOST = "api.schale.network"
+private val PREFERRED_RESOLUTIONS = listOf("1280", "1600", "0", "980", "780")
+
+private fun normalizeClearanceToken(raw: String?): String? {
+    val token = raw?.trim()?.removeSurrounding("\"")?.trim()
+    if (token.isNullOrEmpty()) return null
+    if (token.equals("null", ignoreCase = true) || token.equals("undefined", ignoreCase = true) || token == "{}") return null
+    return token
+}
 
 /**
  * Engine for Schale Network (niyaniya.moe / api.schale.network) API calls.
@@ -76,16 +97,20 @@ object SchaleEngine {
     suspend fun getSchaleGalleryList(page: Int = 1, cat: Int = 2): GalleryListResult {
         // Public endpoint — no crt token required
         val url = buildBooksUrl(page = page, cat = cat)
-        val responseText = ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE)
-            .executeSafely { resp ->
-                checkPublicResponseStatus(resp)
-                resp.bodyAsText()
-            }
+        val responseText = withRetries("GET books list (page=$page)") {
+            ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE)
+                .executeSafely { resp ->
+                    checkPublicResponseStatus(resp)
+                    resp.bodyAsText()
+                }
+        }
         val books = responseText.parseAs<SchaleBooks>()
         val galleryInfoList = books.entries.map { it.toBaseGalleryInfo() }
-        val hasMore = books.page * books.limit < books.total
+        val limit = books.limit.takeIf { it > 0 } ?: books.entries.size
+        val hasMore = limit > 0 && books.page * limit < books.total
         val nextPage = if (hasMore) (books.page + 1).toString() else null
         val prevPage = if (books.page > 1) (books.page - 1).toString() else null
+        logcat(TAG) { "books page=${books.page} limit=$limit total=${books.total} entries=${books.entries.size} next=$nextPage" }
         return GalleryListResult(prevPage, nextPage, ArrayList(galleryInfoList))
     }
 
@@ -153,105 +178,152 @@ object SchaleEngine {
 
     /**
      * Fetch full-quality image URLs for a Schale gallery in page order (used by reader/spider).
-     * Always requires a valid Cloudflare clearance token — no low-res fallback.
-     * Prefers 1280p, then 1600p, then original; throws [SchaleClearanceException] if token is missing or expired.
+     * Requires a valid Cloudflare clearance token and throws [SchaleClearanceException] when the
+     * token is missing, expired or rejected; never falls back to lower quality.
      */
-    suspend fun getSchaleImageUrls(id: Long, key: String): List<String> {
-        val token = Settings.schaleClearanceToken.value
-        if (!isValidClearanceToken(token)) {
-            throw IOException(
-                "[Error de Configuración Schale]\nEl token de verificación no está configurado o es inválido.\nToken actual en Settings: '$token' (longitud: ${token?.length ?: 0})\nVe a Configuración > EH > Verificación de Schale Network para obtener un token nuevo.",
+    suspend fun getSchaleImageUrls(id: Long, key: String): SchaleImageUrls {
+        val token = normalizeClearanceToken(Settings.schaleClearanceToken.value)
+        if (token == null || !isValidClearanceToken(token)) {
+            throw SchaleClearanceException(
+                "[Verificación requerida]\nEl token de Schale Network no está configurado o no es válido.\n" +
+                    "Ve a Configuración > EH > Verificación de Schale Network para resolver el captcha.",
             )
         }
-        return getProtectedImageUrls(id, key, token!!)
+        return getProtectedImageUrls(id, key, token)
     }
 
+    /**
+     * Runs the same check the website uses for a stored clearance:
+     * GET https://auth.schale.network/clearance with the token as Bearer credential.
+     *
+     * @return the HTTP status, or null when the request itself failed.
+     */
+    suspend fun validateClearanceToken(token: String): Int? = try {
+        ehRequest("${EhUrl.AUTH_SCHALE}/clearance", EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
+            method = HttpMethod.Get
+            header(HttpHeaders.Authorization, "Bearer $token")
+            header(HttpHeaders.Accept, "*/*")
+        }.executeSafely { resp -> resp.status.value }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Throwable) {
+        logcat(TAG) { "Clearance check failed: ${e.message}" }
+        null
+    }
+
+    /**
+     * Full diagnostic: auth check, public list, protected detail POST and image data GET.
+     * Reports the whole reader pipeline so a failure can be pinpointed in one run.
+     */
     suspend fun testToken(token: String?): String {
-        if (!isValidClearanceToken(token)) {
+        val credential = normalizeClearanceToken(token)
+        if (credential == null || !isValidClearanceToken(credential)) {
             return "[Diagnóstico Schale]\nToken inválido o vacío en Settings: '$token'"
         }
-        val nonNullToken = token!!
-        val testUrl = buildDetailUrlWithCrt(27643, "f65c885cfa75", nonNullToken)
-        val authUrl = "https://auth.schale.network/clearance"
         val report = StringBuilder()
         report.appendLine("[Diagnóstico Schale Network]")
-        report.appendLine("Token (len=${nonNullToken.length}): $nonNullToken\n")
+        report.appendLine("Token (len=${credential.length}): ${credential.take(12)}…")
+        report.appendLine("User-Agent: móvil (Chrome del WebView)\n")
 
         // Test 1: Auth check
-        report.appendLine("--- 1. Servidor de Auth ($authUrl) ---")
+        report.appendLine("--- 1. Servidor de Auth (${EhUrl.AUTH_SCHALE}/clearance) ---")
         try {
-            val (authStatus, authBody, authHeaders) = ehRequest(authUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
-                method = HttpMethod.Get
-                header(HttpHeaders.Authorization, "Bearer $nonNullToken")
-                header(HttpHeaders.Accept, "*/*")
-                header("Sec-Fetch-Dest", "empty")
-                header("Sec-Fetch-Mode", "cors")
-                header("Sec-Fetch-Site", "cross-site")
-            }.executeSafely { resp ->
-                Triple(
-                    resp.status,
-                    resp.bodyAsText(),
-                    resp.headers.entries().joinToString("\n") { "  ${it.key}: ${it.value.joinToString(", ")}" },
-                )
-            }
-            report.appendLine("HTTP Status: ${authStatus.value} ${authStatus.description}")
-            report.appendLine("Resultado: ${if (authStatus.isSuccess()) "ÉXITO (Auth reconoció el token)" else "FALLÓ (${authStatus.value})"}")
-            report.appendLine("Headers:\n$authHeaders")
-            if (authBody.isNotBlank()) report.appendLine("Cuerpo: ${authBody.take(400)}")
+            val status = validateClearanceToken(credential)
+            report.appendLine("HTTP Status: ${status ?: "sin respuesta"}")
+            report.appendLine(if (status == 200) "Resultado: ÉXITO (Auth reconoció el token)" else "Resultado: FALLÓ")
         } catch (e: Throwable) {
             report.appendLine("Error al conectar con Auth: ${e::class.simpleName}: ${e.message}")
         }
 
-        // Test 2: API detail check
-        report.appendLine("\n--- 2. Petición POST a Books Detail ($testUrl) ---")
+        // Test 2: Public list
+        report.appendLine("\n--- 2. Lista pública (GET /books) ---")
+        var galleryId = 27643L
+        var galleryKey = "f65c885cfa75"
         try {
-            val (apiStatus, apiBody, apiHeaders) = ehRequest(testUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
-                method = HttpMethod.Post
-                header(HttpHeaders.Accept, "*/*")
-                header("Sec-Fetch-Dest", "empty")
-                header("Sec-Fetch-Mode", "cors")
-                header("Sec-Fetch-Site", "cross-site")
-            }.executeSafely { resp ->
-                Triple(
-                    resp.status,
-                    resp.bodyAsText(),
-                    resp.headers.entries().joinToString("\n") { "  ${it.key}: ${it.value.joinToString(", ")}" },
-                )
+            val listText = ehRequest(buildBooksUrl(page = 1, cat = 2, limit = 1), EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE)
+                .executeSafely { resp ->
+                    checkPublicResponseStatus(resp)
+                    resp.bodyAsText()
+                }
+            val books = listText.parseAs<SchaleBooks>()
+            val first = books.entries.firstOrNull()
+            if (first != null) {
+                galleryId = first.id.toLong()
+                galleryKey = first.key
+                report.appendLine("ÉXITO — total=${books.total}, primera: ${first.title}")
+            } else {
+                report.appendLine("FALLÓ — respuesta sin entradas")
             }
-            report.appendLine("HTTP Status: ${apiStatus.value} ${apiStatus.description}")
-            report.appendLine("Resultado: ${if (apiStatus.isSuccess()) "ÉXITO (API aceptó el token)" else "FALLÓ (${apiStatus.value})"}")
-            report.appendLine("Headers:\n$apiHeaders")
-            if (apiBody.isNotBlank()) report.appendLine("Cuerpo: ${apiBody.take(400)}")
         } catch (e: Throwable) {
-            report.appendLine("Error al conectar con API: ${e::class.simpleName}: ${e.message}")
+            report.appendLine("Error al conectar con la lista: ${e::class.simpleName}: ${e.message}")
+        }
+        report.appendLine("Galería de prueba: $galleryId/$galleryKey")
+
+        // Test 3: Protected detail POST + Test 4: image data GET
+        report.appendLine("\n--- 3. POST books/detail?crt= ---")
+        var pageCount = -1
+        try {
+            val detailUrl = buildDetailUrlWithCrt(galleryId, galleryKey, credential)
+            val (detailStatus, detailBody) = fetchRaw(detailUrl, HttpMethod.Post)
+            report.appendLine("HTTP Status: $detailStatus")
+            if (detailStatus in 200..299) {
+                val data = detailBody.parseAs<SchaleMangaData>().data
+                val chosenQuality = PREFERRED_RESOLUTIONS.firstOrNull { it in data } ?: data.keys.firstOrNull()
+                val dataKey = chosenQuality?.let { data[it] }
+                report.appendLine("Calidades disponibles: ${data.keys.joinToString().ifBlank { "ninguna" }}")
+                if (chosenQuality == null || dataKey == null || dataKey.id == 0 || dataKey.key.isBlank()) {
+                    report.appendLine("FALLÓ — sin calidad utilizable")
+                } else {
+                    report.appendLine("Calidad elegida: $chosenQuality (id=${dataKey.id})")
+                    report.appendLine("\n--- 4. GET books/data ($chosenQuality) ---")
+                    val dataUrl = buildImageDataUrl(galleryId, galleryKey, dataKey.id, dataKey.key, chosenQuality, credential)
+                    val (dataStatus, dataBody) = fetchRaw(dataUrl, HttpMethod.Get)
+                    report.appendLine("HTTP Status: $dataStatus")
+                    if (dataStatus in 200..299) {
+                        val info = dataBody.parseAs<SchaleImagesInfo>()
+                        val base = info.base.trimEnd('/')
+                        pageCount = info.entries.size
+                        report.appendLine("Páginas: $pageCount")
+                        report.appendLine("Base: $base")
+                        report.appendLine("Fallback: ${info.fallback ?: "no"}")
+                        report.appendLine("Primera: ${firstPageUrl(base, info.entries.firstOrNull()?.path, chosenQuality)}")
+                        report.appendLine("Última: ${firstPageUrl(base, info.entries.lastOrNull()?.path, chosenQuality)}")
+                    } else {
+                        report.appendLine("Cuerpo: ${dataBody.take(300)}")
+                    }
+                }
+            } else {
+                report.appendLine("Cuerpo: ${detailBody.take(300)}")
+            }
+        } catch (e: Throwable) {
+            report.appendLine("Error: ${e::class.simpleName}: ${e.message}")
         }
 
+        report.appendLine("\nResultado final: ${if (pageCount > 0) "LECTURA OK ($pageCount páginas)" else "LECTURA FALLÓ"}")
         return report.toString()
     }
 
-    private suspend fun getProtectedImageUrls(id: Long, key: String, token: String): List<String> {
+    private fun firstPageUrl(base: String, path: String?, quality: String): String {
+        if (path == null) return "—"
+        if (path.startsWith("http://") || path.startsWith("https://")) return path
+        return "$base/${path.trimStart('/')}?w=$quality"
+    }
+
+    private suspend fun getProtectedImageUrls(id: Long, key: String, token: String): SchaleImageUrls {
         val detailUrl = buildDetailUrlWithCrt(id, key, token)
         val mangaDataText = try {
             ehRequest(detailUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
                 method = HttpMethod.Post
                 header(HttpHeaders.Accept, "*/*")
-                header("Sec-Fetch-Dest", "empty")
-                header("Sec-Fetch-Mode", "cors")
-                header("Sec-Fetch-Site", "cross-site")
             }.executeSafely { resp ->
                 val body = resp.bodyAsText()
                 if (!resp.status.isSuccess()) {
-                    throw SchaleTechnicalException(
-                        stage = "POST books/detail",
-                        url = detailUrl,
-                        httpStatus = resp.status.value,
-                        httpDescription = resp.status.description,
-                        token = token,
-                        responseBody = body,
-                    )
+                    throw protectedRequestError("POST books/detail", detailUrl, resp.status.value, resp.status.description, body, token)
                 }
                 body
             }
+        } catch (e: SchaleClearanceException) {
+            throw e
         } catch (e: SchaleTechnicalException) {
             throw e
         } catch (e: Throwable) {
@@ -266,8 +338,8 @@ object SchaleEngine {
             )
         }
 
-        val mangaData = try {
-            mangaDataText.parseAs<SchaleMangaData>()
+        val data = try {
+            mangaDataText.parseAs<SchaleMangaData>().data
         } catch (e: Throwable) {
             throw SchaleTechnicalException(
                 stage = "Parse JSON mangaData",
@@ -280,83 +352,154 @@ object SchaleEngine {
             )
         }
 
-        val data = mangaData.data
-        val preferredResolutions = listOf("1280", "1600", "0", "980", "780")
-        val chosenQuality = preferredResolutions.firstOrNull { it in data } ?: data.keys.firstOrNull()
+        val chosenQuality = PREFERRED_RESOLUTIONS.firstOrNull { it in data } ?: data.keys.firstOrNull()
         val dataKey = chosenQuality?.let { data[it] }
-
-        if (chosenQuality != null && dataKey != null && dataKey.id != 0 && dataKey.key.isNotBlank()) {
-            val dataUrl = buildImageDataUrl(id, key, dataKey.id, dataKey.key, chosenQuality, token)
-            val imagesText = try {
-                ehRequest(dataUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
-                    header(HttpHeaders.Accept, "*/*")
-                    header("Sec-Fetch-Dest", "empty")
-                    header("Sec-Fetch-Mode", "cors")
-                    header("Sec-Fetch-Site", "cross-site")
-                }.executeSafely { resp ->
-                    val body = resp.bodyAsText()
-                    if (!resp.status.isSuccess()) {
-                        throw SchaleTechnicalException(
-                            stage = "GET books/data ($chosenQuality)",
-                            url = dataUrl,
-                            httpStatus = resp.status.value,
-                            httpDescription = resp.status.description,
-                            token = token,
-                            responseBody = body,
-                        )
-                    }
-                    body
-                }
-            } catch (e: SchaleTechnicalException) {
-                throw e
-            } catch (e: Throwable) {
-                throw SchaleTechnicalException(
-                    stage = "GET books/data ($chosenQuality) (conexión)",
-                    url = dataUrl,
-                    httpStatus = null,
-                    httpDescription = null,
-                    token = token,
-                    responseBody = null,
-                    originalCause = e,
-                )
-            }
-
-            val imagesInfo = try {
-                imagesText.parseAs<SchaleImagesInfo>()
-            } catch (e: Throwable) {
-                throw SchaleTechnicalException(
-                    stage = "Parse JSON imagesInfo",
-                    url = dataUrl,
-                    httpStatus = 200,
-                    httpDescription = "OK",
-                    token = token,
-                    responseBody = imagesText,
-                    originalCause = e,
-                )
-            }
-
-            val base = imagesInfo.base.trimEnd('/')
-            val urls = imagesInfo.entries.map { "$base/${it.path.trimStart('/')}" }
-            if (urls.isNotEmpty()) return urls
+        if (chosenQuality == null || dataKey == null || dataKey.id == 0 || dataKey.key.isBlank()) {
+            throw SchaleTechnicalException(
+                stage = "Resolución de imágenes",
+                url = detailUrl,
+                httpStatus = null,
+                httpDescription = null,
+                token = token,
+                responseBody = "Claves de calidad disponibles: ${data.keys.joinToString()}",
+            )
         }
 
-        throw SchaleTechnicalException(
-            stage = "Resolución de imágenes",
-            url = detailUrl,
-            httpStatus = null,
-            httpDescription = null,
+        val dataUrl = buildImageDataUrl(id, key, dataKey.id, dataKey.key, chosenQuality, token)
+        val imagesText = try {
+            ehRequest(dataUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
+                header(HttpHeaders.Accept, "*/*")
+            }.executeSafely { resp ->
+                val body = resp.bodyAsText()
+                if (!resp.status.isSuccess()) {
+                    throw protectedRequestError("GET books/data ($chosenQuality)", dataUrl, resp.status.value, resp.status.description, body, token)
+                }
+                body
+            }
+        } catch (e: SchaleClearanceException) {
+            throw e
+        } catch (e: SchaleTechnicalException) {
+            throw e
+        } catch (e: Throwable) {
+            throw SchaleTechnicalException(
+                stage = "GET books/data ($chosenQuality) (conexión)",
+                url = dataUrl,
+                httpStatus = null,
+                httpDescription = null,
+                token = token,
+                responseBody = null,
+                originalCause = e,
+            )
+        }
+
+        val imagesInfo = try {
+            imagesText.parseAs<SchaleImagesInfo>()
+        } catch (e: Throwable) {
+            throw SchaleTechnicalException(
+                stage = "Parse JSON imagesInfo",
+                url = dataUrl,
+                httpStatus = 200,
+                httpDescription = "OK",
+                token = token,
+                responseBody = imagesText,
+                originalCause = e,
+            )
+        }
+
+        val base = imagesInfo.base.trimEnd('/')
+        val fallbackBase = imagesInfo.fallback?.trimEnd('/')
+        val urls = imagesInfo.entries.map { firstPageUrl(base, it.path, chosenQuality) }
+        val fallbackUrls = fallbackBase
+            ?.takeIf { it.isNotBlank() }
+            ?.let { host -> imagesInfo.entries.map { firstPageUrl(host, it.path, chosenQuality) } }
+            .orEmpty()
+        if (urls.isEmpty()) {
+            throw SchaleTechnicalException(
+                stage = "Resolución de imágenes",
+                url = dataUrl,
+                httpStatus = 200,
+                httpDescription = "OK",
+                token = token,
+                responseBody = "La respuesta de books/data no contiene páginas",
+            )
+        }
+        logcat(TAG) {
+            "books/data $id/$key: ${urls.size} pages @ $chosenQuality, fallback=${fallbackUrls.isNotEmpty()} (base=$base)"
+        }
+        return SchaleImageUrls(chosenQuality, urls, fallbackUrls)
+    }
+
+    /**
+     * A 403 means the clearance token is no longer accepted: drop it so the user is asked to
+     * re-verify, and return a short actionable error. Anything else stays a technical error.
+     */
+    private fun protectedRequestError(
+        stage: String,
+        url: String,
+        status: Int,
+        description: String,
+        body: String,
+        token: String,
+    ): Throwable = if (status == 403) {
+        Settings.schaleClearanceToken.value = null
+        SchaleClearanceException(
+            "[Verificación expirada]\nEl servidor de Schale rechazó el token (HTTP 403 Forbidden).\n" +
+                "Ve a Configuración > EH > Verificación de Schale Network para re-verificar.",
+        )
+    } else {
+        SchaleTechnicalException(
+            stage = stage,
+            url = url,
+            httpStatus = status,
+            httpDescription = description,
             token = token,
-            responseBody = "Claves de calidad disponibles: ${data.keys.joinToString()}",
+            responseBody = body,
         )
     }
 
-    fun isValidClearanceToken(token: String?): Boolean = !token.isNullOrBlank() && token != "{}" && token != "null"
+    private suspend fun fetchRaw(url: String, httpMethod: HttpMethod): Pair<Int, String> =
+        ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
+            method = httpMethod
+            header(HttpHeaders.Accept, "*/*")
+        }.executeSafely { resp -> resp.status.value to resp.bodyAsText() }
+
+    /**
+     * Retries transient failures only: network errors, 429 and 5xx. 4xx answers from the API are
+     * definitive and are thrown right away.
+     */
+    private suspend fun <T> withRetries(stage: String, block: suspend () -> T): T {
+        var attempt = 0
+        while (true) {
+            try {
+                return block()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                val retryable = when (e) {
+                    is SchaleClearanceException -> false
+                    is SchaleTechnicalException -> e.httpStatus == null || e.httpStatus == 429 || e.httpStatus >= 500
+                    else -> true
+                }
+                logcat(TAG) { "$stage failed (attempt ${attempt + 1}/$MAX_ATTEMPTS): ${e.message}" }
+                if (!retryable || attempt == MAX_ATTEMPTS - 1) throw e
+                delay(750L * (attempt + 1))
+                attempt++
+            }
+        }
+    }
+
+    fun isValidClearanceToken(token: String?): Boolean {
+        val value = normalizeClearanceToken(token) ?: return false
+        return value.length in 8..128 && value.none { it.isWhitespace() }
+    }
 
     fun checkClearanceToken() {
         val token = Settings.schaleClearanceToken.value
         if (!isValidClearanceToken(token)) {
-            throw IOException(
-                "[Error de Configuración Schale]\nEl token de verificación no está configurado o es inválido.\nToken actual en Settings: '$token' (longitud: ${token?.length ?: 0})\nVe a Configuración > EH > Verificación de Schale Network.",
+            throw SchaleClearanceException(
+                "[Error de Configuración Schale]\nEl token de verificación no está configurado o es inválido.\n" +
+                    "Token actual en Settings: '$token' (longitud: ${token?.length ?: 0})\n" +
+                    "Ve a Configuración > EH > Verificación de Schale Network.",
             )
         }
     }
@@ -371,13 +514,13 @@ object SchaleEngine {
     // ---------- URL builders ----------
 
     // Public endpoint — no crt param
-    private fun buildBooksUrl(page: Int, cat: Int): String = URLBuilder(
+    private fun buildBooksUrl(page: Int, cat: Int, limit: Int = PAGE_SIZE): String = URLBuilder(
         protocol = URLProtocol.HTTPS,
         host = SCHALE_API_HOST,
         pathSegments = listOf("books"),
     ).apply {
         parameters.append("page", page.toString())
-        parameters.append("limit", PAGE_SIZE.toString())
+        parameters.append("limit", limit.toString())
         parameters.append("s", "cat:$cat")
     }.buildString()
 
