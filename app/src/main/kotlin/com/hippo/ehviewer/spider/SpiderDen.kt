@@ -167,9 +167,13 @@ class SpiderDen(val info: GalleryInfo) {
         url: String,
         referer: String?,
         notifyProgress: (Long, Long, Int) -> Unit,
+        // Schale Network matches the Origin header exactly and rejects a trailing slash with HTTP 400,
+        // so its callers pass an explicit origin instead of reusing the referer. Defaults to the
+        // referer to keep the EH/EX download path unchanged.
+        origin: String? = referer,
     ) = timeoutBySpeed(
         url,
-        { ehRequest(url, referer, origin = referer, builder = it) },
+        { ehRequest(url, referer, origin = origin, builder = it) },
         notifyProgress,
         { resp -> check(saveFromHttpResponse(index, resp)) },
     )

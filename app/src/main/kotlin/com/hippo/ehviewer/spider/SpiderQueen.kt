@@ -633,6 +633,7 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
                         pToken,
                         EhUrl.REFERER_SCHALE,
                         this@SpiderQueen::notifyPageDownload.partially1(index),
+                        origin = EhUrl.ORIGIN_SCHALE,
                     )
                     updatePageState(index, STATE_FINISHED)
                 }.onFailure { error ->
@@ -645,6 +646,7 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
                                 fallbackUrl,
                                 EhUrl.REFERER_SCHALE,
                                 this@SpiderQueen::notifyPageDownload.partially1(index),
+                                origin = EhUrl.ORIGIN_SCHALE,
                             )
                             updatePageState(index, STATE_FINISHED)
                         }.onFailure { fallbackError ->
