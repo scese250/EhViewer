@@ -330,10 +330,9 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
      * A cached Schale spider info is only trusted when it carries a complete, URL-shaped page map.
      * This prevents a stale cache (for example a single page) from pinning the reader forever.
      */
-    private fun isUsableSchaleSpiderInfo(info: SpiderInfo): Boolean =
-        info.pages > 0 &&
-            info.pTokenMap.size >= info.pages &&
-            (0 until info.pages).all { info.pTokenMap[it]?.startsWith("http") == true }
+    private fun isUsableSchaleSpiderInfo(info: SpiderInfo): Boolean = info.pages > 0 &&
+        info.pTokenMap.size >= info.pages &&
+        (0 until info.pages).all { info.pTokenMap[it]?.startsWith("http") == true }
 
     private fun readPreviews(previews: List<GalleryPreview>, index: Int, spiderInfo: SpiderInfo) {
         if (index == 0) {

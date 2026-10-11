@@ -457,11 +457,10 @@ object SchaleEngine {
         )
     }
 
-    private suspend fun fetchRaw(url: String, httpMethod: HttpMethod): Pair<Int, String> =
-        ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
-            method = httpMethod
-            header(HttpHeaders.Accept, "*/*")
-        }.executeSafely { resp -> resp.status.value to resp.bodyAsText() }
+    private suspend fun fetchRaw(url: String, httpMethod: HttpMethod): Pair<Int, String> = ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
+        method = httpMethod
+        header(HttpHeaders.Accept, "*/*")
+    }.executeSafely { resp -> resp.status.value to resp.bodyAsText() }
 
     /**
      * Retries transient failures only: network errors, 429 and 5xx. 4xx answers from the API are
