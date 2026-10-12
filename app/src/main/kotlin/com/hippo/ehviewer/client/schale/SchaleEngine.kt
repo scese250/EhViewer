@@ -380,8 +380,7 @@ object SchaleEngine {
      * @param keyword optional search in the site's own syntax (`tag:x`, `artist:x`, `-x` to exclude)
      * @param sort one of [Sort], or null for the site default (newest first)
      */
-    suspend fun getSchaleGalleryList(page: Int = 1, keyword: String? = null, sort: Int? = null): GalleryListResult =
-        fetchBooks(buildBooksUrl(page = page, keyword = keyword, sort = sort), "GET books (page=$page)")
+    suspend fun getSchaleGalleryList(page: Int = 1, keyword: String? = null, sort: Int? = null): GalleryListResult = fetchBooks(buildBooksUrl(page = page, keyword = keyword, sort = sort), "GET books (page=$page)")
 
     /**
      * Favorites of the signed-in account (same query parameters as the browse list). Needs both the
@@ -394,8 +393,7 @@ object SchaleEngine {
         return fetchBooks(buildFavoritesUrl(page = page, keyword = keyword, sort = sort, crt = crt), "GET books/favorites (page=$page)", authed = true)
     }
 
-    suspend fun searchSchale(keyword: String, page: Int = 1, sort: Int? = null): GalleryListResult =
-        fetchBooks(buildBooksUrl(page = page, keyword = keyword, sort = sort), "GET books search (page=$page)")
+    suspend fun searchSchale(keyword: String, page: Int = 1, sort: Int? = null): GalleryListResult = fetchBooks(buildBooksUrl(page = page, keyword = keyword, sort = sort), "GET books search (page=$page)")
 
     suspend fun addFavorite(gid: Long, token: String) = mutateFavorite(gid, token, add = true)
 
@@ -479,9 +477,7 @@ object SchaleEngine {
      * Requires a valid Cloudflare clearance token and throws [SchaleClearanceException] when the
      * token is missing, expired or rejected; never falls back to lower quality.
      */
-    suspend fun getSchaleImageUrls(id: Long, key: String): SchaleImageUrls {
-        return getProtectedImageUrls(id, key, requireClearanceToken())
-    }
+    suspend fun getSchaleImageUrls(id: Long, key: String): SchaleImageUrls = getProtectedImageUrls(id, key, requireClearanceToken())
 
     /**
      * Runs the same check the website uses for a stored clearance:
@@ -531,7 +527,7 @@ object SchaleEngine {
         var galleryId = 27643L
         var galleryKey = "f65c885cfa75"
         try {
-            val listText = ehRequest(buildBooksUrl(page = 1, cat = 2, limit = 1), EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE)
+            val listText = ehRequest(buildBooksUrl(page = 1, limit = 1), EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE)
                 .executeSafely { resp ->
                     checkPublicResponseStatus(resp)
                     resp.bodyAsText()
@@ -879,7 +875,7 @@ object SchaleEngine {
             }
         }
         val books = responseText.parseAs<SchaleBooks>()
-        books.favorites.forEach { (id, favorite) -> id.toLongOrNull()?.let { markFavorite(it, favorite) } }
+        books.favorites.forEach { (id, favorite) -> id.toLongOrNull()?.let { markFavorite(it, favorite > 0) } }
         if (books.errors.isNotEmpty()) {
             // The server answers a query it could not match without `entries`/`total`, so this is an
             // empty result set rather than a failure. Log which terms it rejected and how it read
