@@ -806,8 +806,9 @@ data class ClearanceMintResult(
 
     /**
      * A 403 means the server refused the request, which may be the clearance or something else. The
-     * token is only dropped when the auth server itself rejects it, so a verification that still
-     * works (the reader keeps using it) is not thrown away because one endpoint said no.
+     * auth server is asked which of the two it is, and the stored token is never dropped: a rejection
+     * here means the verification is not accepted for the connection in use (they are bound to it),
+     * so it has to be redone anyway and throwing the old one away only loses the user's state.
      */
     private suspend fun protectedRequestError(
         stage: String,
@@ -829,11 +830,13 @@ data class ClearanceMintResult(
         }
         val verified = validateClearanceToken(token)
         if (verified == 401 || verified == 403) {
-            Settings.schaleClearanceToken.value = null
             return SchaleClearanceException(
-                "[Verificación expirada]\nEl servidor de Schale rechazó el token (HTTP 403 Forbidden) y la \n" +
-                    "verificación ya no es válida (auth respondió $verified).\n" +
-                    "Ve a Configuración > EH > Verificación de Schale Network para re-verificar.",
+                "[Verificación rechazada]\nEl servidor de Schale rechazó la verificación guardada (HTTP 403) y el \n" +
+                    "servidor de verificación tampoco la acepta (auth respondió $verified).\n" +
+                    "La verificación queda atada a la conexión con la que se obtuvo, así que deja de servir \n" +
+                    "cuando cambia la red o la dirección IP (Wi-Fi, datos móviles, VPN).\n" +
+                    "Vuelve a verificar en Configuración > EH > Verificación de Schale Network desde la \n" +
+                    "misma conexión con la que vas a leer.",
             )
         }
         if (verified == 429) {
@@ -893,7 +896,9 @@ data class ClearanceMintResult(
 
     fun isValidClearanceToken(token: String?): Boolean {
         val value = normalizeClearanceToken(token) ?: return false
-        return value.length in 8..128 && value.none { it.isWhitespace() }
+        // The bound only rejects obvious rubbish (an error page, a JSON blob); the real length of a
+        // clearance is set by the server, so it is not capped tightly.
+        return value.length in 8..512 && value.none { it.isWhitespace() }
     }
 
     fun checkClearanceToken() {
@@ -920,7 +925,8 @@ data class ClearanceMintResult(
 
     private fun clearanceRequired() = SchaleClearanceException(
         "[Verificación requerida]\nSchale Network rechazó el token de verificación (HTTP 403).\n" +
-            "Ve a Configuración > EH > Verificación de Schale Network y resuelve el captcha para renovarlo.",
+            "Ve a Configuración > EH > Verificación de Schale Network y resuelve el captcha para renovarlo \n" +
+            "desde la conexión con la que vas a leer: la verificación queda atada a ella.",
     )
 
     /**
