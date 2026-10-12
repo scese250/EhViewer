@@ -35,6 +35,7 @@ import com.google.accompanist.web.rememberWebViewState
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.ktor.CHROME_MOBILE_USER_AGENT
+import com.hippo.ehviewer.ui.MainActivity
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.main.NavigationIcon
 import com.hippo.ehviewer.util.setDefaultSettings
@@ -310,6 +311,7 @@ private fun jsSeedClearance(token: String): String {
     return "(function(){try{localStorage.setItem('clearance','$safe');}catch(e){}})();"
 }
 
+context(activity: MainActivity)
 @Composable
 private fun VerificationWebView(
     paddingValues: PaddingValues,
