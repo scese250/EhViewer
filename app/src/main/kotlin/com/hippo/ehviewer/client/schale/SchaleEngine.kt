@@ -231,6 +231,23 @@ fun normalizeQuery(raw: String): String {
 }
 
 /**
+ * Outcome of exchanging a solved captcha for a clearance token.
+ *
+ * @param token the clearance when the server minted one
+ * @param httpStatus the answer of the auth server; 429 means this connection used up its allowance
+ * @param retryAfterSeconds the `Retry-After` the server sent, when it sent one
+ */
+data class ClearanceMintResult(
+    val token: String?,
+    val httpStatus: Int?,
+    val retryAfterSeconds: Int?,
+) {
+    /** The auth server limits verifications per connection, so a 429 means "try again shortly". */
+    val isRateLimited: Boolean
+        get() = httpStatus == 429
+}
+
+/**
  * Engine for Schale Network (niyaniya.moe / api.schale.network) API calls.
  */
 object SchaleEngine {
@@ -497,23 +514,6 @@ object SchaleEngine {
         logcat(TAG) { "Clearance check failed: ${e.message}" }
         null
     }
-
-/**
- * Outcome of exchanging a solved captcha for a clearance token.
- *
- * @param token the clearance when the server minted one
- * @param httpStatus the answer of the auth server; 429 means this connection used up its allowance
- * @param retryAfterSeconds the `Retry-After` the server sent, when it sent one
- */
-data class ClearanceMintResult(
-    val token: String?,
-    val httpStatus: Int?,
-    val retryAfterSeconds: Int?,
-) {
-    /** The auth server limits verifications per connection, so a 429 means "try again shortly". */
-    val isRateLimited: Boolean
-        get() = httpStatus == 429
-}
 
     /**
      * Exchanges a solved captcha for a clearance, exactly the way the site does:
