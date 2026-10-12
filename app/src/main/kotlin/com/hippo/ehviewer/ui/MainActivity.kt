@@ -122,6 +122,7 @@ import com.ehviewer.core.util.isAtLeastS
 import com.ehviewer.core.util.withIOContext
 import com.hippo.ehviewer.EhApplication.Companion.initialized
 import com.hippo.ehviewer.Settings
+import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.client.data.ListUrlBuilder
 import com.hippo.ehviewer.client.parser.GalleryDetailUrlParser
 import com.hippo.ehviewer.client.parser.GalleryPageUrlParser
@@ -180,6 +181,15 @@ private val navItems = arrayOf<Triple<Direction, Int, ImageVector>>(
     Triple(DownloadsScreenDestination, R.string.downloads, Icons.Default.Download),
     Triple(SettingsScreenDestination, R.string.settings, Icons.Default.Settings),
 )
+
+/**
+ * Schale Network has no local favorite slots: its favorites belong to the site account, so the
+ * Favorites tab opens that account's list instead of the app's own EH slots.
+ */
+private fun siteDestination(direction: Direction, schaleNetwork: Boolean): Direction {
+    val schaleFavorites = schaleNetwork && direction === FavouritesScreenDestination
+    return if (schaleFavorites) ListUrlBuilder(mode = ListUrlBuilder.MODE_SCHALE_FAVORITES).asDst() else direction
+}
 
 class MainActivity : AppCompatActivity() {
 
@@ -383,6 +393,8 @@ class MainActivity : AppCompatActivity() {
             val adaptiveInfo = currentWindowAdaptiveInfoV2()
             val needSignIn by Settings.needSignIn.collectAsState()
             val launchPage by Settings.launchPage.collectAsState()
+            val gallerySite by Settings.gallerySite.collectAsState()
+            val schaleNetwork = gallerySite == EhUrl.SITE_SCHALE
             CompositionLocalProvider(
                 LocalNavDrawerState provides navDrawerState,
                 LocalSideSheetState provides sideSheetState,
@@ -426,13 +438,14 @@ class MainActivity : AppCompatActivity() {
                                         contentScale = ContentScale.FillWidth,
                                     )
                                     navItems.forEach { (direction, stringId, icon) ->
+                                        val target = siteDestination(direction, schaleNetwork)
                                         NavigationDrawerItem(
                                             label = {
                                                 Text(text = stringResource(id = stringId))
                                             },
-                                            selected = currentDestination === direction,
+                                            selected = currentDestination == target,
                                             onClick = {
-                                                navigator.navigate(direction)
+                                                navigator.navigate(target)
                                                 closeDrawer()
                                             },
                                             modifier = Modifier.padding(horizontal = 12.dp),
@@ -468,7 +481,7 @@ class MainActivity : AppCompatActivity() {
                                 CompositionLocalProvider(LocalSharedTransitionScope provides this) {
                                     val start = when {
                                         needSignIn -> SignInScreenDestination
-                                        hasNetwork -> navItems[launchPage].first
+                                        hasNetwork -> siteDestination(navItems[launchPage].first, schaleNetwork)
                                         else -> DownloadsScreenDestination
                                     }
                                     DestinationsNavHost(

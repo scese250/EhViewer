@@ -158,6 +158,13 @@ fun AnimatedVisibilityScope.SchaleLoginScreen(navigator: DestinationsNavigator) 
             override fun onPageFinished(view: AndroidWebView, url: String?) {
                 super.onPageFinished(view, url)
                 if (url?.startsWith(EhUrl.HOST_SCHALE) == true) {
+                    // Only report loading while it is actually loading; the site answers slowly, so
+                    // the hint matters once the page is up.
+                    statusText = if (captured != null) {
+                        "Sesión detectada, guardando…"
+                    } else {
+                        "Página lista. Toca «Login»: el sitio tarda en responder, espera sin salir."
+                    }
                     view.evaluateJavascript(JS_PAGE_SHIM, null)
                 }
             }
