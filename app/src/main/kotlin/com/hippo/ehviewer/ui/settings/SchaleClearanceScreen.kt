@@ -311,8 +311,8 @@ private fun jsSeedClearance(token: String): String {
     return "(function(){try{localStorage.setItem('clearance','$safe');}catch(e){}})();"
 }
 
-context(activity: MainActivity)
 @Composable
+context(activity: MainActivity)
 private fun VerificationWebView(
     paddingValues: PaddingValues,
     existingToken: String?,
