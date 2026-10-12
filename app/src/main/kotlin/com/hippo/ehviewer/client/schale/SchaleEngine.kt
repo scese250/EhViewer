@@ -498,6 +498,70 @@ object SchaleEngine {
         null
     }
 
+/**
+ * Outcome of exchanging a solved captcha for a clearance token.
+ *
+ * @param token the clearance when the server minted one
+ * @param httpStatus the answer of the auth server; 429 means this connection used up its allowance
+ * @param retryAfterSeconds the `Retry-After` the server sent, when it sent one
+ */
+data class ClearanceMintResult(
+    val token: String?,
+    val httpStatus: Int?,
+    val retryAfterSeconds: Int?,
+) {
+    /** The auth server limits verifications per connection, so a 429 means "try again shortly". */
+    val isRateLimited: Boolean
+        get() = httpStatus == 429
+}    /**
+     * Exchanges a solved captcha for a clearance, exactly the way the site does:
+     * `POST auth.schale.network/clearance` with the captcha answer as bearer credential, which
+     * answers 201 with the token in its body.
+     *
+     * The auth server allows only a handful of verifications per connection, so the status is
+     * returned instead of thrown: the caller can wait out a 429 and try again with the same answer.
+     */
+    suspend fun mintClearance(captchaAnswer: String): ClearanceMintResult {
+        val credential = normalizeClearanceToken(captchaAnswer)
+            ?: return ClearanceMintResult(null, null, null)
+        return try {
+            var status: Int? = null
+            var retryAfter: Int? = null
+            val body = ehRequest("${EhUrl.AUTH_SCHALE}/clearance", EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
+                method = HttpMethod.Post
+                header(HttpHeaders.Authorization, "Bearer $credential")
+                header(HttpHeaders.Accept, "*/*")
+            }.executeSafely { resp ->
+                status = resp.status.value
+                retryAfter = resp.headers["Retry-After"]?.toIntOrNull()
+                resp.bodyAsText()
+            }
+            val token = clearanceFromBody(body)
+            if (status == 201 && token != null && isValidClearanceToken(token)) {
+                Settings.schaleClearanceToken.value = token
+                logcat(TAG) { "clearance minted from the captcha answer (len=${token.length})" }
+                ClearanceMintResult(token, status, retryAfter)
+            } else {
+                logcat(TAG) { "clearance mint failed (HTTP ${status ?: "sin respuesta"}): ${body.take(160)}" }
+                ClearanceMintResult(null, status, retryAfter)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            logcat(TAG) { "clearance mint failed: ${e.message}" }
+            ClearanceMintResult(null, null, null)
+        }
+    }
+
+    /** The mint endpoint answers with the token itself; a JSON wrapper around it is tolerated. */
+    private fun clearanceFromBody(body: String?): String? {
+        val text = body?.trim().orEmpty()
+        if (text.isEmpty()) return null
+        if (!text.startsWith("{")) return normalizeClearanceToken(text)
+        val wrapped = Regex("\"(?:clearance|crt|token)\"\\s*:\\s*\"([^\"]+)\"").find(text)?.groupValues?.getOrNull(1)
+        return normalizeClearanceToken(wrapped)
+    }
+
     /**
      * Full diagnostic: auth check, public list, protected detail POST and image data GET.
      * Reports the whole reader pipeline so a failure can be pinpointed in one run.
@@ -772,6 +836,18 @@ object SchaleEngine {
                     "Ve a Configuración > EH > Verificación de Schale Network para re-verificar.",
             )
         }
+        if (verified == 429) {
+            return SchaleTechnicalException(
+                stage = "$stage (límite de verificaciones alcanzado)",
+                url = url,
+                httpStatus = status,
+                httpDescription = description,
+                token = token,
+                responseBody = "El servidor de verificación responde HTTP 429: esta conexión agotó su cupo de \n" +
+                    "comprobaciones, así que no se pudo confirmar el token.\n" +
+                    "Reintenta en unos segundos; si sigue igual, cambia de red (una VPN suele servir).",
+            )
+        }
         // The auth server still accepts the token, so re-verifying would not change anything.
         return SchaleTechnicalException(
             stage = "$stage (rechazado pese a la verificación válida)",
@@ -859,6 +935,20 @@ object SchaleEngine {
         val clearance = normalizeClearanceToken(Settings.schaleClearanceToken.value)
         val verification = clearance?.let { validateClearanceToken(it) }
         if (clearance == null || verification == 401 || verification == 403) return clearanceRequired()
+        if (verification == 429) {
+            return SchaleTechnicalException(
+                stage = "$stage (límite de verificaciones alcanzado)",
+                url = url,
+                httpStatus = 403,
+                httpDescription = "Forbidden",
+                token = clearance,
+                responseBody = body.ifBlank {
+                    "El servidor de verificación responde HTTP 429: esta conexión agotó su cupo, así que no se \n" +
+                        "pudo comprobar el token. Reintenta en unos segundos; si continúa, cambia de red \n" +
+                        "(una VPN suele servir)."
+                },
+            )
+        }
         return SchaleTechnicalException(
             stage = "$stage (403 con sesión y verificación válidas)",
             url = url,
