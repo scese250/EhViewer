@@ -234,5 +234,8 @@ data class ListUrlBuilder(
         const val MODE_IMAGE_SEARCH = 0x4
         const val MODE_SUBSCRIPTION = 0x5
         const val MODE_TOPLIST = 0x6
+
+        /** Schale Network favorites of the signed-in account (keyword filters them server-side). */
+        const val MODE_SCHALE_FAVORITES = 0x7
     }
 }

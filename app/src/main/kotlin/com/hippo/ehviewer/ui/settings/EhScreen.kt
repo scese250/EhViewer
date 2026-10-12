@@ -22,6 +22,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,14 +42,17 @@ import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.asMutableState
 import com.hippo.ehviewer.client.EhTagDatabase
 import com.hippo.ehviewer.client.EhUtils
+import com.hippo.ehviewer.client.data.ListUrlBuilder
 import com.hippo.ehviewer.client.schale.SchaleEngine
 import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.destinations.FilterScreenDestination
 import com.hippo.ehviewer.ui.destinations.MyTagsScreenDestination
 import com.hippo.ehviewer.ui.destinations.SchaleClearanceScreenDestination
+import com.hippo.ehviewer.ui.destinations.SchaleLoginScreenDestination
 import com.hippo.ehviewer.ui.destinations.UConfigScreenDestination
 import com.hippo.ehviewer.ui.main.NavigationIcon
+import com.hippo.ehviewer.ui.screen.asDst
 import com.hippo.ehviewer.ui.tools.awaitConfirmationOrCancel
 import com.hippo.ehviewer.ui.tools.awaitInputText
 import com.hippo.ehviewer.ui.tools.awaitSelectItem
@@ -150,6 +154,27 @@ fun AnimatedVisibilityScope.EhScreen(navigator: DestinationsNavigator) = Screen(
                     launch {
                         testDialogText = "Ejecutando prueba contra api.schale.network...\nPor favor espera."
                         testDialogText = SchaleEngine.testToken(crt)
+                    }
+                }
+                val username by Settings.schaleUsername.collectAsState()
+                val favoriteStates by SchaleEngine.favoriteStates.collectAsState()
+                Preference(
+                    title = "Cuenta de Schale Network",
+                    summary = username?.let { "Sesión iniciada como $it. Toca para cambiar de cuenta o cerrarla." }
+                        ?: "Sin sesión: hace falta para guardar favoritos. Toca para iniciar sesión.",
+                ) { navigate(SchaleLoginScreenDestination) }
+                Preference(
+                    title = "Favoritos de Schale",
+                    summary = when {
+                        username == null -> "Necesitas iniciar sesión para ver tus favoritos de la cuenta."
+                        favoriteStates.isEmpty() -> "Los favoritos de tu cuenta de Schale Network."
+                        else -> "${favoriteStates.size} favoritos en tu cuenta de Schale Network."
+                    },
+                ) {
+                    if (username == null) {
+                        navigate(SchaleLoginScreenDestination)
+                    } else {
+                        navigate(ListUrlBuilder(mode = ListUrlBuilder.MODE_SCHALE_FAVORITES).asDst())
                     }
                 }
                 testDialogText?.let { diagnosticInfo ->

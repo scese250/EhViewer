@@ -17,6 +17,7 @@ import com.hippo.ehviewer.client.ehRequest
 import com.hippo.ehviewer.client.executeSafely
 import com.hippo.ehviewer.client.parseAs
 import com.hippo.ehviewer.client.parser.GalleryListResult
+import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.header
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
@@ -28,6 +29,11 @@ import io.ktor.http.isSuccess
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.serialization.Serializable
 
 class SchaleTechnicalException(
     val stage: String,
@@ -63,6 +69,26 @@ class SchaleTechnicalException(
 /** Thrown when the Cloudflare clearance token is missing, expired or rejected by the server. */
 class SchaleClearanceException(message: String) : IOException(message)
 
+/** Thrown when an endpoint needs a Schale Network account session that is missing or expired. */
+class SchaleAuthException(message: String) : IOException(message)
+
+/**
+ * The payload the site's own client keeps in localStorage["token"] after a successful login.
+ * `expr` is the session expiry (a millisecond epoch); `next` (ignored here) is the refresh hint.
+ */
+@Serializable
+private data class SchaleLocalSession(
+    val session: String? = null,
+    val refresh: String? = null,
+    val expr: Long = 0L,
+)
+
+/** Some auth responses wrap the payload, so unwrap it when the flat parse finds no session. */
+@Serializable
+private data class SchaleLocalSessionEnvelope(
+    val body: SchaleLocalSession? = null,
+)
+
 /** Page image URLs of a Schale gallery: chosen quality plus primary and fallback CDN variants. */
 data class SchaleImageUrls(
     val quality: String,
@@ -73,6 +99,9 @@ data class SchaleImageUrls(
 private const val TAG = "SchaleEngine"
 private const val PAGE_SIZE = 40
 private const val MAX_ATTEMPTS = 3
+
+/** Rotate the session a little before its `expr` deadline instead of waiting for the first 403. */
+private const val SESSION_REFRESH_MARGIN_MS = 10 * 60 * 1000L
 private const val SCHALE_API_HOST = "api.schale.network"
 private val PREFERRED_RESOLUTIONS = listOf("1280", "1600", "0", "980", "780")
 
@@ -84,35 +113,293 @@ private fun normalizeClearanceToken(raw: String?): String? {
 }
 
 /**
+ * Namespace prefixes the site's query language understands, taken from the live API (a term with an
+ * unknown prefix is silently re-read as a `title` search, so the set matters).
+ */
+private val SCHALE_NAMESPACES = setOf(
+    "tag", "artist", "group", "circle", "parody", "magazine", "character", "cosplayer",
+    "uploader", "male", "female", "mixed", "language", "other", "reclass", "title",
+)
+
+/**
+ * Values are matched exactly, so they must be anchored: `^value$`, quoted when they hold spaces,
+ * `` `"^big penis$"` ``. This mirrors the site's own `String.prototype.wrap` (which also
+ * lowercases; the server matches case-insensitively either way).
+ */
+private fun anchorTerm(value: String): String {
+    val term = value.trim()
+    if (term.isEmpty()) return term
+    return if (term.any { it.isWhitespace() || it == '+' }) "\"^$term$\"".lowercase() else "^$term$".lowercase()
+}
+
+/**
+ * The app's namespaces that Schale spells differently: EH's generic tags are Schale's `tag`, and
+ * EH's `circle` is Schale's `group`. `location:`/`temp:` have no counterpart, so their tags are
+ * searched as generic tags.
+ */
+private fun schaleNamespace(prefix: String): String = when (prefix) {
+    "circle" -> "group"
+    "other", "location", "temp" -> "tag"
+    else -> prefix
+}
+
+/** True when a word filters a namespace (optionally negated). */
+private fun startsNamespace(word: String): Boolean {
+    val body = word.removePrefix("-").removePrefix("+")
+    return body.indexOf(':') > 0
+}
+
+/**
+ * Splits a query into terms, keeping `"quoted phrases"` together.
+ *
+ * A namespace term absorbs the plain words that follow it: the app sends tag names unquoted
+ * (`tag:big penis`), which the API would otherwise read as two separate terms.
+ */
+private fun splitQuery(text: String): List<String> {
+    val words = ArrayList<String>()
+    val word = StringBuilder()
+    var inQuotes = false
+    for (ch in text) {
+        when {
+            ch == '"' -> {
+                inQuotes = !inQuotes
+                word.append(ch)
+            }
+            ch.isWhitespace() && !inQuotes -> {
+                if (word.isNotEmpty()) {
+                    words += word.toString()
+                    word.clear()
+                }
+            }
+            else -> word.append(ch)
+        }
+    }
+    if (word.isNotEmpty()) words += word.toString()
+
+    val terms = ArrayList<String>(words.size)
+    for (current in words) {
+        val previous = terms.lastOrNull()
+        if (previous != null && startsNamespace(previous) && !startsNamespace(current) && !current.startsWith('"')) {
+            terms[terms.lastIndex] = "$previous $current"
+        } else {
+            terms += current
+        }
+    }
+    return terms
+}
+
+/** One term of the query language: `-` excludes, `ns:value` filters a namespace, `"…"` is a title. */
+private fun normalizeTerm(raw: String): String {
+    val term = raw.trim()
+    if (term.isEmpty()) return term
+    val excluded = term.startsWith('-')
+    val body = term.removePrefix("-").removePrefix("+")
+    if (body.isEmpty()) return body
+    return if (excluded) "-${normalizeTermBody(body)}" else normalizeTermBody(body)
+}
+
+private fun normalizeTermBody(body: String): String {
+    // A quoted phrase is what the app sends for an exact-title search (the detail screen's "similar"
+    // button). The bare form is not valid for the API, so it always becomes a `title:` term.
+    if (body.length > 2 && body.startsWith('"') && body.endsWith('"')) {
+        return "title:${anchorTerm(body.substring(1, body.length - 1))}"
+    }
+    val colon = body.indexOf(':')
+    // Plain text stays as typed: the server then matches it loosely against tag names.
+    if (colon <= 0) return body
+    val prefix = body.substring(0, colon).lowercase()
+    // The app's own search box writes values pre-quoted (`uploader:"name"`), so unwrap first.
+    val value = body.substring(colon + 1).removeSurrounding("\"")
+    if (value.isBlank()) return body
+    if (prefix !in SCHALE_NAMESPACES) {
+        return "tag:${anchorTerm(value)}"
+    }
+    return "${schaleNamespace(prefix)}:${anchorTerm(value)}"
+}
+
+/**
+ * Turns what the app's UI produced (tag names, `namespace:name` pairs, quoted titles, `-excluded`
+ * terms) into the site's query syntax: `tag:big penis` becomes `tag:"^big penis$"`, which is what the
+ * site's own tag links send. Plain words are left alone, so a plain search stays loose like the
+ * site's search box.
+ */
+fun normalizeQuery(raw: String): String {
+    val text = raw.trim()
+    if (text.isEmpty()) return text
+    val terms = splitQuery(text).map(::normalizeTerm).filter { it.isNotBlank() }
+    return if (terms.isEmpty()) text else terms.joinToString(" ")
+}
+
+/**
  * Engine for Schale Network (niyaniya.moe / api.schale.network) API calls.
  */
 object SchaleEngine {
+
+    /** Sort ids accepted by `GET /books?sort=` (the values the site itself uses). */
+    object Sort {
+        const val TITLE = 2
+        const val PAGES = 3
+        const val DATE = 4
+        const val FAVORITED = 7
+        const val VIEWS = 8
+        const val FAVORITES = 9
+    }
+
+    private val _favoriteStates = MutableStateFlow<Map<Long, Boolean>>(emptyMap())
+
+    /** Gallery id -> favorited, fed by list/detail responses and by favorite mutations. */
+    val favoriteStates: StateFlow<Map<Long, Boolean>> = _favoriteStates.asStateFlow()
+
+    fun sessionToken(): String? = normalizeClearanceToken(Settings.schaleSession.value)
+
+    val isLoggedIn: Boolean get() = sessionToken() != null
+
+    /**
+     * Stores the session block the site keeps in localStorage["token"]:
+     * `{"session": "…", "refresh": "…", "expr": <unix seconds>}`.
+     *
+     * @return true when a usable session was stored.
+     */
+    fun saveSessionFromJson(raw: String?): Boolean {
+        val parsed = parseLocalSession(raw) ?: return false
+        val session = normalizeClearanceToken(parsed.session) ?: return false
+        val refresh = normalizeClearanceToken(parsed.refresh)
+        Settings.schaleSession.value = session
+        Settings.schaleSessionRefresh.value = refresh
+        // The site keeps `expr` as a millisecond epoch; older payloads used seconds.
+        Settings.schaleSessionExpiry.value = when {
+            parsed.expr <= 0L -> 0L
+            parsed.expr < 100_000_000_000L -> parsed.expr * 1000L
+            else -> parsed.expr
+        }
+        logcat(TAG) { "session stored: session=${session.length} chars, refresh=${refresh?.length ?: 0} chars, expr=${parsed.expr}" }
+        return true
+    }
+
+    /**
+     * The session token inside the site's localStorage payload, or null when there is none.
+     * Lets the login screen tell a session it already holds apart from a new one.
+     */
+    fun parseSessionToken(raw: String?): String? = parseLocalSession(raw)?.let { normalizeClearanceToken(it.session) }
+
+    private fun parseLocalSession(raw: String?): SchaleLocalSession? {
+        val text = raw?.trim().orEmpty()
+        if (text.isEmpty()) return null
+        return runCatching { text.parseAs<SchaleLocalSession>() }.getOrNull()
+            ?: runCatching { text.parseAs<SchaleLocalSessionEnvelope>().body }.getOrNull()
+    }
+
+    fun clearSession() {
+        Settings.schaleSession.value = null
+        Settings.schaleSessionRefresh.value = null
+        Settings.schaleSessionExpiry.value = 0L
+        Settings.schaleUsername.value = null
+        _favoriteStates.value = emptyMap()
+    }
+
+    /**
+     * Account summary from `POST auth.schale.network/check`: username, role and the account's full
+     * favorites map. The map is authoritative, so it replaces [favoriteStates] wholesale.
+     *
+     * @return the account, or null when there is no session or the server rejected it.
+     */
+    suspend fun fetchAccount(): SchaleAccount? {
+        val session = sessionToken() ?: return null
+        return try {
+            val (status, body) = fetchRaw("${EhUrl.AUTH_SCHALE}/check", HttpMethod.Post, bearer = session)
+            if (status != 200) {
+                logcat(TAG) { "account check rejected (HTTP $status)" }
+                null
+            } else {
+                val account = body.parseAs<SchaleAccount>()
+                Settings.schaleUsername.value = account.username.takeIf { it.isNotEmpty() }
+                _favoriteStates.value = account.favorites.mapNotNull { (id, value) ->
+                    id.toLongOrNull()?.let { it to (value > 0) }
+                }.toMap()
+                logcat(TAG) { "account: '${account.username}' role=${account.role} favorites=${account.favorites.size}" }
+                account.takeIf { it.isValid }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            logcat(TAG) { "account check failed: ${e.message}" }
+            null
+        }
+    }
+
+    /**
+     * Signs out the way the site does: `POST auth.schale.network/logout?crt=…` with the refresh
+     * token as Bearer credential (204 means done). The local session is dropped either way.
+     */
+    suspend fun logout() {
+        val refresh = normalizeClearanceToken(Settings.schaleSessionRefresh.value)
+        val crt = normalizeClearanceToken(Settings.schaleClearanceToken.value)
+        if (refresh != null) {
+            val url = "${EhUrl.AUTH_SCHALE}/logout" + (crt?.let { "?crt=$it" } ?: "")
+            try {
+                val (status, _) = fetchRaw(url, HttpMethod.Post, bearer = refresh)
+                logcat(TAG) { "logout answered HTTP $status" }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                logcat(TAG) { "logout failed: ${e.message}" }
+            }
+        }
+        clearSession()
+    }
+
+    /**
+     * Rotates the session with the refresh token the site stores
+     * (`POST auth.schale.network/refresh`, which answers 201 with a fresh session block).
+     *
+     * @return true when a new session was stored.
+     */
+    suspend fun refreshSession(): Boolean {
+        val refresh = normalizeClearanceToken(Settings.schaleSessionRefresh.value) ?: return false
+        return try {
+            val (status, body) = fetchRaw("${EhUrl.AUTH_SCHALE}/refresh", HttpMethod.Post, bearer = refresh)
+            if (status in 200..299 && saveSessionFromJson(body)) {
+                logcat(TAG) { "session refreshed (HTTP $status)" }
+                true
+            } else {
+                logcat(TAG) { "session refresh rejected (HTTP $status)" }
+                false
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            logcat(TAG) { "session refresh failed: ${e.message}" }
+            false
+        }
+    }
 
     /**
      * Fetch the manga list from Schale Network.
      *
      * @param page 1-indexed page number
-     * @param cat  Category id (2 = manga is the default browse view)
+     * @param keyword optional search in the site's own syntax (`tag:x`, `artist:x`, `-x` to exclude)
+     * @param sort one of [Sort], or null for the site default (newest first)
      */
-    suspend fun getSchaleGalleryList(page: Int = 1, cat: Int = 2): GalleryListResult {
-        // Public endpoint — no crt token required
-        val url = buildBooksUrl(page = page, cat = cat)
-        val responseText = withRetries("GET books list (page=$page)") {
-            ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE)
-                .executeSafely { resp ->
-                    checkPublicResponseStatus(resp)
-                    resp.bodyAsText()
-                }
-        }
-        val books = responseText.parseAs<SchaleBooks>()
-        val galleryInfoList = books.entries.map { it.toBaseGalleryInfo() }
-        val limit = books.limit.takeIf { it > 0 } ?: books.entries.size
-        val hasMore = limit > 0 && books.page * limit < books.total
-        val nextPage = if (hasMore) (books.page + 1).toString() else null
-        val prevPage = if (books.page > 1) (books.page - 1).toString() else null
-        logcat(TAG) { "books page=${books.page} limit=$limit total=${books.total} entries=${books.entries.size} next=$nextPage" }
-        return GalleryListResult(prevPage, nextPage, ArrayList(galleryInfoList))
+    suspend fun getSchaleGalleryList(page: Int = 1, keyword: String? = null, sort: Int? = null): GalleryListResult =
+        fetchBooks(buildBooksUrl(page = page, keyword = keyword, sort = sort), "GET books (page=$page)")
+
+    /**
+     * Favorites of the signed-in account (same query parameters as the browse list). Needs both the
+     * account session and a valid clearance token, because the endpoint is grouped with the
+     * protected ones; the session is reported first so the user is pointed at the right setting.
+     */
+    suspend fun getSchaleFavorites(page: Int = 1, keyword: String? = null, sort: Int? = null): GalleryListResult {
+        requireSessionToken()
+        val crt = requireClearanceToken()
+        return fetchBooks(buildFavoritesUrl(page = page, keyword = keyword, sort = sort, crt = crt), "GET books/favorites (page=$page)", authed = true)
     }
+
+    suspend fun searchSchale(keyword: String, page: Int = 1, sort: Int? = null): GalleryListResult =
+        fetchBooks(buildBooksUrl(page = page, keyword = keyword, sort = sort), "GET books search (page=$page)")
+
+    suspend fun addFavorite(gid: Long, token: String) = mutateFavorite(gid, token, add = true)
+
+    suspend fun removeFavorite(gid: Long, token: String) = mutateFavorite(gid, token, add = false)
 
     /**
      * Fetch detail and previews for a single Schale gallery entry.
@@ -120,11 +407,13 @@ object SchaleEngine {
     suspend fun getSchaleGalleryDetail(id: Long, key: String): GalleryDetail {
         // Public endpoint — no crt token required
         val url = buildDetailUrl(id, key)
-        val responseText = ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE)
-            .executeSafely { resp ->
-                checkPublicResponseStatus(resp)
-                resp.bodyAsText()
-            }
+        // The session is optional here: it only adds the "favorites" flag for the signed-in account.
+        val responseText = ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
+            applySessionAuth()
+        }.executeSafely { resp ->
+            checkPublicResponseStatus(resp)
+            resp.bodyAsText()
+        }
         val detail = responseText.parseAs<SchaleMangaDetail>()
 
         val thumbnails = detail.thumbnails
@@ -141,13 +430,20 @@ object SchaleEngine {
         }.orEmpty()
 
         val tagGroups: List<GalleryTagGroup> = detail.tags.groupBy { it.namespace }.map { (nsId, tags) ->
+            // Namespaces as published by the site: 0 Tag, 1 Artist, 2 Circle, 3 Parody, 4 Magazine,
+            // 5 Character, 6 Cosplayer, 7 Uploader, 8 Male, 9 Female, 10 Mixed, 11 Language,
+            // 12 Other, 13 Reclass. Only the ones without an EH counterpart fall back to Other.
             val ns = when (nsId) {
                 1 -> TagNamespace.Artist
                 2 -> TagNamespace.Group
                 3 -> TagNamespace.Parody
+                5 -> TagNamespace.Character
+                6 -> TagNamespace.Cosplayer
                 8 -> TagNamespace.Male
                 9 -> TagNamespace.Female
                 10 -> TagNamespace.Mixed
+                11 -> TagNamespace.Language
+                13 -> TagNamespace.Reclass
                 else -> TagNamespace.Other
             }
             GalleryTagGroup(
@@ -168,6 +464,8 @@ object SchaleEngine {
             posted = "",
         )
 
+        // Only a signed-in request reports the flag; "absent" must not clear a known favorite.
+        detail.favorites?.let { markFavorite(id, it) }
         return GalleryDetail(
             galleryInfo = baseInfo,
             tagGroups = tagGroups,
@@ -182,14 +480,7 @@ object SchaleEngine {
      * token is missing, expired or rejected; never falls back to lower quality.
      */
     suspend fun getSchaleImageUrls(id: Long, key: String): SchaleImageUrls {
-        val token = normalizeClearanceToken(Settings.schaleClearanceToken.value)
-        if (token == null || !isValidClearanceToken(token)) {
-            throw SchaleClearanceException(
-                "[Verificación requerida]\nEl token de Schale Network no está configurado o no es válido.\n" +
-                    "Ve a Configuración > EH > Verificación de Schale Network para resolver el captcha.",
-            )
-        }
-        return getProtectedImageUrls(id, key, token)
+        return getProtectedImageUrls(id, key, requireClearanceToken())
     }
 
     /**
@@ -315,6 +606,7 @@ object SchaleEngine {
             ehRequest(detailUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
                 method = HttpMethod.Post
                 header(HttpHeaders.Accept, "*/*")
+                applySessionAuth()
             }.executeSafely { resp ->
                 val body = resp.bodyAsText()
                 if (!resp.status.isSuccess()) {
@@ -369,6 +661,7 @@ object SchaleEngine {
         val imagesText = try {
             ehRequest(dataUrl, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
                 header(HttpHeaders.Accept, "*/*")
+                applySessionAuth()
             }.executeSafely { resp ->
                 val body = resp.bodyAsText()
                 if (!resp.status.isSuccess()) {
@@ -457,9 +750,10 @@ object SchaleEngine {
         )
     }
 
-    private suspend fun fetchRaw(url: String, httpMethod: HttpMethod): Pair<Int, String> = ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
+    private suspend fun fetchRaw(url: String, httpMethod: HttpMethod, bearer: String? = null): Pair<Int, String> = ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
         method = httpMethod
         header(HttpHeaders.Accept, "*/*")
+        bearer?.let { header(HttpHeaders.Authorization, "Bearer $it") }
     }.executeSafely { resp -> resp.status.value to resp.bodyAsText() }
 
     /**
@@ -476,6 +770,7 @@ object SchaleEngine {
             } catch (e: Throwable) {
                 val retryable = when (e) {
                     is SchaleClearanceException -> false
+                    is SchaleAuthException -> false
                     is SchaleTechnicalException -> e.httpStatus == null || e.httpStatus == 429 || e.httpStatus >= 500
                     else -> true
                 }
@@ -503,6 +798,154 @@ object SchaleEngine {
         }
     }
 
+    // ---------- Shared request plumbing ----------
+
+    private fun markFavorite(gid: Long, favorite: Boolean) {
+        _favoriteStates.update { it + (gid to favorite) }
+    }
+
+    private fun sessionRequired() = SchaleAuthException(
+        "[Cuenta requerida]\nSchale Network rechazó la sesión.\n" +
+            "Inicia sesión en Configuración > EH > Cuenta de Schale Network para usar los favoritos.",
+    )
+
+    private fun clearanceRequired() = SchaleClearanceException(
+        "[Verificación requerida]\nSchale Network rechazó el token de verificación (HTTP 403).\n" +
+            "Ve a Configuración > EH > Verificación de Schale Network y resuelve el captcha para renovarlo.",
+    )
+
+    /**
+     * A 403 leaves it open whether the account session or the clearance token died. The account
+     * check answers that (200 = the session is fine, so the clearance is the dead one), and the
+     * message the user gets then points at the right settings entry.
+     */
+    private suspend fun forbiddenReason(): IOException = if (probeSessionValid()) clearanceRequired() else sessionRequired()
+
+    private suspend fun probeSessionValid(): Boolean {
+        val session = sessionToken() ?: return false
+        return try {
+            val (status, _) = fetchRaw("${EhUrl.AUTH_SCHALE}/check", HttpMethod.Post, bearer = session)
+            status == 200
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            logcat(TAG) { "session probe failed: ${e.message}" }
+            false
+        }
+    }
+
+    /**
+     * The account session, rotated through the site's refresh token when `expr` says it is about to
+     * expire. Reads/writes go through DataStore, so the rotated token is visible to every caller.
+     */
+    private suspend fun requireSessionToken(): String {
+        val session = sessionToken() ?: throw sessionRequired()
+        val expiry = Settings.schaleSessionExpiry.value
+        if (expiry > 0L && System.currentTimeMillis() >= expiry - SESSION_REFRESH_MARGIN_MS) {
+            logcat(TAG) { "session is near expiry (${(expiry - System.currentTimeMillis()) / 1000}s), refreshing" }
+            refreshSession()
+        }
+        return sessionToken() ?: session
+    }
+
+    private fun requireClearanceToken(): String {
+        val token = normalizeClearanceToken(Settings.schaleClearanceToken.value)
+        if (token == null || !isValidClearanceToken(token)) {
+            throw SchaleClearanceException(
+                "[Verificación requerida]\nEl token de Schale Network no está configurado o no es válido.\n" +
+                    "Ve a Configuración > EH > Verificación de Schale Network para resolver el captcha.",
+            )
+        }
+        return token
+    }
+
+    private fun HttpRequestBuilder.applySessionAuth() {
+        sessionToken()?.let { header(HttpHeaders.Authorization, "Bearer $it") }
+    }
+
+    /** Page of a `/books…` listing endpoint (browse, search or favorites). */
+    private suspend fun fetchBooks(url: String, stage: String, authed: Boolean = false): GalleryListResult {
+        val session = if (authed) requireSessionToken() else null
+        val responseText = withRetries(stage) {
+            ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
+                session?.let { header(HttpHeaders.Authorization, "Bearer $it") }
+            }.executeSafely { resp ->
+                val body = resp.bodyAsText()
+                // A 403 on an account endpoint is either a dead session or a dead clearance;
+                // retrying cannot help, so translate it into the actionable exception right away.
+                if (authed && resp.status.value == 403) throw forbiddenReason()
+                checkPublicResponseStatus(resp)
+                body
+            }
+        }
+        val books = responseText.parseAs<SchaleBooks>()
+        books.favorites.forEach { (id, favorite) -> id.toLongOrNull()?.let { markFavorite(it, favorite) } }
+        if (books.errors.isNotEmpty()) {
+            // The server answers a query it could not match without `entries`/`total`, so this is an
+            // empty result set rather than a failure. Log which terms it rejected and how it read
+            // the query (`namespace` shows what a mistyped prefix was parsed as).
+            val parsed = books.matches.joinToString { "${it.namespace}:${it.query}" }
+            logcat(TAG) { "$stage -> no match for ${books.errors} (parsed as $parsed)" }
+        }
+        val galleryInfoList = books.entries.map { it.toBaseGalleryInfo() }
+        val limit = books.limit.takeIf { it > 0 } ?: books.entries.size
+        val hasMore = limit > 0 && books.page * limit < books.total
+        val nextPage = if (hasMore) (books.page + 1).toString() else null
+        val prevPage = if (books.page > 1) (books.page - 1).toString() else null
+        logcat(TAG) { "$stage -> page=${books.page} limit=$limit total=${books.total} entries=${books.entries.size} next=$nextPage" }
+        return GalleryListResult(prevPage, nextPage, ArrayList(galleryInfoList))
+    }
+
+    private suspend fun mutateFavorite(gid: Long, token: String, add: Boolean) {
+        requireSessionToken()
+        val crt = requireClearanceToken()
+        val stage = if (add) "POST books/favorites" else "DELETE books/favorites"
+        val url = URLBuilder(
+            protocol = URLProtocol.HTTPS,
+            host = SCHALE_API_HOST,
+            pathSegments = listOf("books", "favorites", gid.toString(), token),
+        ).apply {
+            parameters.append("crt", crt)
+        }.buildString()
+        try {
+            ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
+                method = if (add) HttpMethod.Post else HttpMethod.Delete
+                applySessionAuth()
+            }.executeSafely { resp ->
+                val body = resp.bodyAsText()
+                if (resp.status.value == 403) throw forbiddenReason()
+                if (!resp.status.isSuccess()) {
+                    throw SchaleTechnicalException(
+                        stage = stage,
+                        url = url,
+                        httpStatus = resp.status.value,
+                        httpDescription = resp.status.description,
+                        token = crt,
+                        responseBody = body,
+                    )
+                }
+            }
+        } catch (e: SchaleAuthException) {
+            throw e
+        } catch (e: SchaleTechnicalException) {
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            throw SchaleTechnicalException(
+                stage = "$stage (conexión)",
+                url = url,
+                httpStatus = null,
+                httpDescription = null,
+                token = crt,
+                responseBody = null,
+                originalCause = e,
+            )
+        }
+        markFavorite(gid, add)
+        logcat(TAG) { "${if (add) "favorited" else "unfavorited"} $gid/$token" }
+    }
+
     /** For public endpoints: any non-2xx is a generic IO error. */
     private fun checkPublicResponseStatus(resp: HttpResponse) {
         if (!resp.status.isSuccess()) {
@@ -512,15 +955,29 @@ object SchaleEngine {
 
     // ---------- URL builders ----------
 
-    // Public endpoint — no crt param
-    private fun buildBooksUrl(page: Int, cat: Int, limit: Int = PAGE_SIZE): String = URLBuilder(
+    // Public listing endpoint — no crt param
+    private fun buildBooksUrl(page: Int, keyword: String? = null, sort: Int? = null, limit: Int = PAGE_SIZE): String = URLBuilder(
         protocol = URLProtocol.HTTPS,
         host = SCHALE_API_HOST,
         pathSegments = listOf("books"),
     ).apply {
         parameters.append("page", page.toString())
         parameters.append("limit", limit.toString())
-        parameters.append("s", "cat:$cat")
+        keyword?.takeIf { it.isNotBlank() }?.let { parameters.append("s", normalizeQuery(it)) }
+        sort?.let { parameters.append("sort", it.toString()) }
+    }.buildString()
+
+    // Account endpoint — crt plus the session bearer token. Mirrors the site's own URL, which never
+    // sends `limit` here (the API answers with its default page size).
+    private fun buildFavoritesUrl(page: Int, keyword: String?, sort: Int?, crt: String): String = URLBuilder(
+        protocol = URLProtocol.HTTPS,
+        host = SCHALE_API_HOST,
+        pathSegments = listOf("books", "favorites"),
+    ).apply {
+        parameters.append("page", page.toString())
+        keyword?.takeIf { it.isNotBlank() }?.let { parameters.append("s", normalizeQuery(it)) }
+        sort?.let { parameters.append("sort", it.toString()) }
+        parameters.append("crt", crt)
     }.buildString()
 
     // Public endpoint (GET) — no crt param

@@ -95,6 +95,7 @@ import com.hippo.ehviewer.client.EhUtils
 import com.hippo.ehviewer.client.data.ListUrlBuilder
 import com.hippo.ehviewer.client.data.ListUrlBuilder.Companion.MODE_IMAGE_SEARCH
 import com.hippo.ehviewer.client.data.ListUrlBuilder.Companion.MODE_NORMAL
+import com.hippo.ehviewer.client.data.ListUrlBuilder.Companion.MODE_SCHALE_FAVORITES
 import com.hippo.ehviewer.client.data.ListUrlBuilder.Companion.MODE_SUBSCRIPTION
 import com.hippo.ehviewer.client.data.ListUrlBuilder.Companion.MODE_TAG
 import com.hippo.ehviewer.client.data.ListUrlBuilder.Companion.MODE_TOPLIST
@@ -450,7 +451,7 @@ fun AnimatedVisibilityScope.GalleryListScreen(
         val builder = ListUrlBuilder()
         val oldMode = urlBuilder.mode
         // If it's MODE_SUBSCRIPTION, keep it
-        val newMode = if (oldMode == MODE_SUBSCRIPTION) MODE_SUBSCRIPTION else MODE_NORMAL
+        val newMode = if (oldMode == MODE_SUBSCRIPTION || oldMode == MODE_SCHALE_FAVORITES) oldMode else MODE_NORMAL
         builder.mode = newMode
         builder.keyword = query
         builder.category = category
@@ -654,6 +655,8 @@ private fun getSuitableTitleForUrlBuilder(urlBuilder: ListUrlBuilder, appName: B
         when (mode) {
             MODE_NORMAL -> if (appName) appNameStr else homepageStr
             MODE_SUBSCRIPTION -> stringResource(R.string.subscription)
+            // The account's favorites, not the app's local EH favorites.
+            MODE_SCHALE_FAVORITES -> stringResource(R.string.favourite)
             else -> null
         }
     } else if (category.countOneBits() == 1) {

@@ -112,6 +112,7 @@ import com.hippo.ehviewer.client.EhUtils
 import com.hippo.ehviewer.client.data.ListUrlBuilder
 import com.hippo.ehviewer.client.exception.EhException
 import com.hippo.ehviewer.client.exception.NoHathClientException
+import com.hippo.ehviewer.client.schale.SchaleEngine
 import com.hippo.ehviewer.coil.PrefetchAround
 import com.hippo.ehviewer.coil.justDownload
 import com.hippo.ehviewer.collectAsState
@@ -479,45 +480,87 @@ fun BelowHeader(galleryDetail: GalleryDetail, voteTag: VoteTag) {
         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
     ) {
-        val favSlot by FavouriteStatusRouter.collectAsState(galleryDetail) { it }
-        val favButtonText = if (favSlot != NOT_FAVORITED) {
-            galleryDetail.favoriteName ?: stringResource(id = R.string.local_favorites)
-        } else {
-            stringResource(id = R.string.not_favorited)
-        }
-        val favoritesLock = remember { MutatorMutex() }
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        if (EhUtils.isSchaleNetwork) {
+            // Schale favorites belong to the signed-in site account, not to the local EH slots.
+            val favoriteStates by SchaleEngine.favoriteStates.collectAsState()
+            val favorited = favoriteStates[galleryDetail.gid] == true
+            val favoritesLock = remember { MutatorMutex() }
             val removeSucceed = stringResource(R.string.remove_from_favorite_success)
             val addSucceed = stringResource(R.string.add_to_favorite_success)
-            // val removeFailed = stringResource(R.string.remove_from_favorite_failure)
             val addFailed = stringResource(R.string.add_to_favorite_failure)
-            FilledTertiaryIconToggleButton(
-                checked = favSlot != NOT_FAVORITED,
-                onCheckedChange = {
-                    launchIO {
-                        favoritesLock.mutate {
-                            runSuspendCatching {
-                                modifyFavorites(galleryDetail)
-                            }.onSuccess { add ->
-                                if (add) {
-                                    snackbar(addSucceed)
-                                } else {
-                                    snackbar(removeSucceed)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                FilledTertiaryIconToggleButton(
+                    checked = favorited,
+                    onCheckedChange = { wanted ->
+                        launchIO {
+                            favoritesLock.mutate {
+                                runSuspendCatching {
+                                    // Both calls need the account session and the clearance token; the
+                                    // engine reports which one is missing.
+                                    if (wanted) {
+                                        SchaleEngine.addFavorite(galleryDetail.gid, galleryDetail.token)
+                                    } else {
+                                        SchaleEngine.removeFavorite(galleryDetail.gid, galleryDetail.token)
+                                    }
+                                    wanted
+                                }.onSuccess { added ->
+                                    snackbar(if (added) addSucceed else removeSucceed)
+                                }.onFailure { e ->
+                                    snackbar("$addFailed: ${e.displayString()}")
                                 }
-                            }.onFailure {
-                                // TODO: We don't know if it's add or remove
-                                snackbar(addFailed)
                             }
                         }
-                    }
-                },
-            ) {
-                Icon(
-                    imageVector = getFavoriteIcon(favSlot != NOT_FAVORITED),
-                    contentDescription = null,
-                )
+                    },
+                ) {
+                    Icon(
+                        imageVector = getFavoriteIcon(favorited),
+                        contentDescription = null,
+                    )
+                }
+                // The local EH slots have no meaning here, so the label is the account's own state.
+                Text(text = if (favorited) stringResource(id = R.string.favourite) else stringResource(id = R.string.not_favorited))
             }
-            Text(text = favButtonText)
+        } else {
+            val favSlot by FavouriteStatusRouter.collectAsState(galleryDetail) { it }
+            val favButtonText = if (favSlot != NOT_FAVORITED) {
+                galleryDetail.favoriteName ?: stringResource(id = R.string.local_favorites)
+            } else {
+                stringResource(id = R.string.not_favorited)
+            }
+            val favoritesLock = remember { MutatorMutex() }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                val removeSucceed = stringResource(R.string.remove_from_favorite_success)
+                val addSucceed = stringResource(R.string.add_to_favorite_success)
+                // val removeFailed = stringResource(R.string.remove_from_favorite_failure)
+                val addFailed = stringResource(R.string.add_to_favorite_failure)
+                FilledTertiaryIconToggleButton(
+                    checked = favSlot != NOT_FAVORITED,
+                    onCheckedChange = {
+                        launchIO {
+                            favoritesLock.mutate {
+                                runSuspendCatching {
+                                    modifyFavorites(galleryDetail)
+                                }.onSuccess { add ->
+                                    if (add) {
+                                        snackbar(addSucceed)
+                                    } else {
+                                        snackbar(removeSucceed)
+                                    }
+                                }.onFailure {
+                                    // TODO: We don't know if it's add or remove
+                                    snackbar(addFailed)
+                                }
+                            }
+                        }
+                    },
+                ) {
+                    Icon(
+                        imageVector = getFavoriteIcon(favSlot != NOT_FAVORITED),
+                        contentDescription = null,
+                    )
+                }
+                Text(text = favButtonText)
+            }
         }
         EhIconButton(
             icon = Icons.Default.Search,

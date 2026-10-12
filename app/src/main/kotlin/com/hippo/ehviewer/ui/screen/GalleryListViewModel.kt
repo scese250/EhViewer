@@ -18,6 +18,7 @@ import com.hippo.ehviewer.client.EhEngine
 import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.client.data.ListUrlBuilder
 import com.hippo.ehviewer.client.data.ListUrlBuilder.Companion.MODE_TOPLIST
+import com.hippo.ehviewer.client.schale.SchaleAuthException
 import com.hippo.ehviewer.client.schale.SchaleEngine
 import com.hippo.ehviewer.ui.tools.foldToLoadResult
 import kotlinx.coroutines.sync.Mutex
@@ -39,8 +40,29 @@ class GalleryListViewModel(lub: ListUrlBuilder, savedStateHandle: SavedStateHand
                 // Route to Schale Network if the current gallery site is SITE_SCHALE
                 if (Settings.gallerySite.value == EhUrl.SITE_SCHALE) {
                     val page = params.key?.toIntOrNull() ?: 1
+                    val builder = urlBuilder.value
+                    // The same box drives browse, search and the account's favorites for Schale. The
+                    // uploader mode carries a bare name, so give it the namespace Schale expects.
+                    val keyword = builder.keyword?.takeIf { it.isNotBlank() }
+                        ?.let { if (builder.mode == ListUrlBuilder.MODE_UPLOADER) "uploader:\"$it\"" else it }
                     return@withIOContext runSuspendCatching {
-                        SchaleEngine.getSchaleGalleryList(page = page)
+                        when {
+                            builder.mode == ListUrlBuilder.MODE_SCHALE_FAVORITES -> {
+                                // Favorites live on the account, so ask the user to sign in first instead
+                                // of failing later inside the request with a confusing server error.
+                                if (!SchaleEngine.isLoggedIn) {
+                                    throw SchaleAuthException(
+                                        "[Cuenta requerida]\nLos favoritos son de tu cuenta de Schale Network.\n" +
+                                            "Inicia sesión en Configuración > EH > Cuenta de Schale Network.",
+                                    )
+                                }
+                                // Keeps the favorite buttons of this list in step with the account.
+                                SchaleEngine.fetchAccount()
+                                SchaleEngine.getSchaleFavorites(page = page, keyword = keyword)
+                            }
+                            keyword != null -> SchaleEngine.searchSchale(keyword = keyword, page = page)
+                            else -> SchaleEngine.getSchaleGalleryList(page = page)
+                        }
                     }.foldToLoadResult { result ->
                         LoadResult.Page(result.galleryInfoList, result.prev, result.next)
                     }

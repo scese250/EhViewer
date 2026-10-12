@@ -9,8 +9,28 @@ import kotlinx.serialization.Serializable
 data class SchaleBooks(
     val entries: List<SchaleEntry> = emptyList(),
     val total: Int = 0,
-    val limit: Int = 25,
+    // Absent on the favorites endpoint, so keep 0 as "derive it from the page size".
+    val limit: Int = 0,
     val page: Int = 1,
+    // Account state of each listed gallery, only sent to signed-in requests.
+    val favorites: Map<String, Int> = emptyMap(),
+    /**
+     * A query the server could not match at all is answered without `entries`/`total`:
+     * `{"errors": {"none": ["tag:nosuchtag"]}, "matches": […]}`.
+     */
+    val errors: Map<String, List<String>> = emptyMap(),
+    val matches: List<SchaleQueryMatch> = emptyList(),
+)
+
+/**
+ * A parsed fragment of the `s=` query language, echoed back by the server. Kept for diagnostics:
+ * it shows which namespace the server matched a term against (`title` for anything it did not
+ * recognize).
+ */
+@Serializable
+data class SchaleQueryMatch(
+    val query: String = "",
+    val namespace: String = "",
 )
 
 @Serializable
@@ -47,6 +67,8 @@ data class SchaleMangaDetail(
     val updated_at: Long? = null,
     val thumbnails: SchaleThumbnails? = null,
     val tags: List<SchaleTag> = emptyList(),
+    // Only sent for signed-in requests; null means "the server did not say", so keep the known state.
+    val favorites: Boolean? = null,
 )
 
 @Serializable
@@ -61,6 +83,20 @@ data class SchaleTag(
     val name: String,
     val namespace: Int = 0,
 )
+
+/**
+ * Response from POST https://auth.schale.network/check (Bearer = account session):
+ * `{"favorites": {"<gid>": 1, …}, "role": 1, "username": "…"}`.
+ */
+@Serializable
+data class SchaleAccount(
+    val favorites: Map<String, Int> = emptyMap(),
+    val role: Int = 0,
+    val username: String = "",
+) {
+    /** The site treats an account as usable when it has a name and a role. */
+    val isValid: Boolean get() = username.isNotEmpty() && role > 0
+}
 
 /**
  * Response from POST /books/detail/{id}/{key}

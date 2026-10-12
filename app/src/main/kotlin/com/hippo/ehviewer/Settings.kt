@@ -73,6 +73,12 @@ object Settings : DataStorePreferences(null) {
     val gallerySite = intPref("gallery_site_2", 0).observed(::updateWhenGallerySiteChanges)
     val defaultFavSlot = intPref("default_favorite_slot", -2)
     val schaleClearanceToken = stringOrNullPref("schale_crt")
+
+    // Schale Network account session, captured from the site's own localStorage after an in-app login.
+    val schaleSession = stringOrNullPref("schale_session")
+    val schaleSessionRefresh = stringOrNullPref("schale_refresh")
+    val schaleSessionExpiry = longPref("schale_session_expr", 0L)
+    val schaleUsername = stringOrNullPref("schale_username")
     val theme = intPref("theme_2", -1).observed(::updateWhenThemeChanges)
     val blackDarkTheme = boolPref("black_dark_theme", false)
     val harmonizeCategoryColor = boolPref("harmonize_category_color", true)
