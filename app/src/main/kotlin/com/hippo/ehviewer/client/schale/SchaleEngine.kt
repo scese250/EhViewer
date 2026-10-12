@@ -387,17 +387,17 @@ object SchaleEngine {
      * account session and a valid clearance token, because the endpoint is grouped with the
      * protected ones; the session is reported first so the user is pointed at the right setting.
      */
-    suspend fun getSchaleFavorites(page: Int = 1, keyword: String? = null, sort: Int? = null): GalleryListResult {
+    suspend fun getSchaleFavorites(page: Int = 1, keyword: String? = null, sort: Int? = null): GalleryListResult = withClearanceRecovery {
         requireSessionToken()
         val crt = requireClearanceToken()
-        return fetchBooks(buildFavoritesUrl(page = page, keyword = keyword, sort = sort, crt = crt), "GET books/favorites (page=$page)", authed = true)
+        fetchBooks(buildFavoritesUrl(page = page, keyword = keyword, sort = sort, crt = crt), "GET books/favorites (page=$page)", authed = true)
     }
 
     suspend fun searchSchale(keyword: String, page: Int = 1, sort: Int? = null): GalleryListResult = fetchBooks(buildBooksUrl(page = page, keyword = keyword, sort = sort), "GET books search (page=$page)")
 
-    suspend fun addFavorite(gid: Long, token: String) = mutateFavorite(gid, token, add = true)
+    suspend fun addFavorite(gid: Long, token: String) = withClearanceRecovery { mutateFavorite(gid, token, add = true) }
 
-    suspend fun removeFavorite(gid: Long, token: String) = mutateFavorite(gid, token, add = false)
+    suspend fun removeFavorite(gid: Long, token: String) = withClearanceRecovery { mutateFavorite(gid, token, add = false) }
 
     /**
      * Fetch detail and previews for a single Schale gallery entry.
@@ -477,7 +477,9 @@ object SchaleEngine {
      * Requires a valid Cloudflare clearance token and throws [SchaleClearanceException] when the
      * token is missing, expired or rejected; never falls back to lower quality.
      */
-    suspend fun getSchaleImageUrls(id: Long, key: String): SchaleImageUrls = getProtectedImageUrls(id, key, requireClearanceToken())
+    suspend fun getSchaleImageUrls(id: Long, key: String): SchaleImageUrls = withClearanceRecovery {
+        getProtectedImageUrls(id, key, requireClearanceToken())
+    }
 
     /**
      * Runs the same check the website uses for a stored clearance:
@@ -496,6 +498,84 @@ object SchaleEngine {
     } catch (e: Throwable) {
         logcat(TAG) { "Clearance check failed: ${e.message}" }
         null
+    }
+
+    /**
+     * Installed by the app so a verification the user completed on the site can be adopted when the
+     * token held here is missing or rejected. See [SchaleWebClearance].
+     */
+    @Volatile
+    var clearanceSyncer: (suspend () -> String?)? = null
+
+    /**
+     * Re-reads the token the site itself stored and adopts it only when the auth server accepts it,
+     * so a verification done on the site heals the app instead of sending the user back to a captcha
+     * they already passed. Never overwrites a working token with a dead one.
+     */
+    private suspend fun syncClearanceFromSite(): String? {
+        val syncer = clearanceSyncer ?: return null
+        val current = normalizeClearanceToken(Settings.schaleClearanceToken.value)
+        val token = try {
+            syncer()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            logcat(TAG) { "clearance sync failed: ${e.message}" }
+            null
+        }
+        if (token == null || token == current || !isValidClearanceToken(token)) return null
+        if (validateClearanceToken(token) != 200) {
+            logcat(TAG) { "clearance sync found a token the auth server rejects (len=${token.length})" }
+            return null
+        }
+        Settings.schaleClearanceToken.value = token
+        logcat(TAG) { "clearance taken from the site (len=${token.length})" }
+        return token
+    }
+
+    /**
+     * Runs a protected call and, when the clearance alone made it fail, retries it once with the
+     * token re-read from the site.
+     */
+    private suspend fun <T> withClearanceRecovery(block: suspend () -> T): T = try {
+        block()
+    } catch (e: SchaleClearanceException) {
+        if (syncClearanceFromSite() == null) throw e
+        block()
+    }
+
+    /**
+     * Mints a clearance the way the site does: the captcha answer is the bearer credential of
+     * `POST auth.schale.network/clearance`, which answers 201 with the token in its body.
+     */
+    suspend fun createClearance(captchaAnswer: String): String? {
+        val credential = normalizeClearanceToken(captchaAnswer) ?: return null
+        return try {
+            val (status, body) = fetchRaw("${EhUrl.AUTH_SCHALE}/clearance", HttpMethod.Post, bearer = credential)
+            val token = clearanceFromBody(body)
+            if (status == 201 && token != null && isValidClearanceToken(token)) {
+                Settings.schaleClearanceToken.value = token
+                logcat(TAG) { "clearance minted from the captcha answer (len=${token.length})" }
+                token
+            } else {
+                logcat(TAG) { "clearance mint failed (HTTP $status): ${body.take(160)}" }
+                null
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            logcat(TAG) { "clearance mint failed: ${e.message}" }
+            null
+        }
+    }
+
+    /** The mint endpoint answers with the token itself; a JSON wrapper around it is tolerated. */
+    private fun clearanceFromBody(body: String?): String? {
+        val text = body?.trim().orEmpty()
+        if (text.isEmpty()) return null
+        if (!text.startsWith("{")) return normalizeClearanceToken(text)
+        val wrapped = Regex("\"(?:clearance|crt|token)\"\\s*:\\s*\"([^\"]+)\"").find(text)?.groupValues?.getOrNull(1)
+        return normalizeClearanceToken(wrapped)
     }
 
     /**
