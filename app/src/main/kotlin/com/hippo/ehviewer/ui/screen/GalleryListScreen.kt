@@ -200,6 +200,8 @@ fun AnimatedVisibilityScope.GalleryListScreen(
     ReportDrawnWhen { data.loadState.refresh !is LoadState.Loading }
     FavouriteStatusRouter.Observe(data)
     val listMode by Settings.listMode.collectAsState()
+    // Read outside the FabLayout content, which is not a composable scope.
+    val schalePosition by viewModel.schalePosition.collectAsState()
 
     val entries = stringArrayResource(id = com.hippo.ehviewer.R.array.toplist_entries)
     val values = stringArrayResource(id = com.hippo.ehviewer.R.array.toplist_values)
@@ -589,21 +591,20 @@ fun AnimatedVisibilityScope.GalleryListScreen(
         if (EhUtils.isSchaleNetwork) {
             // Schale Network lists are a plain numbered range, so these actions step through pages
             // instead of the EH random/date seeking.
-            val position = viewModel.schalePosition.collectAsState().value
-            if (position.page > 1) {
+            if (schalePosition.page > 1) {
                 onClick(Icons.AutoMirrored.Default.ArrowBack) {
-                    urlBuilder.page = position.page - 1
+                    urlBuilder.page = schalePosition.page - 1
                     data.refresh()
                 }
             }
-            if (position.hasMore) {
+            if (schalePosition.hasMore) {
                 onClick(Icons.AutoMirrored.Default.ArrowForward) {
-                    urlBuilder.page = position.page + 1
+                    urlBuilder.page = schalePosition.page + 1
                     data.refresh()
                 }
             }
             onClick(EhIcons.Default.GoTo) {
-                val text = awaitInputText(initial = position.page.toString(), title = gotoTitle, isNumber = true) { oriText ->
+                val text = awaitInputText(initial = schalePosition.page.toString(), title = gotoTitle, isNumber = true) { oriText ->
                     val goto = ensureNotNull(oriText.trim().toIntOrNull()) { invalidNum }
                     ensure(goto >= 1) { outOfRange }
                 }
