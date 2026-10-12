@@ -132,8 +132,11 @@ fun GalleryInfoListItem(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // Place the rating near the uploader text as there's more visual space
-                    GalleryListCardRating(rating = info.rating, modifier = Modifier.padding(top = 1.dp, bottom = 3.dp))
+                    // Place the rating near the uploader text as there's more visual space. Schale
+                    // Network galleries are not rated, so the stars would only take space there.
+                    if (!EhUtils.isSchaleNetwork) {
+                        GalleryListCardRating(rating = info.rating, modifier = Modifier.padding(top = 1.dp, bottom = 3.dp))
+                    }
                     Spacer(modifier = Modifier.weight(1f))
                     val downloaded by DownloadManager.collectContainDownloadInfo(info.gid)
                     if (downloaded) {

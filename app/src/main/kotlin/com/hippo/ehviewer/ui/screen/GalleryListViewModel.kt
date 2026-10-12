@@ -21,12 +21,24 @@ import com.hippo.ehviewer.client.data.ListUrlBuilder.Companion.MODE_TOPLIST
 import com.hippo.ehviewer.client.schale.SchaleAuthException
 import com.hippo.ehviewer.client.schale.SchaleEngine
 import com.hippo.ehviewer.ui.tools.foldToLoadResult
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import moe.tarsin.coroutines.runSuspendCatching
 
 class GalleryListViewModel(lub: ListUrlBuilder, savedStateHandle: SavedStateHandle) : ViewModel() {
     private val mutex = Mutex()
+
+    /**
+     * Where the Schale list currently is. It is a numbered range (`page=N`) rather than an offset,
+     * so the page step buttons need to know the current page and whether another one follows.
+     */
+    data class PagingPosition(val page: Int = 1, val hasMore: Boolean = false)
+
+    private val _schalePosition = MutableStateFlow(PagingPosition())
+    val schalePosition: StateFlow<PagingPosition> = _schalePosition.asStateFlow()
 
     val urlBuilder by savedStateHandle.saved(MutableStateSerializer()) {
         mutableStateOf(lub)
@@ -39,8 +51,9 @@ class GalleryListViewModel(lub: ListUrlBuilder, savedStateHandle: SavedStateHand
             override suspend fun load(params: LoadParams<String>) = withIOContext {
                 // Route to Schale Network if the current gallery site is SITE_SCHALE
                 if (Settings.gallerySite.value == EhUrl.SITE_SCHALE) {
-                    val page = params.key?.toIntOrNull() ?: 1
                     val builder = urlBuilder.value
+                    // A refresh restarts without a key, so the page a jump asked for is kept there.
+                    val page = params.key?.toIntOrNull() ?: builder.page
                     // The same box drives browse, search and the account's favorites for Schale. The
                     // uploader mode carries a bare name, so give it the namespace Schale expects.
                     val keyword = builder.keyword?.takeIf { it.isNotBlank() }
@@ -64,6 +77,7 @@ class GalleryListViewModel(lub: ListUrlBuilder, savedStateHandle: SavedStateHand
                             else -> SchaleEngine.getSchaleGalleryList(page = page)
                         }
                     }.foldToLoadResult { result ->
+                        _schalePosition.value = PagingPosition(page = page, hasMore = result.next != null)
                         LoadResult.Page(result.galleryInfoList, result.prev, result.next)
                     }
                 }

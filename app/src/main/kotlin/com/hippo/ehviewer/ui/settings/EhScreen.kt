@@ -42,7 +42,6 @@ import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.asMutableState
 import com.hippo.ehviewer.client.EhTagDatabase
 import com.hippo.ehviewer.client.EhUtils
-import com.hippo.ehviewer.client.data.ListUrlBuilder
 import com.hippo.ehviewer.client.schale.SchaleEngine
 import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.ui.Screen
@@ -52,7 +51,6 @@ import com.hippo.ehviewer.ui.destinations.SchaleClearanceScreenDestination
 import com.hippo.ehviewer.ui.destinations.SchaleLoginScreenDestination
 import com.hippo.ehviewer.ui.destinations.UConfigScreenDestination
 import com.hippo.ehviewer.ui.main.NavigationIcon
-import com.hippo.ehviewer.ui.screen.asDst
 import com.hippo.ehviewer.ui.tools.awaitConfirmationOrCancel
 import com.hippo.ehviewer.ui.tools.awaitInputText
 import com.hippo.ehviewer.ui.tools.awaitSelectItem
@@ -160,23 +158,12 @@ fun AnimatedVisibilityScope.EhScreen(navigator: DestinationsNavigator) = Screen(
                 val favoriteStates by SchaleEngine.favoriteStates.collectAsState()
                 Preference(
                     title = "Cuenta de Schale Network",
-                    summary = username?.let { "Sesión iniciada como $it. Toca para cambiar de cuenta o cerrarla." }
-                        ?: "Sin sesión: hace falta para guardar favoritos. Toca para iniciar sesión.",
+                    summary = username?.let {
+                        // Favorites are reached from the Favorites tab, like any other site's list.
+                        val count = favoriteStates.size.takeIf { it > 0 }?.let { " ($it favoritos)" }.orEmpty()
+                        "Sesión iniciada como $it$count. Toca para cambiar de cuenta o cerrarla."
+                    } ?: "Sin sesión: hace falta para guardar favoritos. Toca para iniciar sesión.",
                 ) { navigate(SchaleLoginScreenDestination) }
-                Preference(
-                    title = "Favoritos de Schale",
-                    summary = when {
-                        username == null -> "Necesitas iniciar sesión para ver tus favoritos de la cuenta."
-                        favoriteStates.isEmpty() -> "Los favoritos de tu cuenta de Schale Network."
-                        else -> "${favoriteStates.size} favoritos en tu cuenta de Schale Network."
-                    },
-                ) {
-                    if (username == null) {
-                        navigate(SchaleLoginScreenDestination)
-                    } else {
-                        navigate(ListUrlBuilder(mode = ListUrlBuilder.MODE_SCHALE_FAVORITES).asDst())
-                    }
-                }
                 testDialogText?.let { diagnosticInfo ->
                     AlertDialog(
                         onDismissRequest = { testDialogText = null },

@@ -22,6 +22,8 @@ import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridS
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.automirrored.filled.LastPage
 import androidx.compose.material.icons.filled.Add
@@ -43,6 +45,7 @@ import androidx.compose.material3.fork.SwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -583,6 +586,35 @@ fun AnimatedVisibilityScope.GalleryListScreen(
         onExpandChanged = { fabExpanded = it },
         autoCancel = true,
     ) {
+        if (EhUtils.isSchaleNetwork) {
+            // Schale Network lists are a plain numbered range, so these actions step through pages
+            // instead of the EH random/date seeking.
+            val position = viewModel.schalePosition.collectAsState().value
+            if (position.page > 1) {
+                onClick(Icons.AutoMirrored.Default.ArrowBack) {
+                    urlBuilder.page = position.page - 1
+                    data.refresh()
+                }
+            }
+            if (position.hasMore) {
+                onClick(Icons.AutoMirrored.Default.ArrowForward) {
+                    urlBuilder.page = position.page + 1
+                    data.refresh()
+                }
+            }
+            onClick(EhIcons.Default.GoTo) {
+                val text = awaitInputText(initial = position.page.toString(), title = gotoTitle, isNumber = true) { oriText ->
+                    val goto = ensureNotNull(oriText.trim().toIntOrNull()) { invalidNum }
+                    ensure(goto >= 1) { outOfRange }
+                }
+                urlBuilder.page = text.trim().toInt()
+                data.refresh()
+            }
+            onClick(Icons.Default.Refresh) {
+                data.refresh()
+            }
+            return@FabLayout
+        }
         if (urlBuilder.mode in arrayOf(MODE_NORMAL, MODE_UPLOADER, MODE_TAG)) {
             onClick(Icons.Default.Shuffle) {
                 urlBuilder.setRange(Random.nextInt(100))

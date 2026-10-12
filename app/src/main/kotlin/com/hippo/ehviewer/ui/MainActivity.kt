@@ -191,6 +191,16 @@ private fun siteDestination(direction: Direction, schaleNetwork: Boolean): Direc
     return if (schaleFavorites) ListUrlBuilder(mode = ListUrlBuilder.MODE_SCHALE_FAVORITES).asDst() else direction
 }
 
+/** Entries that only exist on EH: Schale Network has no subscription, whats-hot or toplist feeds. */
+private fun isEhOnly(direction: Direction) = direction === SubscriptionScreenDestination ||
+    direction === WhatshotScreenDestination ||
+    direction === ToplistScreenDestination
+
+private fun launchDestination(direction: Direction, schaleNetwork: Boolean): Direction = when {
+    schaleNetwork && isEhOnly(direction) -> HomePageScreenDestination
+    else -> siteDestination(direction, schaleNetwork)
+}
+
 class MainActivity : AppCompatActivity() {
 
     private var shareUrl: String? = null
@@ -438,6 +448,7 @@ class MainActivity : AppCompatActivity() {
                                         contentScale = ContentScale.FillWidth,
                                     )
                                     navItems.forEach { (direction, stringId, icon) ->
+                                        if (schaleNetwork && isEhOnly(direction)) return@forEach
                                         val target = siteDestination(direction, schaleNetwork)
                                         NavigationDrawerItem(
                                             label = {
@@ -481,7 +492,7 @@ class MainActivity : AppCompatActivity() {
                                 CompositionLocalProvider(LocalSharedTransitionScope provides this) {
                                     val start = when {
                                         needSignIn -> SignInScreenDestination
-                                        hasNetwork -> siteDestination(navItems[launchPage].first, schaleNetwork)
+                                        hasNetwork -> launchDestination(navItems[launchPage].first, schaleNetwork)
                                         else -> DownloadsScreenDestination
                                     }
                                     DestinationsNavHost(

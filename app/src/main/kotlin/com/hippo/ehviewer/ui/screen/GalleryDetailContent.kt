@@ -636,11 +636,14 @@ fun BelowHeader(galleryDetail: GalleryDetail, voteTag: VoteTag) {
                 }
             }
         }
-        EhIconButton(
-            icon = Icons.Default.FolderZip,
-            text = stringResource(id = R.string.archive),
-            onClick = ::showArchiveDialog,
-        )
+        // Schale Network serves neither archives nor torrents.
+        if (!EhUtils.isSchaleNetwork) {
+            EhIconButton(
+                icon = Icons.Default.FolderZip,
+                text = stringResource(id = R.string.archive),
+                onClick = ::showArchiveDialog,
+            )
+        }
         val torrentText = stringResource(R.string.torrent_count, galleryDetail.torrentCount)
         val noTorrents = stringResource(R.string.no_torrents)
         val torrentResult = remember(galleryDetail) {
@@ -675,18 +678,20 @@ fun BelowHeader(galleryDetail: GalleryDetail, voteTag: VoteTag) {
                 }
             }
         }
-        EhIconButton(
-            icon = EhIcons.Default.Magnet,
-            text = torrentText,
-            onClick = {
-                launchIO {
-                    when {
-                        galleryDetail.torrentCount <= 0 -> snackbar(noTorrents)
-                        else -> runSwallowingWithUI { showTorrentDialog() }
+        if (!EhUtils.isSchaleNetwork) {
+            EhIconButton(
+                icon = EhIcons.Default.Magnet,
+                text = torrentText,
+                onClick = {
+                    launchIO {
+                        when {
+                            galleryDetail.torrentCount <= 0 -> snackbar(noTorrents)
+                            else -> runSwallowingWithUI { showTorrentDialog() }
+                        }
                     }
-                }
-            },
-        )
+                },
+            )
+        }
     }
     Spacer(modifier = Modifier.size(keylineMargin))
     fun getAllRatingText(rating: Float, ratingCount: Int): String = string(
@@ -736,14 +741,17 @@ fun BelowHeader(galleryDetail: GalleryDetail, voteTag: VoteTag) {
             }
         }
     }
-    CrystalCard(onClick = ::showRateDialog) {
-        Column(
-            modifier = Modifier.padding(8.dp).fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            GalleryDetailRating(rating = galleryDetail.rating)
-            Spacer(modifier = Modifier.size(keylineMargin))
-            Text(text = ratingText)
+    // Schale Network galleries are not rated, so there is nothing to show or to rate.
+    if (!EhUtils.isSchaleNetwork) {
+        CrystalCard(onClick = ::showRateDialog) {
+            Column(
+                modifier = Modifier.padding(8.dp).fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                GalleryDetailRating(rating = galleryDetail.rating)
+                Spacer(modifier = Modifier.size(keylineMargin))
+                Text(text = ratingText)
+            }
         }
     }
     Spacer(modifier = Modifier.size(keylineMargin))
@@ -807,7 +815,7 @@ fun BelowHeader(galleryDetail: GalleryDetail, voteTag: VoteTag) {
         )
     }
     Spacer(modifier = Modifier.size(keylineMargin))
-    if (Settings.showComments.value) {
+    if (!EhUtils.isSchaleNetwork && Settings.showComments.value) {
         GalleryDetailComment(galleryDetail.comments.comments)
         Spacer(modifier = Modifier.size(dimensionResource(id = com.hippo.ehviewer.R.dimen.strip_item_padding_v)))
     }
