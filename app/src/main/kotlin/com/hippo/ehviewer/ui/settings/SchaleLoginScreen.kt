@@ -26,7 +26,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.ehviewer.core.network.EhCookieStore
-import com.ehviewer.core.util.launchIO
 import com.ehviewer.core.util.logcat
 import com.google.accompanist.web.AccompanistWebViewClient
 import com.google.accompanist.web.LoadingState
@@ -134,16 +133,16 @@ fun AnimatedVisibilityScope.SchaleLoginScreen(navigator: DestinationsNavigator) 
             }
             // The site mints its own Cloudflare verification while the user is here, so keep the app's
             // copy in step with it; the reader then keeps working without a manual re-verification.
+            // We do NOT call validateClearanceToken here: the site already validated the token when
+            // it stored it, and hitting auth.schale.network every second would burn connection quota.
             webView.evaluateJavascript(JS_READ_CLEARANCE) { result ->
                 val clearance = result?.let { runCatching { JSONTokener(it).nextValue() as? String }.getOrNull() }
                 if (clearance != null && SchaleEngine.isValidClearanceToken(clearance)) {
-                    launchIO {
-                        val stored = Settings.schaleClearanceToken.value
-                        if (clearance != stored && SchaleEngine.validateClearanceToken(clearance) == 200) {
-                            Settings.schaleClearanceToken.value = clearance
-                            EhCookieStore.flush()
-                            logcat("SchaleLogin") { "clearance taken from the site (${clearance.length} chars)" }
-                        }
+                    val stored = Settings.schaleClearanceToken.value
+                    if (clearance != stored) {
+                        Settings.schaleClearanceToken.value = clearance
+                        EhCookieStore.flush()
+                        logcat("SchaleLogin") { "clearance taken from the site (${clearance.length} chars)" }
                     }
                 }
             }

@@ -807,12 +807,13 @@ object SchaleEngine {
     }
 
     /**
-     * A 403 means the server refused the request, which may be the clearance or something else. The
-     * auth server is asked which of the two it is, and the stored token is never dropped: a rejection
-     * here means the verification is not accepted for the connection in use (they are bound to it),
-     * so it has to be redone anyway and throwing the old one away only loses the user's state.
+     * A 403 on a clearance-protected endpoint means the server rejected the crt token.
+     * We do NOT make an extra call to the auth server to "confirm" this: that diagnostic GET
+     * went through OkHttp on a different TCP connection than the WebView used to solve the
+     * captcha, so the auth server often returned 401/403 for a perfectly valid token, producing
+     * a false "site rejected verification" error. Trust the 403 directly instead.
      */
-    private suspend fun protectedRequestError(
+    private fun protectedRequestError(
         stage: String,
         url: String,
         status: Int,
@@ -820,42 +821,17 @@ object SchaleEngine {
         body: String,
         token: String,
     ): Throwable {
-        if (status != 403) {
-            return SchaleTechnicalException(
-                stage = stage,
-                url = url,
-                httpStatus = status,
-                httpDescription = description,
-                token = token,
-                responseBody = body,
-            )
-        }
-        val verified = validateClearanceToken(token)
-        if (verified == 401 || verified == 403) {
+        if (status == 403) {
+            val preview = body.take(200).ifBlank { "(sin cuerpo)" }
             return SchaleClearanceException(
-                "[Verificación rechazada]\nEl servidor de Schale rechazó la verificación guardada (HTTP 403) y el \n" +
-                    "servidor de verificación tampoco la acepta (auth respondió $verified).\n" +
-                    "La verificación queda atada a la conexión con la que se obtuvo, así que deja de servir \n" +
-                    "cuando cambia la red o la dirección IP (Wi-Fi, datos móviles, VPN).\n" +
-                    "Vuelve a verificar en Configuración > EH > Verificación de Schale Network desde la \n" +
-                    "misma conexión con la que vas a leer.",
+                "[Verificación expirada — HTTP 403]\n" +
+                    "El servidor rechazó el token de verificación guardado.\n" +
+                    "Respuesta del servidor: $preview\n\n" +
+                    "Ve a Configuración > EH > Verificación de Schale Network y resuelve el captcha de nuevo.",
             )
         }
-        if (verified == 429) {
-            return SchaleTechnicalException(
-                stage = "$stage (límite de verificaciones alcanzado)",
-                url = url,
-                httpStatus = status,
-                httpDescription = description,
-                token = token,
-                responseBody = "El servidor de verificación responde HTTP 429: esta conexión agotó su cupo de \n" +
-                    "comprobaciones, así que no se pudo confirmar el token.\n" +
-                    "Reintenta en unos segundos; si sigue igual, cambia de red (una VPN suele servir).",
-            )
-        }
-        // The auth server still accepts the token, so re-verifying would not change anything.
         return SchaleTechnicalException(
-            stage = "$stage (rechazado pese a la verificación válida)",
+            stage = stage,
             url = url,
             httpStatus = status,
             httpDescription = description,
@@ -932,41 +908,25 @@ object SchaleEngine {
     )
 
     /**
-     * A 403 leaves it open which credential the server refused. The account check answers whether the
-     * session is still good and the clearance check whether the verification is genuinely dead, so
-     * the user is sent to re-verify only when that is what fixes it; anything else is reported as the
-     * endpoint refusing an otherwise valid account.
+     * A 403 on an account-gated endpoint leaves it open whether the session or the clearance was
+     * rejected. We check session existence locally (no network) and otherwise assume clearance,
+     * including the actual server response body so the user sees what was said.
+     * We do NOT call validateClearanceToken or probeSessionValid: those extra GETs went through
+     * OkHttp on a different connection than the WebView, so they often mis-diagnosed a valid token.
      */
-    private suspend fun forbiddenReason(stage: String, url: String, body: String): IOException {
-        val session = sessionToken() ?: return sessionRequired()
-        if (!probeSessionValid()) return sessionRequired()
+    private fun forbiddenReason(stage: String, url: String, body: String): IOException {
+        if (sessionToken() == null) return sessionRequired()
         val clearance = normalizeClearanceToken(Settings.schaleClearanceToken.value)
-        val verification = clearance?.let { validateClearanceToken(it) }
-        if (clearance == null || verification == 401 || verification == 403) return clearanceRequired()
-        if (verification == 429) {
-            return SchaleTechnicalException(
-                stage = "$stage (límite de verificaciones alcanzado)",
-                url = url,
-                httpStatus = 403,
-                httpDescription = "Forbidden",
-                token = clearance,
-                responseBody = body.ifBlank {
-                    "El servidor de verificación responde HTTP 429: esta conexión agotó su cupo, así que no se \n" +
-                        "pudo comprobar el token. Reintenta en unos segundos; si continúa, cambia de red \n" +
-                        "(una VPN suele servir)."
-                },
-            )
-        }
-        return SchaleTechnicalException(
-            stage = "$stage (403 con sesión y verificación válidas)",
-            url = url,
-            httpStatus = 403,
-            httpDescription = "Forbidden",
-            token = clearance,
-            responseBody = body.ifBlank {
-                "La verificación sigue siendo válida (auth respondió ${verification ?: "sin respuesta"}).\n" +
-                    "Sesión: ${session.length} caracteres. Reintenta en unos segundos."
-            },
+        if (clearance == null) return clearanceRequired()
+        // Session exists and clearance looks structurally valid; the 403 is most likely a
+        // clearance expiry (the server validates it server-side). Show what the API said.
+        val preview = body.take(200).ifBlank { "(sin cuerpo)" }
+        return SchaleClearanceException(
+            "[Verificación expirada — HTTP 403]\n" +
+                "El servidor rechazó la verificación o la sesión guardada.\n" +
+                "Respuesta del servidor: $preview\n\n" +
+                "Ve a Configuración > EH > Verificación de Schale Network y resuelve el captcha de nuevo.\n" +
+                "Si el problema persiste, cierra sesión y vuelve a iniciarla.",
         )
     }
 

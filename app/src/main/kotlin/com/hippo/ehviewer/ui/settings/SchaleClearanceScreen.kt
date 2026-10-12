@@ -6,6 +6,7 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView as AndroidWebView
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -33,7 +34,6 @@ import com.google.accompanist.web.WebView
 import com.google.accompanist.web.rememberWebViewState
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhUrl
-import com.hippo.ehviewer.client.schale.SchaleEngine
 import com.hippo.ehviewer.ktor.CHROME_MOBILE_USER_AGENT
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.main.NavigationIcon
@@ -41,23 +41,20 @@ import com.hippo.ehviewer.util.setDefaultSettings
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.withContext
 import moe.tarsin.tip
 
 private const val POLL_INTERVAL_MS = 500L
 private const val SLOW_HINT_TICKS = 30
 
-/** The captcha answer is single use and short lived, so the app mints the clearance right away. */
-private const val MINT_GRACE_MS = 2_000L
-
-/** The auth server limits verifications per connection; wait out a 429 instead of giving up. */
-private val MINT_RETRY_DELAYS_MS = longArrayOf(10_000L, 20_000L, 30_000L, 45_000L)
-
-/** After this many 429s the answer is old enough that a fresh one is worth asking the page for. */
-private const val FRESH_CAPTCHA_AT_ATTEMPT = 2
+/**
+ * How long to wait for the site to mint and store its own clearance before we give up and
+ * ask the user to try again. The site mints the clearance itself — we must NOT try to mint
+ * with the same single-use Turnstile token or we will race the site's request and one of the
+ * two POSTs will get a 401 (token already consumed).
+ */
+private const val SITE_MINT_TIMEOUT_MS = 15_000L
 
 /**
  * Injected on every main-frame page load.
@@ -245,104 +242,11 @@ class SchaleBridge(
 @Destination<RootGraph>
 @Composable
 fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigator) = Screen(navigator) {
-    val state = rememberWebViewState(url = EhUrl.HOST_SCHALE)
-    var captured by remember { mutableStateOf<String?>(null) }
-    var captchaAnswer by remember { mutableStateOf("") }
-    var captchaSeq by remember { mutableStateOf(0) }
-    var statusText by remember { mutableStateOf("Esperando a que resuelvas el captcha…") }
-
-    /** @return true when the value looked like a clearance token and was handed to the save step. */
-    fun acceptToken(raw: String?): Boolean {
-        val token = normalizeClearanceToken(raw) ?: return false
-        if (captured == null) captured = token
-        return true
-    }
-
-    // The site stores the clearance in localStorage right after Turnstile resolves, so poll it; the
-    // injected observer also reports the token of a call the server accepted, which covers a slower
-    // or unusual storage path.
-    LaunchedEffect(Unit) {
-        var ticks = 0
-        while (isActive) {
-            delay(POLL_INTERVAL_MS)
-            if (captured != null) break
-            ticks++
-            if (ticks == SLOW_HINT_TICKS) {
-                statusText = "Aún no se detectó la verificación. Resuelve el captcha de la página."
-            }
-            val webView = state.webView ?: continue
-            webView.evaluateJavascript(JS_READ_CLEARANCE) { result ->
-                acceptToken(result)
-            }
-        }
-    }
-
-    // The auth server allows only a handful of verifications per connection and the site tries just
-    // once, so the app asks for the clearance itself and keeps trying while the limit resets. This
-    // is what makes a 429 (rate limited connection, typically a shared or mobile address) recover
-    // instead of leaving the app without a token.
-    LaunchedEffect(captchaSeq) {
-        if (captchaSeq == 0) return@LaunchedEffect
-        val answer = captchaAnswer
-        statusText = "Captcha resuelto. Pidiendo la verificación…"
-        delay(MINT_GRACE_MS)
-        var attempt = 0
-        while (isActive && captured == null) {
-            val result = withContext(Dispatchers.IO) { SchaleEngine.mintClearance(answer) }
-            if (result.token != null) {
-                acceptToken(result.token)
-                return@LaunchedEffect
-            }
-            logcat("SchaleClearance") { "mint attempt ${attempt + 1} -> HTTP ${result.httpStatus ?: "sin respuesta"}" }
-            if (!result.isRateLimited) {
-                statusText = "El captcha fue rechazado (HTTP ${result.httpStatus ?: "sin respuesta"}). Recarga la página y vuelve a resolverlo."
-                return@LaunchedEffect
-            }
-            if (attempt >= MINT_RETRY_DELAYS_MS.size) {
-                statusText = "Schale limita las verificaciones desde esta conexión (HTTP 429). " +
-                    "Usa otra red —una VPN suele servir— o vuelve a intentarlo más tarde."
-                return@LaunchedEffect
-            }
-            val waitMs = result.retryAfterSeconds?.let { (it * 1000L).coerceIn(5_000L, 120_000L) } ?: MINT_RETRY_DELAYS_MS[attempt]
-            statusText = "Schale limita las verificaciones (HTTP 429). Reintentando en ${waitMs / 1000} s…"
-            if (attempt == FRESH_CAPTCHA_AT_ATTEMPT) {
-                state.webView?.evaluateJavascript(JS_FRESH_CAPTCHA, null)
-            }
-            delay(waitMs)
-            attempt++
-        }
-    }
-
-    LaunchedEffect(captured) {
-        val token = captured ?: return@LaunchedEffect
-        Settings.schaleClearanceToken.value = token
-        EhCookieStore.flush()
-        statusText = "Verificación guardada (len=${token.length})."
-        tip("Verificación de Schale guardada")
-        navigator.popBackStack()
-    }
-
-    val client = remember {
-        object : AccompanistWebViewClient() {
-            override fun onPageStarted(view: AndroidWebView, url: String?, favicon: Bitmap?) {
-                super.onPageStarted(view, url, favicon)
-                if (url?.startsWith(EhUrl.HOST_SCHALE) == true) {
-                    statusText = "Cargando niyaniya.moe…"
-                    view.evaluateJavascript(JS_OBSERVER_INJECTION, null)
-                }
-            }
-
-            override fun onPageFinished(view: AndroidWebView, url: String?) {
-                super.onPageFinished(view, url)
-                if (url?.startsWith(EhUrl.HOST_SCHALE) == true) {
-                    if (captured == null) {
-                        statusText = "Página cargada. Resuelve el captcha si no lo has hecho todavía."
-                    }
-                    view.evaluateJavascript(JS_OBSERVER_INJECTION, null)
-                }
-            }
-        }
-    }
+    // Read the saved token once on entry. If it exists we show the "already verified" screen
+    // and only open the WebView when the user explicitly requests a re-verify — the same way a
+    // browser never shows the captcha again just because you open a new tab.
+    val existingToken = remember { normalizeClearanceToken(Settings.schaleClearanceToken.value) }
+    var showWebView by remember { mutableStateOf(existingToken == null) }
 
     Scaffold(
         topBar = {
@@ -352,63 +256,221 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
             )
         },
     ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .padding(paddingValues)
-                .fillMaxSize(),
-        ) {
-            val loadingState = state.loadingState
-            if (loadingState is LoadingState.Loading) {
-                LinearProgressIndicator(
-                    progress = { loadingState.progress },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            WebView(
-                state = state,
+        if (!showWebView) {
+            // ── Already-verified screen ──────────────────────────────────────────────────
+            // The WebView is NOT created here, so the site never loads and no captcha appears.
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                client = client,
-                onCreated = { webView ->
-                    webView.setDefaultSettings()
-                    with(webView.settings) {
-                        domStorageEnabled = true
-                        databaseEnabled = true
-                        useWideViewPort = true
-                        loadWithOverviewMode = true
-                        userAgentString = CHROME_MOBILE_USER_AGENT
-                    }
-                    webView.addJavascriptInterface(
-                        SchaleBridge(
-                            onClearance = { token -> webView.post { acceptToken(token) } },
-                            onCaptchaAnswer = { answer ->
-                                webView.post {
-                                    if (!answer.isNullOrBlank()) {
-                                        captchaAnswer = answer
-                                        captchaSeq++
-                                    }
-                                }
-                            },
-                        ),
-                        "SchaleBridge",
-                    )
-                    val cookieManager = CookieManager.getInstance()
-                    cookieManager.setAcceptCookie(true)
-                    cookieManager.setAcceptThirdPartyCookies(webView, true)
-                },
-            )
-            Text(
-                text = statusText,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-            TextButton(
-                onClick = { state.webView?.evaluateJavascript(JS_RELOAD_PAGE, null) },
-                modifier = Modifier.padding(start = 8.dp, bottom = 8.dp),
+                    .padding(paddingValues)
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp, vertical = 24.dp),
             ) {
-                Text(text = "Recargar página")
+                Text(
+                    text = "✓ Verificación guardada",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    text = "Tu verificación de Schale Network está activa (longitud del token: ${existingToken!!.length} caracteres). " +
+                        "No necesitas resolver el captcha de nuevo a menos que el lector te diga que la verificación expiró.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+                TextButton(
+                    onClick = { navigator.popBackStack() },
+                    modifier = Modifier.padding(top = 16.dp),
+                ) {
+                    Text(text = "Volver")
+                }
+                TextButton(
+                    onClick = { showWebView = true },
+                    modifier = Modifier.padding(top = 4.dp),
+                ) {
+                    Text(text = "Volver a verificar (sólo si tienes problemas)")
+                }
             }
+        } else {
+            // ── WebView verification screen ──────────────────────────────────────────────
+            // When re-verifying, we inject the saved token into localStorage BEFORE the site's
+            // scripts run. The site reads localStorage["clearance"] on load and checks it
+            // against its auth server — if valid, no captcha widget appears, exactly like a
+            // browser whose tab already has the clearance stored.
+            VerificationWebView(
+                paddingValues = paddingValues,
+                existingToken = existingToken,
+                onDone = { navigator.popBackStack() },
+            )
+        }
+    }
+}
+
+/** The JS snippet that pre-seeds localStorage with our saved token before the page reads it. */
+private fun jsSeedClearance(token: String): String {
+    // Escape single quotes and backslashes so the token is safe inside a JS string literal.
+    val safe = token.replace("\\", "\\\\").replace("'", "\\'")
+    return "(function(){try{localStorage.setItem('clearance','$safe');}catch(e){}})();"
+}
+
+@Composable
+private fun VerificationWebView(
+    paddingValues: PaddingValues,
+    existingToken: String?,
+    onDone: () -> Unit,
+) {
+    val state = rememberWebViewState(url = EhUrl.HOST_SCHALE)
+    var captured by remember { mutableStateOf<String?>(null) }
+    var captchaSeq by remember { mutableStateOf(0) }
+    var statusText by remember {
+        mutableStateOf(
+            if (existingToken != null) {
+                "Cargando el sitio — si tu verificación sigue siendo válida el captcha no aparecerá."
+            } else {
+                "Esperando a que resuelvas el captcha…"
+            },
+        )
+    }
+
+    fun acceptToken(raw: String?): Boolean {
+        val token = normalizeClearanceToken(raw) ?: return false
+        if (captured == null) captured = token
+        return true
+    }
+
+    // Poll localStorage every 500 ms. The site's own JS mints and stores the clearance after
+    // Turnstile solves — we read what the site wrote. We must NOT POST the token ourselves:
+    // it is single-use and the site already uses it; a second POST gets HTTP 401.
+    LaunchedEffect(Unit) {
+        var ticks = 0
+        while (isActive) {
+            delay(POLL_INTERVAL_MS)
+            if (captured != null) break
+            ticks++
+            if (ticks == SLOW_HINT_TICKS) {
+                statusText = "Resuelve el captcha de la página para continuar."
+            }
+            val webView = state.webView ?: continue
+            webView.evaluateJavascript(JS_READ_CLEARANCE) { result ->
+                // Only accept a token that differs from the one already stored, so that simply
+                // loading the page (which echoes back the injected token) doesn't trigger a
+                // redundant save when the user is just re-checking a still-valid token.
+                val token = normalizeClearanceToken(result) ?: return@evaluateJavascript
+                if (token != existingToken) acceptToken(token)
+            }
+        }
+    }
+
+    // After the captcha is solved, give the site up to SITE_MINT_TIMEOUT_MS to write a NEW
+    // clearance to localStorage. If nothing new appears, its POST failed — reset the widget.
+    LaunchedEffect(captchaSeq) {
+        if (captchaSeq == 0) return@LaunchedEffect
+        statusText = "Captcha resuelto. Esperando que el sitio complete la verificación…"
+        var waited = 0L
+        while (isActive && captured == null && waited < SITE_MINT_TIMEOUT_MS) {
+            delay(POLL_INTERVAL_MS)
+            waited += POLL_INTERVAL_MS
+        }
+        if (captured == null && isActive) {
+            statusText = "El sitio no pudo completar la verificación. Resuelve el captcha de nuevo."
+            state.webView?.evaluateJavascript(JS_FRESH_CAPTCHA, null)
+        }
+    }
+
+    LaunchedEffect(captured) {
+        val token = captured ?: return@LaunchedEffect
+        Settings.schaleClearanceToken.value = token
+        EhCookieStore.flush()
+        statusText = "Verificación guardada (len=${token.length})."
+        tip("Verificación de Schale guardada")
+        onDone()
+    }
+
+    val client = remember {
+        object : AccompanistWebViewClient() {
+            override fun onPageStarted(view: AndroidWebView, url: String?, favicon: Bitmap?) {
+                super.onPageStarted(view, url, favicon)
+                if (url?.startsWith(EhUrl.HOST_SCHALE) == true) {
+                    statusText = "Cargando niyaniya.moe…"
+                    // Inject the saved token into localStorage as early as possible so the
+                    // site finds it when its scripts run — no captcha if the token is valid.
+                    existingToken?.let { view.evaluateJavascript(jsSeedClearance(it), null) }
+                    view.evaluateJavascript(JS_OBSERVER_INJECTION, null)
+                }
+            }
+
+            override fun onPageFinished(view: AndroidWebView, url: String?) {
+                super.onPageFinished(view, url)
+                if (url?.startsWith(EhUrl.HOST_SCHALE) == true) {
+                    // Re-inject on finish as well: some SPA frameworks re-read localStorage
+                    // after hydration, so a second injection makes the token more likely to
+                    // be in place when the site's auth check runs.
+                    existingToken?.let { view.evaluateJavascript(jsSeedClearance(it), null) }
+                    if (captured == null) {
+                        statusText = if (existingToken != null) {
+                            "Página cargada. Si no ves captcha, tu verificación sigue siendo válida — puedes volver."
+                        } else {
+                            "Página cargada. Resuelve el captcha para continuar."
+                        }
+                    }
+                    view.evaluateJavascript(JS_OBSERVER_INJECTION, null)
+                }
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .padding(paddingValues)
+            .fillMaxSize(),
+    ) {
+        val loadingState = state.loadingState
+        if (loadingState is LoadingState.Loading) {
+            LinearProgressIndicator(
+                progress = { loadingState.progress },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        WebView(
+            state = state,
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            client = client,
+            onCreated = { webView ->
+                webView.setDefaultSettings()
+                with(webView.settings) {
+                    domStorageEnabled = true
+                    databaseEnabled = true
+                    useWideViewPort = true
+                    loadWithOverviewMode = true
+                    userAgentString = CHROME_MOBILE_USER_AGENT
+                }
+                webView.addJavascriptInterface(
+                    SchaleBridge(
+                        onClearance = { token -> webView.post { acceptToken(token) } },
+                        onCaptchaAnswer = { answer ->
+                            webView.post {
+                                // We do not call mintClearance — the site POSTs the single-use
+                                // Turnstile token itself. We just start the timeout clock.
+                                if (!answer.isNullOrBlank()) captchaSeq++
+                            }
+                        },
+                    ),
+                    "SchaleBridge",
+                )
+                val cookieManager = CookieManager.getInstance()
+                cookieManager.setAcceptCookie(true)
+                cookieManager.setAcceptThirdPartyCookies(webView, true)
+            },
+        )
+        Text(
+            text = statusText,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        )
+        TextButton(
+            onClick = { state.webView?.evaluateJavascript(JS_RELOAD_PAGE, null) },
+            modifier = Modifier.padding(start = 8.dp, bottom = 8.dp),
+        ) {
+            Text(text = "Recargar página")
         }
     }
 }
