@@ -49,8 +49,6 @@ import com.ehviewer.core.util.launchIO
 import com.ehviewer.core.util.logcat
 import com.ehviewer.core.util.withUIContext
 import com.hippo.ehviewer.client.EhTagDatabase
-import com.hippo.ehviewer.client.schale.SchaleEngine
-import com.hippo.ehviewer.client.schale.SchaleWebClearance
 import com.hippo.ehviewer.coil.AnimatedWebPDecoder
 import com.hippo.ehviewer.coil.CropBorderInterceptor
 import com.hippo.ehviewer.coil.DetectBorderInterceptor
@@ -113,9 +111,6 @@ class EhApplication : Application(), SingletonImageLoader.Factory {
         CrashHandler.install()
         super.onCreate()
         System.loadLibrary("ehviewer")
-        // Lets the Schale reader pick up a verification the user completed on the site instead of
-        // asking for the captcha again.
-        SchaleEngine.clearanceSyncer = { SchaleWebClearance.read() }
         launch {
             FavouriteStatusRouter.collect { info ->
                 detailCache[info.gid]?.apply {
