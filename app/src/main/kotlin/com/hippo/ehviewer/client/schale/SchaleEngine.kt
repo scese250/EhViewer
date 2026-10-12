@@ -586,6 +586,28 @@ object SchaleEngine {
             report.appendLine("Error: ${e::class.simpleName}: ${e.message}")
         }
 
+        // Test 5: the account endpoint, which needs the session as well as the clearance.
+        report.appendLine("\n--- 5. GET books/favorites (sesión + verificación) ---")
+        val session = sessionToken()
+        if (session == null) {
+            report.appendLine("Sin sesión guardada: los favoritos no se pueden probar.")
+        } else {
+            report.appendLine("Sesión: ${session.length} caracteres")
+            try {
+                val url = buildFavoritesUrl(page = 1, keyword = null, sort = null, crt = credential)
+                val (favoriteStatus, favoriteBody) = fetchRaw(url, HttpMethod.Get, bearer = session)
+                report.appendLine("HTTP Status: $favoriteStatus")
+                report.appendLine("Cuerpo: ${favoriteBody.take(240).ifBlank { "(vacío)" }}")
+                report.appendLine(if (favoriteStatus == 200) "Resultado: ÉXITO" else "Resultado: FALLÓ")
+                if (favoriteStatus == 403) {
+                    report.appendLine("Sesión en auth /check: ${if (probeSessionValid()) "válida" else "rechazada"}")
+                    report.appendLine("Verificación en auth /clearance: ${validateClearanceToken(credential) ?: "sin respuesta"}")
+                }
+            } catch (e: Throwable) {
+                report.appendLine("Error: ${e::class.simpleName}: ${e.message}")
+            }
+        }
+
         report.appendLine("\nResultado final: ${if (pageCount > 0) "LECTURA OK ($pageCount páginas)" else "LECTURA FALLÓ"}")
         return report.toString()
     }
@@ -719,25 +741,40 @@ object SchaleEngine {
     }
 
     /**
-     * A 403 means the clearance token is no longer accepted: drop it so the user is asked to
-     * re-verify, and return a short actionable error. Anything else stays a technical error.
+     * A 403 means the server refused the request, which may be the clearance or something else. The
+     * token is only dropped when the auth server itself rejects it, so a verification that still
+     * works (the reader keeps using it) is not thrown away because one endpoint said no.
      */
-    private fun protectedRequestError(
+    private suspend fun protectedRequestError(
         stage: String,
         url: String,
         status: Int,
         description: String,
         body: String,
         token: String,
-    ): Throwable = if (status == 403) {
-        Settings.schaleClearanceToken.value = null
-        SchaleClearanceException(
-            "[Verificación expirada]\nEl servidor de Schale rechazó el token (HTTP 403 Forbidden).\n" +
-                "Ve a Configuración > EH > Verificación de Schale Network para re-verificar.",
-        )
-    } else {
-        SchaleTechnicalException(
-            stage = stage,
+    ): Throwable {
+        if (status != 403) {
+            return SchaleTechnicalException(
+                stage = stage,
+                url = url,
+                httpStatus = status,
+                httpDescription = description,
+                token = token,
+                responseBody = body,
+            )
+        }
+        val verified = validateClearanceToken(token)
+        if (verified == 401 || verified == 403) {
+            Settings.schaleClearanceToken.value = null
+            return SchaleClearanceException(
+                "[Verificación expirada]\nEl servidor de Schale rechazó el token (HTTP 403 Forbidden) y la \n" +
+                    "verificación ya no es válida (auth respondió $verified).\n" +
+                    "Ve a Configuración > EH > Verificación de Schale Network para re-verificar.",
+            )
+        }
+        // The auth server still accepts the token, so re-verifying would not change anything.
+        return SchaleTechnicalException(
+            stage = "$stage (rechazado pese a la verificación válida)",
             url = url,
             httpStatus = status,
             httpDescription = description,
@@ -811,11 +848,29 @@ object SchaleEngine {
     )
 
     /**
-     * A 403 leaves it open whether the account session or the clearance token died. The account
-     * check answers that (200 = the session is fine, so the clearance is the dead one), and the
-     * message the user gets then points at the right settings entry.
+     * A 403 leaves it open which credential the server refused. The account check answers whether the
+     * session is still good and the clearance check whether the verification is genuinely dead, so
+     * the user is sent to re-verify only when that is what fixes it; anything else is reported as the
+     * endpoint refusing an otherwise valid account.
      */
-    private suspend fun forbiddenReason(): IOException = if (probeSessionValid()) clearanceRequired() else sessionRequired()
+    private suspend fun forbiddenReason(stage: String, url: String, body: String): IOException {
+        val session = sessionToken() ?: return sessionRequired()
+        if (!probeSessionValid()) return sessionRequired()
+        val clearance = normalizeClearanceToken(Settings.schaleClearanceToken.value)
+        val verification = clearance?.let { validateClearanceToken(it) }
+        if (clearance == null || verification == 401 || verification == 403) return clearanceRequired()
+        return SchaleTechnicalException(
+            stage = "$stage (403 con sesión y verificación válidas)",
+            url = url,
+            httpStatus = 403,
+            httpDescription = "Forbidden",
+            token = clearance,
+            responseBody = body.ifBlank {
+                "La verificación sigue siendo válida (auth respondió ${verification ?: "sin respuesta"}).\n" +
+                    "Sesión: ${session.length} caracteres. Reintenta en unos segundos."
+            },
+        )
+    }
 
     private suspend fun probeSessionValid(): Boolean {
         val session = sessionToken() ?: return false
@@ -869,7 +924,7 @@ object SchaleEngine {
                 val body = resp.bodyAsText()
                 // A 403 on an account endpoint is either a dead session or a dead clearance;
                 // retrying cannot help, so translate it into the actionable exception right away.
-                if (authed && resp.status.value == 403) throw forbiddenReason()
+                if (authed && resp.status.value == 403) throw forbiddenReason(stage, url, body)
                 checkPublicResponseStatus(resp)
                 body
             }
@@ -909,7 +964,7 @@ object SchaleEngine {
                 applySessionAuth()
             }.executeSafely { resp ->
                 val body = resp.bodyAsText()
-                if (resp.status.value == 403) throw forbiddenReason()
+                if (resp.status.value == 403) throw forbiddenReason(stage, url, body)
                 if (!resp.status.isSuccess()) {
                     throw SchaleTechnicalException(
                         stage = stage,
