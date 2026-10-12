@@ -513,7 +513,9 @@ data class ClearanceMintResult(
     /** The auth server limits verifications per connection, so a 429 means "try again shortly". */
     val isRateLimited: Boolean
         get() = httpStatus == 429
-}    /**
+}
+
+    /**
      * Exchanges a solved captcha for a clearance, exactly the way the site does:
      * `POST auth.schale.network/clearance` with the captcha answer as bearer credential, which
      * answers 201 with the token in its body.
