@@ -33,6 +33,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 
 class SchaleTechnicalException(
@@ -99,6 +101,22 @@ data class SchaleImageUrls(
 private const val TAG = "SchaleEngine"
 private const val PAGE_SIZE = 40
 private const val MAX_ATTEMPTS = 3
+
+/** How long the site's tag list (GET /books/tags, which returns every tag at once) is reused. */
+private const val TAG_CACHE_TTL_MS = 6 * 60 * 60 * 1000L
+
+/** How many tag suggestions one keystroke is answered with. */
+private const val MAX_TAG_SUGGESTIONS = 50
+
+/**
+ * The namespaces the site's query language accepts, in the order a search box should offer them.
+ * `title` is not a tag namespace and `circle` is this app's alias for the site's `group`, so neither
+ * belongs in the list.
+ */
+private val SUGGESTED_NAMESPACES = listOf(
+    "tag", "artist", "group", "parody", "character", "cosplayer", "uploader", "male", "female",
+    "mixed", "language", "other", "reclass",
+)
 
 /** Rotate the session a little before its `expr` deadline instead of waiting for the first 403. */
 private const val SESSION_REFRESH_MARGIN_MS = 10 * 60 * 1000L
@@ -223,14 +241,17 @@ private fun normalizeTermBody(body: String): String {
     // A quoted phrase is what the app sends for an exact-title search (the detail screen's "similar"
     // button). The bare form is not valid for the API, so it always becomes a `title:` term.
     if (body.length > 2 && body.startsWith('"') && body.endsWith('"')) {
-        return "title:${anchorTerm(body.substring(1, body.length - 1))}"
+        return "title:${anchorTerm(body.substring(1, body.length - 1).trim('^', '$'))}"
     }
     val colon = body.indexOf(':')
-    // Plain text stays as typed: the server then matches it loosely against tag names.
-    if (colon <= 0) return body
+    // Plain text stays as typed: the server then matches it loosely against tag names. The `^…$`
+    // markers only earn their keep on a tag name, so drop them here instead of sending them on.
+    if (colon <= 0) return body.trim('^', '$')
     val prefix = body.substring(0, colon).lowercase()
-    // The app's own search box writes values pre-quoted (`uploader:"name"`), so unwrap first.
-    val value = body.substring(colon + 1).removeSurrounding("\"")
+    // The app's own search box writes values pre-quoted (`uploader:"name"`) and pre-anchored
+    // (`tag:ahegao$`, the exact-match form the EH search box uses), so unwrap both: the value is
+    // anchored exactly once below, and a second pair of anchors matches no tag at all.
+    val value = body.substring(colon + 1).removeSurrounding("\"").trim('^', '$')
     if (value.isBlank()) return body
     if (prefix !in SCHALE_NAMESPACES) {
         return "tag:${anchorTerm(value)}"
@@ -434,11 +455,32 @@ object SchaleEngine {
     suspend fun searchSchale(keyword: String, page: Int = 1, sort: Int? = null): GalleryListResult = fetchBooks(buildBooksUrl(page = page, keyword = keyword, sort = sort), "GET books search (page=$page)")
 
     /**
-     * Every tag the site knows, with the number of galleries carrying it (GET /books/tags). The
-     * filter screen offers these instead of a free-text box, so a filter can only be built out of
-     * terms the site is able to match. The endpoint does not paginate.
+     * Every tag the site knows, with the number of galleries carrying it (GET /books/tags), cached
+     * for [TAG_CACHE_TTL_MS]. The endpoint answers with the whole list at once and does not paginate,
+     * so neither a screen opening nor a user typing should pay for it. A failed refresh keeps
+     * serving the cached list; only a failure with nothing cached is thrown.
      */
-    suspend fun getSchaleTags(): List<SchaleTagInfo> = withRetries("GET books/tags") {
+    suspend fun getSchaleTags(force: Boolean = false): List<SchaleTagInfo> = tagCacheLock.withLock {
+        val cached = cachedSiteTags
+        if (cached != null && !force && System.currentTimeMillis() - siteTagsFetchedAt < TAG_CACHE_TTL_MS) {
+            return@withLock cached
+        }
+        val fetched = runCatching { fetchSchaleTags() }.getOrNull()
+        when {
+            fetched != null -> {
+                cachedSiteTags = fetched
+                siteTagsFetchedAt = System.currentTimeMillis()
+                fetched
+            }
+            cached != null -> {
+                logcat(TAG) { "GET books/tags failed, keeping the cached ${cached.size} tags" }
+                cached
+            }
+            else -> throw IOException("No se pudo leer la lista de etiquetas de Schale Network")
+        }
+    }
+
+    private suspend fun fetchSchaleTags(): List<SchaleTagInfo> = withRetries("GET books/tags") {
         ehRequest("https://$SCHALE_API_HOST/books/tags", EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
             header(HttpHeaders.Accept, "*/*")
         }.executeSafely { resp ->
@@ -446,6 +488,53 @@ object SchaleEngine {
             resp.bodyAsText()
         }
     }.parseAs()
+
+    /**
+     * What the search box offers while the user types, answered from the site's own tag list: only
+     * terms this site can match, which is exactly what the EH translation database the app uses on
+     * the other site cannot promise. A term comes out as the search box writes them (`tag:ahegao`,
+     * `female:ahegao`), or as a bare namespace (`artist:`) when the text is heading for one.
+     *
+     * The list is a cache miss away from the network, so a failure simply leaves the box with the
+     * history and gallery-link suggestions it already has.
+     */
+    suspend fun suggestedTags(rawKeyword: String): List<TagSuggestion> {
+        val keyword = rawKeyword.removePrefix("-").trim().lowercase()
+        if (keyword.isEmpty()) return emptyList()
+        val tags = runCatching { getSchaleTags() }.getOrNull().orEmpty()
+        if (tags.isEmpty()) return emptyList()
+        val colon = keyword.indexOf(':')
+        val namespace = if (colon >= 0) keyword.take(colon) else ""
+        val value = (if (colon >= 0) keyword.substring(colon + 1) else keyword).trim()
+        // `circle` is this app's name for the site's `group`; any other prefix is matched as typed.
+        val wanted = if (namespace == "circle") "group" else namespace
+        // A namespace the site does not know can match nothing, so stay silent rather than offer
+        // terms that would come back empty.
+        if (wanted.isNotEmpty() && wanted !in SCHALE_NAMESPACES) return emptyList()
+        // A plain `tag:` term matches the name in every namespace, so its count is the sum of them.
+        val countsByName = tags.groupingBy { it.name }.fold(0) { total, tag -> total + tag.count }
+        val suggestions = ArrayList<TagSuggestion>()
+        if (namespace.isEmpty()) {
+            SUGGESTED_NAMESPACES.filter { it.startsWith(value) && it != value }
+                .forEach { suggestions += TagSuggestion("$it:", null, 0f, 0) }
+        }
+        tags.forEach { tag ->
+            val term = tagTerm(tag.namespace, tag.name)
+            val prefix = term.substringBefore(':')
+            if (wanted.isNotEmpty() && prefix != wanted) return@forEach
+            if (value.isNotEmpty() && !tag.name.contains(value, ignoreCase = true)) return@forEach
+            // A name starting with what was typed is a better lead than one merely containing it;
+            // with nothing typed yet the most used tags of the namespace come first.
+            val score = when {
+                value.isEmpty() -> 0f
+                tag.name.startsWith(value, ignoreCase = true) -> tag.name.length.toFloat()
+                else -> tag.name.length * 2f
+            }
+            val count = if (prefix == "tag") countsByName[tag.name] ?: tag.count else tag.count
+            suggestions += TagSuggestion(term, "$count galerías", score, count)
+        }
+        return suggestions.sortedWith(compareBy({ it.score }, { -it.count })).take(MAX_TAG_SUGGESTIONS)
+    }
 
     suspend fun addFavorite(gid: Long, token: String) = mutateFavorite(gid, token, add = true)
 
@@ -1096,6 +1185,16 @@ object SchaleEngine {
             throw IOException("Schale API error: ${resp.status.value} ${resp.status.description}")
         }
     }
+
+    /**
+     * A tag the search box can offer: the term it inserts, the text it shows beside it, and how well
+     * it matched (smaller is better, like the EH suggestions; `count` breaks a tie).
+     */
+    data class TagSuggestion(val tag: String, val hint: String?, val score: Float, val count: Int)
+
+    private val tagCacheLock = Mutex()
+    private var cachedSiteTags: List<SchaleTagInfo>? = null
+    private var siteTagsFetchedAt = 0L
 
     // ---------- Tag filters ----------
 

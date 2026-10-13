@@ -75,6 +75,8 @@ import com.ehviewer.core.ui.util.thenIf
 import com.hippo.ehviewer.EhApplication.Companion.searchDatabase
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhTagDatabase
+import com.hippo.ehviewer.client.EhUtils
+import com.hippo.ehviewer.client.schale.SchaleEngine
 import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.ui.LocalNavDrawerState
 import com.hippo.ehviewer.ui.destinations.ImageSearchScreenDestination
@@ -167,8 +169,15 @@ fun SearchBarScreen(
             val index = if (localSearch) query.lastIndexOf(' ') else query.lastIndexOfAny(TagTerminators)
             val keyword = query.substring(index + 1).trimStart()
             if (keyword.isNotEmpty()) {
-                EhTagDatabase.suggestion(keyword, Settings.showTagTranslations.value).take(50)
-                    .forEach { emit(TagSuggestion(it.hint, it.tag)) }
+                // Schale Network keeps its own tag set and translates nothing, so its suggestions are
+                // built from the site's own tags; anywhere else the EH tag database answers.
+                val tags = if (EhUtils.isSchaleNetwork) {
+                    SchaleEngine.suggestedTags(keyword).map { TagSuggestion(it.hint, it.tag) }
+                } else {
+                    EhTagDatabase.suggestion(keyword, Settings.showTagTranslations.value)
+                        .map { TagSuggestion(it.hint, it.tag) }
+                }
+                tags.take(50).forEach { emit(it) }
             }
         }
     }
