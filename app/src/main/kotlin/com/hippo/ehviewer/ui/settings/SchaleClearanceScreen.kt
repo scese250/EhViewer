@@ -21,6 +21,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -34,6 +35,7 @@ import com.google.accompanist.web.WebView
 import com.google.accompanist.web.rememberWebViewState
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhUrl
+import com.hippo.ehviewer.client.schale.SchaleEngine
 import com.hippo.ehviewer.ktor.CHROME_MOBILE_USER_AGENT
 import com.hippo.ehviewer.ui.MainActivity
 import com.hippo.ehviewer.ui.Screen
@@ -44,6 +46,7 @@ import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import moe.tarsin.tip
 
 private const val POLL_INTERVAL_MS = 500L
@@ -248,6 +251,11 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
     // browser never shows the captcha again just because you open a new tab.
     val existingToken = remember { normalizeClearanceToken(Settings.schaleClearanceToken.value) }
     var showWebView by remember { mutableStateOf(existingToken == null) }
+    // A stored token is not a working token: only the server can say whether it still counts, so the
+    // screen reports that verdict instead of asserting that the verification is active.
+    var checking by remember { mutableStateOf(false) }
+    var checkResult by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     Scaffold(
         topBar = {
@@ -267,18 +275,49 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
                     .padding(horizontal = 16.dp, vertical = 24.dp),
             ) {
                 Text(
-                    text = "✓ Verificación guardada",
+                    text = "Verificación guardada",
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
-                    text = "Tu verificación de Schale Network está activa (longitud del token: ${existingToken!!.length} caracteres). " +
-                        "No necesitas resolver el captcha de nuevo a menos que el lector te diga que la verificación expiró.",
+                    text = "La app guarda un token de Schale Network (${existingToken!!.length} caracteres). Guardado no es lo mismo que aceptado: " +
+                        "sólo el servidor decide si sigue valiendo, y esa respuesta es la que explica que el lector vuelva a pedir verificación " +
+                        "cuando ya habías resuelto el captcha.",
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(top = 8.dp),
                 )
                 TextButton(
-                    onClick = { navigator.popBackStack() },
+                    onClick = {
+                        if (!checking) {
+                            checking = true
+                            checkResult = null
+                            scope.launch {
+                                val status = SchaleEngine.validateClearanceToken(existingToken!!)
+                                checkResult = when (status) {
+                                    200 -> "El servidor de auth acepta el token guardado."
+                                    null -> "No hubo respuesta del servidor de auth (conexión)."
+                                    else -> "El servidor de auth respondió HTTP $status a la comprobación. " +
+                                        "Si es 403 con el token que el sitio sí acepta, el servidor está rechazando las peticiones de la app: " +
+                                        "míralo en Configuración > EH > Diagnóstico de Schale."
+                                }
+                                checking = false
+                            }
+                        }
+                    },
+                    enabled = !checking,
                     modifier = Modifier.padding(top = 16.dp),
+                ) {
+                    Text(text = if (checking) "Comprobando…" else "Comprobar contra el servidor")
+                }
+                checkResult?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+                TextButton(
+                    onClick = { navigator.popBackStack() },
+                    modifier = Modifier.padding(top = 8.dp),
                 ) {
                     Text(text = "Volver")
                 }

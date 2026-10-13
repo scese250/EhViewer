@@ -11,12 +11,14 @@ import com.ehviewer.core.model.TagNamespace
 import com.ehviewer.core.model.V1GalleryPreview
 import com.ehviewer.core.model.VoteStatus
 import com.ehviewer.core.util.logcat
+import com.hippo.ehviewer.EhApplication.Companion.ktorClient
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.client.ehRequest
 import com.hippo.ehviewer.client.executeSafely
 import com.hippo.ehviewer.client.parseAs
 import com.hippo.ehviewer.client.parser.GalleryListResult
+import com.hippo.ehviewer.ktor.currentUserAgent
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.header
 import io.ktor.client.statement.HttpResponse
@@ -689,8 +691,61 @@ object SchaleEngine {
     }
 
     /**
-     * Full diagnostic: auth check, public list, protected detail POST and image data GET.
-     * Reports the whole reader pipeline so a failure can be pinpointed in one run.
+     * What one diagnostic request saw. The headers matter as much as the status: an answer with no body
+     * and no `cf-mitigated` is the server's own rejection of the token, while a challenge page is the
+     * edge rejecting the client itself — two different problems that used to look identical here.
+     */
+    private data class Probe(
+        val status: Int?,
+        val server: String?,
+        val cfMitigated: String?,
+        val cfRay: String?,
+        val body: String?,
+        val error: String? = null,
+    ) {
+        /** No answer at all counts as a failure, so a nullable status can still be tested. */
+        val isSuccess: Boolean get() = (status ?: 0) in 200..299
+
+        fun report(): String = buildString {
+            append("HTTP ${status ?: "sin respuesta"}")
+            server?.let { append(" · server=$it") }
+            cfMitigated?.let { append(" · cf-mitigated=$it") }
+            cfRay?.let { append(" · cf-ray=$it") }
+            if (error != null) append(" · ${error.take(160)}")
+            appendLine()
+            val text = body?.trim()
+            if (text.isNullOrEmpty()) {
+                appendLine("Cuerpo: (vacío)")
+            } else {
+                appendLine("Cuerpo: ${text.take(200).replace('\n', ' ')}")
+            }
+        }
+    }
+
+    private suspend fun probe(url: String, httpMethod: HttpMethod, bearer: String? = null): Probe = try {
+        ehRequest(url, EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
+            method = httpMethod
+            header(HttpHeaders.Accept, "*/*")
+            bearer?.let { header(HttpHeaders.Authorization, "Bearer $it") }
+        }.executeSafely { resp ->
+            Probe(
+                status = resp.status.value,
+                server = resp.headers["Server"],
+                cfMitigated = resp.headers["cf-mitigated"],
+                cfRay = resp.headers["cf-ray"],
+                body = resp.bodyAsText(),
+            )
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Throwable) {
+        Probe(status = null, server = null, cfMitigated = null, cfRay = null, body = null, error = "${e::class.simpleName}: ${e.message}")
+    }
+
+    /**
+     * Full diagnostic: one tokenless request, then auth check, public list, protected detail POST and
+     * image data GET. Every answer is reported with the headers that tell an edge block apart from the
+     * server's own refusal, so one run pins the failure down.
      */
     suspend fun testToken(token: String?): String {
         val credential = normalizeClearanceToken(token)
@@ -699,81 +754,80 @@ object SchaleEngine {
         }
         val report = StringBuilder()
         report.appendLine("[Diagnóstico Schale Network]")
-        report.appendLine("Token (len=${credential.length}): ${credential.take(12)}…")
-        report.appendLine("User-Agent: móvil (Chrome del WebView)\n")
+        report.appendLine("Motor HTTP: ${ktorClient.engine::class.simpleName}")
+        report.appendLine("User-Agent: $currentUserAgent")
+        report.appendLine("Token (len=${credential.length}): ${credential.take(12)}…\n")
+
+        // Test 0: a request that carries no token at all. If this one is refused too, the server is
+        // rejecting the app's client and the clearance token is not what is in the way.
+        report.appendLine("--- 0. Sin token (GET /books) ---")
+        val publicProbe = probe(buildBooksUrl(page = 1, limit = 1), HttpMethod.Get)
+        report.append(publicProbe.report())
+        val clientBlocked = publicProbe.status != 200
+        report.appendLine(
+            if (clientBlocked) {
+                "Resultado: FALLÓ — una petición pública sin token también fue rechazada, así que el servidor está rechazando al cliente de la app."
+            } else {
+                "Resultado: ÉXITO (el servidor acepta a la app cuando no hay token)"
+            },
+        )
 
         // Test 1: Auth check
-        report.appendLine("--- 1. Servidor de Auth (${EhUrl.AUTH_SCHALE}/clearance) ---")
-        try {
-            val status = validateClearanceToken(credential)
-            report.appendLine("HTTP Status: ${status ?: "sin respuesta"}")
-            report.appendLine(if (status == 200) "Resultado: ÉXITO (Auth reconoció el token)" else "Resultado: FALLÓ")
-        } catch (e: Throwable) {
-            report.appendLine("Error al conectar con Auth: ${e::class.simpleName}: ${e.message}")
-        }
+        report.appendLine("\n--- 1. Servidor de Auth (${EhUrl.AUTH_SCHALE}/clearance) ---")
+        val authProbe = probe("${EhUrl.AUTH_SCHALE}/clearance", HttpMethod.Get, bearer = credential)
+        report.append(authProbe.report())
+        report.appendLine(if (authProbe.status == 200) "Resultado: ÉXITO (Auth reconoció el token)" else "Resultado: FALLÓ")
 
         // Test 2: Public list
         report.appendLine("\n--- 2. Lista pública (GET /books) ---")
         var galleryId = 27643L
         var galleryKey = "f65c885cfa75"
-        try {
-            val listText = ehRequest(buildBooksUrl(page = 1, limit = 1), EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE)
-                .executeSafely { resp ->
-                    checkPublicResponseStatus(resp)
-                    resp.bodyAsText()
-                }
-            val books = listText.parseAs<SchaleBooks>()
-            val first = books.entries.firstOrNull()
+        val listProbe = publicProbe
+        if (!clientBlocked) {
+            val books = runCatching { listProbe.body!!.parseAs<SchaleBooks>() }.getOrNull()
+            val first = books?.entries?.firstOrNull()
+            report.appendLine(books?.let { "ÉXITO — total=${it.total}" } ?: "FALLÓ — respuesta ilegible")
             if (first != null) {
                 galleryId = first.id.toLong()
                 galleryKey = first.key
-                report.appendLine("ÉXITO — total=${books.total}, primera: ${first.title}")
-            } else {
-                report.appendLine("FALLÓ — respuesta sin entradas")
+                report.appendLine("Galería de prueba: $galleryId/$galleryKey (${first.title.take(60)})")
             }
-        } catch (e: Throwable) {
-            report.appendLine("Error al conectar con la lista: ${e::class.simpleName}: ${e.message}")
+        } else {
+            report.appendLine("Omitido: la petición sin token ya falló.")
         }
-        report.appendLine("Galería de prueba: $galleryId/$galleryKey")
 
         // Test 3: Protected detail POST + Test 4: image data GET
         report.appendLine("\n--- 3. POST books/detail?crt= ---")
         var pageCount = -1
-        try {
-            val detailUrl = buildDetailUrlWithCrt(galleryId, galleryKey, credential)
-            val (detailStatus, detailBody) = fetchRaw(detailUrl, HttpMethod.Post)
-            report.appendLine("HTTP Status: $detailStatus")
-            if (detailStatus in 200..299) {
-                val data = detailBody.parseAs<SchaleMangaData>().data
-                val chosenQuality = PREFERRED_RESOLUTIONS.firstOrNull { it in data } ?: data.keys.firstOrNull()
-                val dataKey = chosenQuality?.let { data[it] }
-                report.appendLine("Calidades disponibles: ${data.keys.joinToString().ifBlank { "ninguna" }}")
-                if (chosenQuality == null || dataKey == null || dataKey.id == 0 || dataKey.key.isBlank()) {
-                    report.appendLine("FALLÓ — sin calidad utilizable")
-                } else {
-                    report.appendLine("Calidad elegida: $chosenQuality (id=${dataKey.id})")
-                    report.appendLine("\n--- 4. GET books/data ($chosenQuality) ---")
-                    val dataUrl = buildImageDataUrl(galleryId, galleryKey, dataKey.id, dataKey.key, chosenQuality, credential)
-                    val (dataStatus, dataBody) = fetchRaw(dataUrl, HttpMethod.Get)
-                    report.appendLine("HTTP Status: $dataStatus")
-                    if (dataStatus in 200..299) {
-                        val info = dataBody.parseAs<SchaleImagesInfo>()
-                        val base = info.base.trimEnd('/')
-                        pageCount = info.entries.size
-                        report.appendLine("Páginas: $pageCount")
-                        report.appendLine("Base: $base")
-                        report.appendLine("Fallback: ${info.fallback ?: "no"}")
-                        report.appendLine("Primera: ${firstPageUrl(base, info.entries.firstOrNull()?.path, chosenQuality)}")
-                        report.appendLine("Última: ${firstPageUrl(base, info.entries.lastOrNull()?.path, chosenQuality)}")
-                    } else {
-                        report.appendLine("Cuerpo: ${dataBody.take(300)}")
-                    }
-                }
+        val detailUrl = buildDetailUrlWithCrt(galleryId, galleryKey, credential)
+        val detailProbe = probe(detailUrl, HttpMethod.Post, bearer = sessionToken())
+        report.append(detailProbe.report())
+        val data = runCatching { detailProbe.body!!.parseAs<SchaleMangaData>().data }.getOrNull()
+        if (detailProbe.isSuccess && data != null) {
+            val chosenQuality = PREFERRED_RESOLUTIONS.firstOrNull { it in data } ?: data.keys.firstOrNull()
+            val dataKey = chosenQuality?.let { data[it] }
+            report.appendLine("Calidades disponibles: ${data.keys.joinToString().ifBlank { "ninguna" }}")
+            if (chosenQuality == null || dataKey == null || dataKey.id == 0 || dataKey.key.isBlank()) {
+                report.appendLine("FALLÓ — sin calidad utilizable")
             } else {
-                report.appendLine("Cuerpo: ${detailBody.take(300)}")
+                report.appendLine("Calidad elegida: $chosenQuality (id=${dataKey.id})")
+                report.appendLine("\n--- 4. GET books/data ($chosenQuality) ---")
+                val dataUrl = buildImageDataUrl(galleryId, galleryKey, dataKey.id, dataKey.key, chosenQuality, credential)
+                val dataProbe = probe(dataUrl, HttpMethod.Get, bearer = sessionToken())
+                report.append(dataProbe.report())
+                if (dataProbe.isSuccess) {
+                    val info = dataProbe.body!!.parseAs<SchaleImagesInfo>()
+                    val base = info.base.trimEnd('/')
+                    pageCount = info.entries.size
+                    report.appendLine("Páginas: $pageCount")
+                    report.appendLine("Base: $base")
+                    report.appendLine("Fallback: ${info.fallback ?: "no"}")
+                    report.appendLine("Primera: ${firstPageUrl(base, info.entries.firstOrNull()?.path, chosenQuality)}")
+                    report.appendLine("Última: ${firstPageUrl(base, info.entries.lastOrNull()?.path, chosenQuality)}")
+                }
             }
-        } catch (e: Throwable) {
-            report.appendLine("Error: ${e::class.simpleName}: ${e.message}")
+        } else if (!detailProbe.isSuccess) {
+            report.appendLine("Resultado: FALLÓ — el detalle protegido fue rechazado")
         }
 
         // Test 5: the account endpoint, which needs the session as well as the clearance.
@@ -783,18 +837,13 @@ object SchaleEngine {
             report.appendLine("Sin sesión guardada: los favoritos no se pueden probar.")
         } else {
             report.appendLine("Sesión: ${session.length} caracteres")
-            try {
-                val url = buildFavoritesUrl(page = 1, keyword = null, sort = null, crt = credential)
-                val (favoriteStatus, favoriteBody) = fetchRaw(url, HttpMethod.Get, bearer = session)
-                report.appendLine("HTTP Status: $favoriteStatus")
-                report.appendLine("Cuerpo: ${favoriteBody.take(240).ifBlank { "(vacío)" }}")
-                report.appendLine(if (favoriteStatus == 200) "Resultado: ÉXITO" else "Resultado: FALLÓ")
-                if (favoriteStatus == 403) {
-                    report.appendLine("Sesión en auth /check: ${if (probeSessionValid()) "válida" else "rechazada"}")
-                    report.appendLine("Verificación en auth /clearance: ${validateClearanceToken(credential) ?: "sin respuesta"}")
-                }
-            } catch (e: Throwable) {
-                report.appendLine("Error: ${e::class.simpleName}: ${e.message}")
+            val url = buildFavoritesUrl(page = 1, keyword = null, sort = null, crt = credential)
+            val favoriteProbe = probe(url, HttpMethod.Get, bearer = session)
+            report.append(favoriteProbe.report())
+            report.appendLine(if (favoriteProbe.status == 200) "Resultado: ÉXITO" else "Resultado: FALLÓ")
+            if (favoriteProbe.status == 403) {
+                report.appendLine("Sesión en auth /check: ${if (probeSessionValid()) "válida" else "rechazada"}")
+                report.appendLine("Verificación en auth /clearance: ${validateClearanceToken(credential) ?: "sin respuesta"}")
             }
         }
 
@@ -948,10 +997,11 @@ object SchaleEngine {
         if (status == 403) {
             val preview = body.take(200).ifBlank { "(sin cuerpo)" }
             return SchaleClearanceException(
-                "[Verificación expirada — HTTP 403]\n" +
-                    "El servidor rechazó el token de verificación guardado.\n" +
+                "[El servidor rechazó la petición — HTTP 403]\n" +
                     "Respuesta del servidor: $preview\n\n" +
-                    "Ve a Configuración > EH > Verificación de Schale Network y resuelve el captcha de nuevo.",
+                    "Culpable puede ser el token de verificación guardado o que el servidor esté rechazando a la app, y no se " +
+                    "distinguen desde aquí. Configuración > EH > Verificación de Schale Network: «Comprobar contra el servidor» " +
+                    "lo dice, y el diagnóstico de esa pantalla avisa si también falla una petición sin token.",
             )
         }
         return SchaleTechnicalException(
@@ -1026,9 +1076,10 @@ object SchaleEngine {
     )
 
     private fun clearanceRequired() = SchaleClearanceException(
-        "[Verificación requerida]\nSchale Network rechazó el token de verificación (HTTP 403).\n" +
-            "Ve a Configuración > EH > Verificación de Schale Network y resuelve el captcha para renovarlo \n" +
-            "desde la conexión con la que vas a leer: la verificación queda atada a ella.",
+        "[Verificación requerida]\nEl token de verificación de Schale Network no está guardado o no es utilizable.\n" +
+            "Ve a Configuración > EH > Verificación de Schale Network y resuelve el captcha.\n" +
+            "Si allí el sitio no te pide captcha porque ya te da por verificado, usa «Comprobar contra el servidor» y el " +
+            "diagnóstico de esa pantalla para ver qué respondió el servidor.",
     )
 
     /**
@@ -1046,11 +1097,13 @@ object SchaleEngine {
         // clearance expiry (the server validates it server-side). Show what the API said.
         val preview = body.take(200).ifBlank { "(sin cuerpo)" }
         return SchaleClearanceException(
-            "[Verificación expirada — HTTP 403]\n" +
-                "El servidor rechazó la verificación o la sesión guardada.\n" +
+            "[El servidor rechazó la petición — HTTP 403]\n" +
+                "Hay sesión y token guardados, así que el servidor puede estar rechazando la verificación, la sesión o a la " +
+                "app entera.\n" +
                 "Respuesta del servidor: $preview\n\n" +
-                "Ve a Configuración > EH > Verificación de Schale Network y resuelve el captcha de nuevo.\n" +
-                "Si el problema persiste, cierra sesión y vuelve a iniciarla.",
+                "Configuración > EH > Verificación de Schale Network: «Comprobar contra el servidor» y el diagnóstico de esa " +
+                "pantalla dicen cuál. Si el diagnóstico falla incluso sin token, vuelve a verificar o cambia de red; si sólo " +
+                "falla esto, cierra sesión y vuelve a iniciarla.",
         )
     }
 
