@@ -295,9 +295,10 @@ fun AnimatedVisibilityScope.SchaleClearanceScreen(navigator: DestinationsNavigat
                                 checkResult = when (status) {
                                     200 -> "El servidor de auth acepta el token guardado."
                                     null -> "No hubo respuesta del servidor de auth (conexión)."
-                                    else -> "El servidor de auth respondió HTTP $status a la comprobación. " +
-                                        "Si es 403 con el token que el sitio sí acepta, el servidor está rechazando las peticiones de la app: " +
-                                        "míralo en Configuración > EH > Diagnóstico de Schale."
+                                    else ->
+                                        "El servidor de auth respondió HTTP $status a la comprobación. " +
+                                            "Si es 403 con el token que el sitio sí acepta, el servidor está rechazando las peticiones de la app: " +
+                                            "míralo en Configuración > EH > Diagnóstico de Schale."
                                 }
                                 checking = false
                             }
