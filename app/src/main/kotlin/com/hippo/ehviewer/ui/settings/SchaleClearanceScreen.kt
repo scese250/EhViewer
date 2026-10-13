@@ -35,6 +35,7 @@ import com.google.accompanist.web.WebView
 import com.google.accompanist.web.rememberWebViewState
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhUrl
+import com.hippo.ehviewer.client.parseAs
 import com.hippo.ehviewer.client.schale.SchaleEngine
 import com.hippo.ehviewer.ktor.CHROME_MOBILE_USER_AGENT
 import com.hippo.ehviewer.ui.MainActivity
@@ -53,10 +54,10 @@ private const val POLL_INTERVAL_MS = 500L
 private const val SLOW_HINT_TICKS = 30
 
 /**
- * How long to wait for the site to mint and store its own clearance before we give up and
- * ask the user to try again. The site mints the clearance itself — we must NOT try to mint
- * with the same single-use Turnstile token or we will race the site's request and one of the
- * two POSTs will get a 401 (token already consumed).
+ * How long the site's own mint gets before the app tries with the same answer. The answer is
+ * single-use, so only one of the two POSTs can win: the site goes first and the app only mints
+ * when the site's attempt produced nothing (see [JS_OBSERVER_INJECTION], which captures the
+ * answer through every path the page offers).
  */
 private const val SITE_MINT_TIMEOUT_MS = 8_000L
 
@@ -65,9 +66,13 @@ private const val SITE_MINT_TIMEOUT_MS = 8_000L
  * - Keeps the Turnstile widget renderable on WebViews that report no outer size.
  * - Reports the clearance however the site produces it: the storage write, the `crt` of a call the
  *   server accepted, or the body of the site's own `POST auth.schale.network/clearance`.
- * - Reports the captcha answer and the widget id, so the app can mint the verification itself (the
- *   auth server rate limits it per connection, and the site only tries once) and ask for a fresh
- *   captcha when an answer expires.
+ * - Captures the captcha answer from every path that can see it — the `turnstile.render` callback
+ *   (wrapped by intercepting the `window.turnstile` assignment, before the site can call it), the
+ *   widget's own `getResponse`, the hidden input Turnstile writes, and the `Authorization` header
+ *   of the site's own POST. A timer cannot win the render race, and losing it left the screen stuck
+ *   with no answer and nothing to report.
+ * - Reports a compact page state on every poll, so a screen that looks frozen can say whether the
+ *   widget rendered, whether the captcha was solved and whether a clearance is stored.
  */
 private const val JS_OBSERVER_INJECTION = """
     (function () {
@@ -80,6 +85,41 @@ private const val JS_OBSERVER_INJECTION = """
             try {
                 const token = value === null || value === undefined ? '' : String(value).trim();
                 if (token.length >= 8 && window.SchaleBridge) window.SchaleBridge.onClearanceToken(token);
+            } catch (e) {}
+        }
+
+        // The answer Cloudflare's widget produced, captured through every path that can see it.
+        // The site renders the widget as soon as its script publishes `window.turnstile`, so the
+        // assignment itself is intercepted below: re-wrapping `render` on a timer loses that race,
+        // and losing it means the app never learns the answer at all.
+        function reportAnswer(answer) {
+            try {
+                const text = answer === null || answer === undefined ? '' : String(answer).trim();
+                if (!text || text === window.__schaleLastAnswer) return;
+                window.__schaleLastAnswer = text;
+                if (window.SchaleBridge) window.SchaleBridge.onCaptchaAnswer(text);
+            } catch (e) {}
+        }
+
+        function wrapTurnstile(turnstile) {
+            try {
+                if (!turnstile || typeof turnstile.render !== 'function' || turnstile.__schaleWrapped === true) return;
+                const originalRender = turnstile.render;
+                turnstile.render = function (element, options) {
+                    try {
+                        if (options && typeof options.callback === 'function') {
+                            const callback = options.callback;
+                            options.callback = function (answer) {
+                                try { reportAnswer(answer); } catch (e) {}
+                                return callback.apply(this, arguments);
+                            };
+                        }
+                    } catch (e) {}
+                    const widget = originalRender.apply(this, arguments);
+                    try { window.__schaleWidgetId = widget; } catch (e) {}
+                    return widget;
+                };
+                turnstile.__schaleWrapped = true;
             } catch (e) {}
         }
 
@@ -107,6 +147,22 @@ private const val JS_OBSERVER_INJECTION = """
         if (window.__schaleObserverInstalled !== true) {
             window.__schaleObserverInstalled = true;
 
+            // The site renders the widget in the same turn its loader resolves, so intercept the
+            // assignment that publishes `window.turnstile` instead of polling for the object: a
+            // timer cannot win that race, and losing it means we never see the captcha callback.
+            try {
+                const holder = { value: window.turnstile };
+                if (window.turnstile) wrapTurnstile(window.turnstile);
+                Object.defineProperty(window, 'turnstile', {
+                    configurable: true,
+                    get: function () { return holder.value; },
+                    set: function (value) {
+                        try { wrapTurnstile(value); } catch (e) {}
+                        holder.value = value;
+                    },
+                });
+            } catch (e) {}
+
             try {
                 const originalSetItem = Storage.prototype.setItem;
                 Storage.prototype.setItem = function (key, value) {
@@ -128,6 +184,14 @@ private const val JS_OBSERVER_INJECTION = """
                 XMLHttpRequest.prototype.send = function () {
                     try {
                         const url = this.__schaleUrl;
+                        // The site sends the single-use answer as `Authorization: Bearer <answer>`
+                        // on its own POST, so that header is a capture path that cannot be missed.
+                        if (isClearanceCall(url)) {
+                            try {
+                                const auth = this.getRequestHeader ? this.getRequestHeader('Authorization') : null;
+                                if (auth) reportAnswer(String(auth).replace(/^Bearer\s+/i, ''));
+                            } catch (e) {}
+                        }
                         this.addEventListener('load', function () {
                             try {
                                 if (isClearanceCall(url)) {
@@ -150,6 +214,15 @@ private const val JS_OBSERVER_INJECTION = """
                 if (typeof originalFetch === 'function') {
                     window.fetch = function (input, init) {
                         const url = typeof input === 'string' ? input : (input && input.url) || '';
+                        try {
+                            if (isClearanceCall(url) && init && init.headers) {
+                                const headers = init.headers;
+                                const raw = typeof headers.get === 'function'
+                                    ? headers.get('Authorization')
+                                    : headers.Authorization || headers.authorization;
+                                if (raw) reportAnswer(String(raw).replace(/^Bearer\s+/i, ''));
+                            }
+                        } catch (e) {}
                         const result = originalFetch.apply(this, arguments);
                         try {
                             result.then(function (response) {
@@ -170,39 +243,41 @@ private const val JS_OBSERVER_INJECTION = """
                     };
                 }
             } catch (e) {}
-
-            window.__schaleReadClearance = function () {
-                try {
-                    return window.localStorage.getItem('clearance') || '';
-                } catch (e) { return ''; }
-            };
         }
 
         var turnstileTries = 0;
-        (function wrapTurnstile() {
+        (function pollTurnstile() {
+            try { wrapTurnstile(window.turnstile); } catch (e) {}
+            // The assignment interception above covers the normal case; this fast poll is only the
+            // fallback for a page that publishes the object some other way.
+            if (++turnstileTries < 400) setTimeout(pollTurnstile, 50);
+        })();
+
+        // Turnstile also exposes the answer it produced and writes it into a hidden input, so
+        // neither of these depends on the site's own callback firing at all.
+        function answerFromWidget() {
             try {
-                if (window.turnstile && window.turnstile.render && window.turnstile.__schaleWrapped !== true) {
-                    const originalRender = window.turnstile.render;
-                    window.turnstile.render = function (element, options) {
-                        try {
-                            if (options && typeof options.callback === 'function') {
-                                const callback = options.callback;
-                                options.callback = function (answer) {
-                                    try {
-                                        if (window.SchaleBridge) window.SchaleBridge.onCaptchaAnswer(String(answer));
-                                    } catch (e) {}
-                                    return callback.apply(this, arguments);
-                                };
-                            }
-                        } catch (e) {}
-                        const widget = originalRender.apply(this, arguments);
-                        try { window.__schaleWidgetId = widget; } catch (e) {}
-                        return widget;
-                    };
-                    window.turnstile.__schaleWrapped = true;
+                if (window.turnstile && typeof window.turnstile.getResponse === 'function') {
+                    return window.turnstile.getResponse(window.__schaleWidgetId) || '';
                 }
             } catch (e) {}
-            if (++turnstileTries < 120) setTimeout(wrapTurnstile, 500);
+            return '';
+        }
+
+        function answerFromInput() {
+            try {
+                const input = document.querySelector('input[name="cf-turnstile-response"]');
+                return input && input.value ? input.value : '';
+            } catch (e) { return ''; }
+        }
+
+        var answerWatches = 0;
+        (function watchAnswer() {
+            try {
+                const answer = answerFromWidget() || answerFromInput();
+                if (answer) reportAnswer(answer);
+            } catch (e) {}
+            if (++answerWatches < 1800) setTimeout(watchAnswer, 400);
         })();
 
         window.__schaleFreshCaptcha = function () {
@@ -214,13 +289,32 @@ private const val JS_OBSERVER_INJECTION = """
             } catch (e) {}
             return false;
         };
+
+        // Everything the screen needs to say what is happening, in one poll: the stored clearance,
+        // the captcha answer, how many Cloudflare frames the page has and whether the Turnstile
+        // field exists. Fields are joined with the ASCII unit separator (31).
+        window.__schaleReadState = function () {
+            var clearance = '';
+            try { clearance = window.localStorage.getItem('clearance') || ''; } catch (e) {}
+            var answer = window.__schaleLastAnswer || answerFromWidget() || answerFromInput() || '';
+            if (answer) reportAnswer(answer);
+            var frames = 0;
+            try {
+                frames = document.querySelectorAll('iframe[src*="challenges.cloudflare.com"]').length;
+            } catch (e) {}
+            var field = 0;
+            try {
+                if (document.querySelector('input[name="cf-turnstile-response"]')) field = 1;
+            } catch (e) {}
+            return [clearance, answer, frames, field].join(String.fromCharCode(31));
+        };
     })();
 """
 
-private const val JS_READ_CLEARANCE = """
+private const val JS_READ_STATE = """
     (function () {
         try {
-            if (window.__schaleReadClearance) return window.__schaleReadClearance();
+            if (window.__schaleReadState) return window.__schaleReadState();
             return window.localStorage.getItem('clearance') || '';
         } catch (e) { return ''; }
     })();
@@ -249,6 +343,49 @@ private fun normalizeClearanceToken(raw: String?): String? {
     if (token.isNullOrEmpty()) return null
     if (token.equals("null", ignoreCase = true) || token.equals("undefined", ignoreCase = true) || token == "{}") return null
     return token
+}
+
+/**
+ * What the verification page reports on every poll: the clearance it has stored, the captcha answer
+ * it was given, how many Cloudflare frames it has and whether the Turnstile field exists at all. A
+ * screen that looks frozen can then say which of those it is waiting for.
+ */
+private data class PageState(val clearance: String?, val answer: String?, val frames: Int, val field: Boolean) {
+    fun describe(): String = buildString {
+        append("Estado: frames CF=")
+        append(frames)
+        append(" · campo Turnstile=")
+        append(if (field) "sí" else "no")
+        append(" · captcha=")
+        append(if (answer != null) "resuelta" else "pendiente")
+        append(" · clearance=")
+        append(if (clearance != null) "guardada" else "ninguna")
+    }
+}
+
+/** Field separator of the single string [JS_READ_STATE] returns: the ASCII unit separator. */
+private const val PAGE_STATE_SEPARATOR = '\u001f'
+
+/**
+ * Decodes what [JS_READ_STATE] returned. `evaluateJavascript` answers with the JSON encoding of the
+ * JS value, so the string is unwrapped from its quotes; a bare value (a page where the state reader
+ * is missing and only the clearance comes back) still yields a usable state.
+ */
+private fun parsePageState(raw: String?): PageState? {
+    val encoded = raw?.takeIf { it.isNotBlank() && it != "null" } ?: return null
+    val decoded = try {
+        encoded.parseAs<String>()
+    } catch (e: Throwable) {
+        encoded.removeSurrounding("\"")
+    }
+    val parts = decoded.split(PAGE_STATE_SEPARATOR)
+    if (parts.size < 4) return PageState(normalizeClearanceToken(decoded), null, 0, false)
+    return PageState(
+        clearance = normalizeClearanceToken(parts[0]),
+        answer = normalizeClearanceToken(parts[1]),
+        frames = parts[2].trim().toIntOrNull() ?: 0,
+        field = parts[3].trim() == "1",
+    )
 }
 
 class SchaleBridge(
@@ -394,6 +531,8 @@ private fun VerificationWebView(
     // own attempt produces nothing, and the outcome of every mint call the page made.
     var captchaAnswer by remember { mutableStateOf<String?>(null) }
     var mintReport by remember { mutableStateOf<String?>(null) }
+    // A one-line answer to "is this screen still doing anything?", refreshed by every poll.
+    var liveState by remember { mutableStateOf<String?>(null) }
     var statusText by remember {
         mutableStateOf(
             if (existingToken != null) {
@@ -410,25 +549,34 @@ private fun VerificationWebView(
         return true
     }
 
-    // Poll localStorage every 500 ms. The site's own JS mints and stores the clearance after
-    // Turnstile solves — we read what the site wrote. We must NOT POST the token ourselves:
-    // it is single-use and the site already uses it; a second POST gets HTTP 401.
+    // Poll the page every 500 ms for three things: the clearance the site stores, the captcha
+    // answer, and whether the widget rendered. The site's own JS mints and stores the clearance
+    // after Turnstile solves — we read what the site wrote. The answer is read here as well because
+    // it can arrive through any of the page-side capture paths; the app only mints with it when the
+    // site's own POST produced nothing (the answer is single-use).
     LaunchedEffect(Unit) {
         var ticks = 0
         while (isActive) {
             delay(POLL_INTERVAL_MS)
             if (captured != null) break
             ticks++
-            if (ticks == SLOW_HINT_TICKS) {
+            if (ticks == SLOW_HINT_TICKS && captchaAnswer == null) {
                 statusText = "Resuelve el captcha de la página para continuar."
             }
             val webView = state.webView ?: continue
-            webView.evaluateJavascript(JS_READ_CLEARANCE) { result ->
+            webView.evaluateJavascript(JS_READ_STATE) { result ->
+                val page = parsePageState(result) ?: return@evaluateJavascript
+                liveState = page.describe()
                 // Only accept a token that differs from the one already stored, so that simply
                 // loading the page (which echoes back the injected token) doesn't trigger a
                 // redundant save when the user is just re-checking a still-valid token.
-                val token = normalizeClearanceToken(result) ?: return@evaluateJavascript
-                if (token != existingToken) acceptToken(token)
+                val token = page.clearance
+                if (token != null && token != existingToken) acceptToken(token)
+                val answer = page.answer
+                if (answer != null && answer != captchaAnswer) {
+                    captchaAnswer = answer
+                    captchaSeq++
+                }
             }
         }
     }
@@ -556,7 +704,7 @@ private fun VerificationWebView(
                                 // Keep the answer and start the clock; the site POSTs it first, and
                                 // the app only mints with it if the site's own attempt comes to
                                 // nothing (a second use of a spent answer is refused by the server).
-                                if (!answer.isNullOrBlank()) {
+                                if (!answer.isNullOrBlank() && answer != captchaAnswer) {
                                     captchaAnswer = answer
                                     captchaSeq++
                                 }
@@ -584,6 +732,13 @@ private fun VerificationWebView(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
         )
         mintReport?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+        }
+        liveState?.let {
             Text(
                 text = it,
                 style = MaterialTheme.typography.bodySmall,
