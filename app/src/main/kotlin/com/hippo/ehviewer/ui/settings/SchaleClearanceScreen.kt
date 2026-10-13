@@ -58,7 +58,7 @@ private const val SLOW_HINT_TICKS = 30
  * with the same single-use Turnstile token or we will race the site's request and one of the
  * two POSTs will get a 401 (token already consumed).
  */
-private const val SITE_MINT_TIMEOUT_MS = 15_000L
+private const val SITE_MINT_TIMEOUT_MS = 8_000L
 
 /**
  * Injected on every main-frame page load.
@@ -80,6 +80,16 @@ private const val JS_OBSERVER_INJECTION = """
             try {
                 const token = value === null || value === undefined ? '' : String(value).trim();
                 if (token.length >= 8 && window.SchaleBridge) window.SchaleBridge.onClearanceToken(token);
+            } catch (e) {}
+        }
+
+        // The mint endpoint answers 201 with the clearance, but the site only stores what a 201
+        // gave it and hides its captcha modal whether or not that succeeded, so a refused mint is
+        // invisible. Report every answer so the app can say what the server actually replied.
+        function reportClearanceCall(method, status, body) {
+            try {
+                const text = body === null || body === undefined ? '' : String(body);
+                if (window.SchaleBridge) window.SchaleBridge.onClearanceCall(String(method || ''), String(status), text.slice(0, 400));
             } catch (e) {}
         }
 
@@ -108,7 +118,10 @@ private const val JS_OBSERVER_INJECTION = """
             try {
                 const originalOpen = XMLHttpRequest.prototype.open;
                 XMLHttpRequest.prototype.open = function (method, url) {
-                    try { this.__schaleUrl = url; } catch (e) {}
+                    try {
+                        this.__schaleUrl = url;
+                        this.__schaleMethod = method;
+                    } catch (e) {}
                     return originalOpen.apply(this, arguments);
                 };
                 const originalSend = XMLHttpRequest.prototype.send;
@@ -117,8 +130,14 @@ private const val JS_OBSERVER_INJECTION = """
                         const url = this.__schaleUrl;
                         this.addEventListener('load', function () {
                             try {
-                                if (isClearanceCall(url) && this.status === 201) report(this.responseText);
-                                else if (this.status >= 200 && this.status < 300) report(crtFrom(url));
+                                if (isClearanceCall(url)) {
+                                    // A 201 body IS the clearance, which is reported on its own path
+                                    // and must not be echoed into the status line.
+                                    reportClearanceCall(this.__schaleMethod, this.status, this.status === 201 ? '' : this.responseText);
+                                    if (this.status === 201) report(this.responseText);
+                                } else if (this.status >= 200 && this.status < 300) {
+                                    report(crtFrom(url));
+                                }
                             } catch (e) {}
                         });
                     } catch (e) {}
@@ -135,9 +154,13 @@ private const val JS_OBSERVER_INJECTION = """
                         try {
                             result.then(function (response) {
                                 try {
-                                    if (isClearanceCall(url) && response && response.status === 201) {
-                                        response.clone().text().then(report);
-                                    } else if (response && response.ok) {
+                                    if (!response) return;
+                                    if (isClearanceCall(url)) {
+                                        response.clone().text().then(function (text) {
+                                            reportClearanceCall(init && init.method, String(response.status), response.status === 201 ? '' : text);
+                                            if (response.status === 201) report(text);
+                                        });
+                                    } else if (response.ok) {
                                         report(crtFrom(url));
                                     }
                                 } catch (e) {}
@@ -231,6 +254,7 @@ private fun normalizeClearanceToken(raw: String?): String? {
 class SchaleBridge(
     private val onClearance: (String?) -> Unit,
     private val onCaptchaAnswer: (String?) -> Unit,
+    private val onClearanceCall: (String?, String?, String?) -> Unit,
 ) {
     @JavascriptInterface
     fun onClearanceToken(token: String?) {
@@ -240,6 +264,11 @@ class SchaleBridge(
     @JavascriptInterface
     fun onCaptchaAnswer(answer: String?) {
         onCaptchaAnswer(answer)
+    }
+
+    @JavascriptInterface
+    fun onClearanceCall(method: String?, status: String?, body: String?) {
+        onClearanceCall(method, status, body)
     }
 }
 
@@ -361,6 +390,10 @@ private fun VerificationWebView(
     val state = rememberWebViewState(url = EhUrl.HOST_SCHALE)
     var captured by remember { mutableStateOf<String?>(null) }
     var captchaSeq by remember { mutableStateOf(0) }
+    // The answer the page was given, kept so the app can mint the clearance itself when the site's
+    // own attempt produces nothing, and the outcome of every mint call the page made.
+    var captchaAnswer by remember { mutableStateOf<String?>(null) }
+    var mintReport by remember { mutableStateOf<String?>(null) }
     var statusText by remember {
         mutableStateOf(
             if (existingToken != null) {
@@ -401,7 +434,10 @@ private fun VerificationWebView(
     }
 
     // After the captcha is solved, give the site up to SITE_MINT_TIMEOUT_MS to write a NEW
-    // clearance to localStorage. If nothing new appears, its POST failed — reset the widget.
+    // clearance to localStorage. When nothing new appears, its own POST did not produce one — the
+    // site hides that: it stores only what a 201 returned and closes the modal either way. Mint
+    // with the same single-use answer here instead, over the app's own connection, and report the
+    // answer so the reason is visible instead of silent.
     LaunchedEffect(captchaSeq) {
         if (captchaSeq == 0) return@LaunchedEffect
         statusText = "Captcha resuelto. Esperando que el sitio complete la verificación…"
@@ -410,10 +446,37 @@ private fun VerificationWebView(
             delay(POLL_INTERVAL_MS)
             waited += POLL_INTERVAL_MS
         }
-        if (captured == null && isActive) {
-            statusText = "El sitio no pudo completar la verificación. Resuelve el captcha de nuevo."
-            state.webView?.evaluateJavascript(JS_FRESH_CAPTCHA, null)
+        if (captured != null || !isActive) return@LaunchedEffect
+        val answer = captchaAnswer
+        if (answer != null) {
+            statusText = "El sitio no completó la verificación; probando desde la app…"
+            val result = SchaleEngine.mintClearance(answer)
+            mintReport = buildString {
+                append("Mint desde la app: POST /clearance → HTTP ${result.httpStatus ?: "sin respuesta"}")
+                result.retryAfterSeconds?.let { append(" (Retry-After ${it}s)") }
+                // Only a failed mint has a body worth showing; a successful one is the clearance.
+                if (result.token == null) {
+                    result.body?.trim()?.takeIf { it.isNotEmpty() }?.let { append(" · ${it.take(200)}") }
+                }
+            }
+            val minted = result.token
+            if (minted != null) {
+                // Hand it to the site as well: its own reader waits for a clearance forever when
+                // localStorage has none, which is why the reader never loads inside the WebView.
+                state.webView?.evaluateJavascript(jsSeedClearance(minted), null)
+                acceptToken(minted)
+                return@LaunchedEffect
+            }
+            if (result.isRateLimited) {
+                // Asking for another captcha here would burn another attempt against the same cap.
+                statusText = "El servidor de verificación está limitando los intentos desde esta conexión" +
+                    (result.retryAfterSeconds?.let { " (espera ${it}s)" } ?: "") +
+                    ". Espera un poco antes de volver a intentarlo."
+                return@LaunchedEffect
+            }
         }
+        statusText = "No se pudo completar la verificación ni desde el sitio ni desde la app. Resuelve el captcha otra vez."
+        state.webView?.evaluateJavascript(JS_FRESH_CAPTCHA, null)
     }
 
     LaunchedEffect(captured) {
@@ -490,9 +553,21 @@ private fun VerificationWebView(
                         onClearance = { token -> webView.post { acceptToken(token) } },
                         onCaptchaAnswer = { answer ->
                             webView.post {
-                                // We do not call mintClearance — the site POSTs the single-use
-                                // Turnstile token itself. We just start the timeout clock.
-                                if (!answer.isNullOrBlank()) captchaSeq++
+                                // Keep the answer and start the clock; the site POSTs it first, and
+                                // the app only mints with it if the site's own attempt comes to
+                                // nothing (a second use of a spent answer is refused by the server).
+                                if (!answer.isNullOrBlank()) {
+                                    captchaAnswer = answer
+                                    captchaSeq++
+                                }
+                            }
+                        },
+                        onClearanceCall = { method, status, body ->
+                            webView.post {
+                                mintReport = buildString {
+                                    append("El sitio llamó a /clearance: ${method ?: "?"} → HTTP ${status ?: "?"}")
+                                    body?.trim()?.takeIf { it.isNotEmpty() }?.let { append(" · ${it.take(200)}") }
+                                }
                             }
                         },
                     ),
@@ -508,6 +583,13 @@ private fun VerificationWebView(
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
         )
+        mintReport?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+        }
         TextButton(
             onClick = { state.webView?.evaluateJavascript(JS_RELOAD_PAGE, null) },
             modifier = Modifier.padding(start = 8.dp, bottom = 8.dp),

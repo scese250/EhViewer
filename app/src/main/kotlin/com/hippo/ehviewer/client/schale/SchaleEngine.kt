@@ -19,6 +19,7 @@ import com.hippo.ehviewer.client.executeSafely
 import com.hippo.ehviewer.client.parseAs
 import com.hippo.ehviewer.client.parser.GalleryListResult
 import com.hippo.ehviewer.ktor.currentUserAgent
+import com.hippo.ehviewer.ktor.isCronetAvailable
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.header
 import io.ktor.client.statement.HttpResponse
@@ -285,6 +286,8 @@ data class ClearanceMintResult(
     val token: String?,
     val httpStatus: Int?,
     val retryAfterSeconds: Int?,
+    /** What the mint endpoint answered, so a refusal can be shown instead of guessed at. */
+    val body: String? = null,
 ) {
     /** The auth server limits verifications per connection, so a 429 means "try again shortly". */
     val isRateLimited: Boolean
@@ -668,16 +671,16 @@ object SchaleEngine {
             if (status == 201 && token != null && isValidClearanceToken(token)) {
                 Settings.schaleClearanceToken.value = token
                 logcat(TAG) { "clearance minted from the captcha answer (len=${token.length})" }
-                ClearanceMintResult(token, status, retryAfter)
+                ClearanceMintResult(token, status, retryAfter, body)
             } else {
                 logcat(TAG) { "clearance mint failed (HTTP ${status ?: "sin respuesta"}): ${body.take(160)}" }
-                ClearanceMintResult(null, status, retryAfter)
+                ClearanceMintResult(null, status, retryAfter, body)
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             logcat(TAG) { "clearance mint failed: ${e.message}" }
-            ClearanceMintResult(null, null, null)
+            ClearanceMintResult(null, null, null, "${e::class.simpleName}: ${e.message}")
         }
     }
 
@@ -754,7 +757,8 @@ object SchaleEngine {
         }
         val report = StringBuilder()
         report.appendLine("[Diagnóstico Schale Network]")
-        report.appendLine("Motor HTTP: ${ktorClient.engine::class.simpleName}")
+        val engine = if (isCronetAvailable && Settings.enableCronet.value) "Cronet (Chromium)" else "OkHttp"
+        report.appendLine("Motor HTTP: $engine (${ktorClient.engine::class.simpleName})")
         report.appendLine("User-Agent: $currentUserAgent")
         report.appendLine("Token (len=${credential.length}): ${credential.take(12)}…\n")
 
