@@ -65,9 +65,9 @@ private val UserAgent = createClientPlugin("UserAgent") {
  *
  * The site's edge decides whether a request is a browser by comparing its headers with what a
  * Chrome tab would send, and the page reaches the API with `fetch`/`XHR` — a cross-site request
- * that carries `Accept: */*`, the Chromium client hints and the `Sec-Fetch-*` metadata. A ktor
- * request claiming to be Chrome while sending a navigation `Accept` and no client hints reads as a
- * scripted client, which is met with a challenge the reader can only report as a rejected token.
+ * that carries a wildcard Accept, the Chromium client hints and the `Sec-Fetch-*` metadata. A ktor
+ * request claiming to be Chrome while sending a navigation Accept and no client hints reads as a
+ * scripted client, which is met with a challenge the reader then reports as a rejected token.
  * This mirrors the page's own request shape so both clients are judged the same way.
  */
 private val SchaleXhrHeaders = createClientPlugin("SchaleXhrHeaders") {
