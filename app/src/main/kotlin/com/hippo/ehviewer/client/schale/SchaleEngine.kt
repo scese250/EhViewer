@@ -143,6 +143,27 @@ private fun schaleNamespace(prefix: String): String = when (prefix) {
     else -> prefix
 }
 
+/**
+ * The query prefix of the namespace `/books/tags` numbers a tag with: 8 is `male`, 9 `female`,
+ * 10 `mixed`, … A tag without a namespace is a plain one, which the site calls `tag`.
+ */
+private fun namespacePrefix(namespace: Int?): String = when (namespace) {
+    1 -> "artist"
+    2 -> "group"
+    3 -> "parody"
+    4 -> "magazine"
+    5 -> "character"
+    6 -> "cosplayer"
+    7 -> "uploader"
+    8 -> "male"
+    9 -> "female"
+    10 -> "mixed"
+    11 -> "language"
+    12 -> "other"
+    13 -> "reclass"
+    else -> "tag"
+}
+
 /** True when a word filters a namespace (optionally negated). */
 private fun startsNamespace(word: String): Boolean {
     val body = word.removePrefix("-").removePrefix("+")
@@ -411,6 +432,20 @@ object SchaleEngine {
     }
 
     suspend fun searchSchale(keyword: String, page: Int = 1, sort: Int? = null): GalleryListResult = fetchBooks(buildBooksUrl(page = page, keyword = keyword, sort = sort), "GET books search (page=$page)")
+
+    /**
+     * Every tag the site knows, with the number of galleries carrying it (GET /books/tags). The
+     * filter screen offers these instead of a free-text box, so a filter can only be built out of
+     * terms the site is able to match. The endpoint does not paginate.
+     */
+    suspend fun getSchaleTags(): List<SchaleTagInfo> = withRetries("GET books/tags") {
+        ehRequest("https://$SCHALE_API_HOST/books/tags", EhUrl.REFERER_SCHALE, EhUrl.ORIGIN_SCHALE) {
+            header(HttpHeaders.Accept, "*/*")
+        }.executeSafely { resp ->
+            checkPublicResponseStatus(resp)
+            resp.bodyAsText()
+        }
+    }.parseAs()
 
     suspend fun addFavorite(gid: Long, token: String) = mutateFavorite(gid, token, add = true)
 
@@ -1062,6 +1097,47 @@ object SchaleEngine {
         }
     }
 
+    // ---------- Tag filters ----------
+
+    /**
+     * The query term of a tag as `/books/tags` describes it, in the app's own syntax: a plain tag
+     * becomes `tag:ahegao`, one of the site's groupings becomes `male:ahegao`. Stored in this form so
+     * the value stays readable and is anchored and quoted only when a request is built.
+     */
+    fun tagTerm(namespace: Int?, name: String): String = "${namespacePrefix(namespace)}:${name.trim()}"
+
+    /**
+     * The session's tag filters as query terms, whitelist first: `tag:^ahegao$ -male:^bbm$`.
+     *
+     * A term the site cannot match empties the whole listing instead of failing, so the terms go
+     * through the very normalization a search box entry does: that is what quotes a value holding
+     * spaces and anchors it, and it is why the stored values need no quotes of their own.
+     */
+    fun filterTerms(): List<String> {
+        if (!Settings.schaleTagFilters.value) return emptyList()
+        val whitelist = Settings.schaleTagWhitelist.value
+            .mapNotNull { normalizeTerm(it).takeIf(String::isNotBlank) }
+            .distinct()
+            .sorted()
+        // A tag can only sit in one list: a stale copy in both would exclude what the whitelist asks
+        // for, so the whitelist wins.
+        val excluded = Settings.schaleTagBlacklist.value
+            .mapNotNull { normalizeTerm(it).removePrefix("-").takeIf(String::isNotBlank) }
+            .distinct()
+            .filterNot { it in whitelist }
+            .sorted()
+        return whitelist + excluded.map { "-$it" }
+    }
+
+    /**
+     * The `s=` query of a listing: the user's search plus the tag filters, one term each. Both are
+     * left out when empty, so an unfiltered request stays byte-identical to what it was.
+     */
+    private fun listingQuery(keyword: String?): String? = buildList {
+        keyword?.takeIf { it.isNotBlank() }?.let { add(normalizeQuery(it)) }
+        addAll(filterTerms())
+    }.filter { it.isNotBlank() }.joinToString(" ").takeIf { it.isNotBlank() }
+
     // ---------- URL builders ----------
 
     // Public listing endpoint — no crt param
@@ -1072,7 +1148,7 @@ object SchaleEngine {
     ).apply {
         parameters.append("page", page.toString())
         parameters.append("limit", limit.toString())
-        keyword?.takeIf { it.isNotBlank() }?.let { parameters.append("s", normalizeQuery(it)) }
+        listingQuery(keyword)?.let { parameters.append("s", it) }
         sort?.let { parameters.append("sort", it.toString()) }
     }.buildString()
 
@@ -1084,7 +1160,7 @@ object SchaleEngine {
         pathSegments = listOf("books", "favorites"),
     ).apply {
         parameters.append("page", page.toString())
-        keyword?.takeIf { it.isNotBlank() }?.let { parameters.append("s", normalizeQuery(it)) }
+        listingQuery(keyword)?.let { parameters.append("s", it) }
         sort?.let { parameters.append("sort", it.toString()) }
         parameters.append("crt", crt)
     }.buildString()

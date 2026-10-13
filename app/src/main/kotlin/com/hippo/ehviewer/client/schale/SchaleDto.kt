@@ -85,6 +85,18 @@ data class SchaleTag(
 )
 
 /**
+ * Entry of GET /books/tags: a tag the site knows and how many galleries carry it. `namespace` is
+ * only sent for the tags that are not plain ones (8 male, 9 female, 10 mixed, …), and the same name
+ * appears once per namespace, so the pair — not the name — identifies a tag.
+ */
+@Serializable
+data class SchaleTagInfo(
+    val name: String,
+    val count: Int = 0,
+    val namespace: Int? = null,
+)
+
+/**
  * Response from POST https://auth.schale.network/check (Bearer = account session):
  * `{"favorites": {"<gid>": 1, …}, "role": 1, "username": "…"}`.
  */

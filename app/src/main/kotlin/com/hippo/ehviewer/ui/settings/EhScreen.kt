@@ -49,6 +49,7 @@ import com.hippo.ehviewer.ui.destinations.FilterScreenDestination
 import com.hippo.ehviewer.ui.destinations.MyTagsScreenDestination
 import com.hippo.ehviewer.ui.destinations.SchaleClearanceScreenDestination
 import com.hippo.ehviewer.ui.destinations.SchaleLoginScreenDestination
+import com.hippo.ehviewer.ui.destinations.SchaleTagFilterScreenDestination
 import com.hippo.ehviewer.ui.destinations.UConfigScreenDestination
 import com.hippo.ehviewer.ui.main.NavigationIcon
 import com.hippo.ehviewer.ui.tools.awaitConfirmationOrCancel
@@ -164,6 +165,32 @@ fun AnimatedVisibilityScope.EhScreen(navigator: DestinationsNavigator) = Screen(
                         "Sesión iniciada como $it$count. Toca para cambiar de cuenta o cerrarla."
                     } ?: "Sin sesión: hace falta para guardar favoritos. Toca para iniciar sesión.",
                 ) { navigate(SchaleLoginScreenDestination) }
+                // Tag filters live in this app's session, not on the account, so they are configured
+                // here rather than on the account screen.
+                val whitelistTags by Settings.schaleTagWhitelist.collectAsState()
+                val blacklistTags by Settings.schaleTagBlacklist.collectAsState()
+                val filtersEnabled by Settings.schaleTagFilters.collectAsState()
+                val activeFilters = SchaleEngine.filterTerms()
+                Preference(
+                    title = "Filtros de etiquetas (lista blanca / lista negra)",
+                    summary = if (whitelistTags.isEmpty() && blacklistTags.isEmpty()) {
+                        "Sin filtros. Toca para exigir u ocultar etiquetas en las listas."
+                    } else {
+                        "${whitelistTags.size} en lista blanca, ${blacklistTags.size} en lista negra. " +
+                            "Se aplican a las listas, a las búsquedas y a los favoritos."
+                    },
+                ) { navigate(SchaleTagFilterScreenDestination) }
+                SwitchPreference(
+                    title = "Aplicar los filtros de etiquetas",
+                    summary = if (!filtersEnabled) {
+                        "Desactivados: las listas vuelven a mostrar todo."
+                    } else if (activeFilters.isEmpty()) {
+                        "No hay ninguna etiqueta filtrada todavía."
+                    } else {
+                        "${activeFilters.size} en la petición: ${activeFilters.joinToString(" ")}"
+                    },
+                    state = Settings.schaleTagFilters.asMutableState(),
+                )
                 testDialogText?.let { diagnosticInfo ->
                     AlertDialog(
                         onDismissRequest = { testDialogText = null },

@@ -79,6 +79,16 @@ object Settings : DataStorePreferences(null) {
     val schaleSessionRefresh = stringOrNullPref("schale_refresh")
     val schaleSessionExpiry = longPref("schale_session_expr", 0L)
     val schaleUsername = stringOrNullPref("schale_username")
+
+    // Schale Network tag filters. They belong to this app's session rather than to the account: the
+    // website keeps its own copy inside the browser, so nothing is ever imported from there. A
+    // whitelisted tag is required in every listing, a blacklisted one is excluded from every
+    // listing, and the site applies both while it builds the page — the only place that can work,
+    // because a list entry carries no tags the app could filter on locally. Terms are stored in the
+    // site's own syntax (`tag:big penis`, `artist:ayane`) without the anchors the request adds.
+    val schaleTagFilters = boolPref("schale_tag_filters", true)
+    val schaleTagWhitelist = stringSetPref("schale_tag_whitelist")
+    val schaleTagBlacklist = stringSetPref("schale_tag_blacklist")
     val theme = intPref("theme_2", -1).observed(::updateWhenThemeChanges)
     val blackDarkTheme = boolPref("black_dark_theme", false)
     val harmonizeCategoryColor = boolPref("harmonize_category_color", true)
