@@ -704,6 +704,9 @@ object SchaleEngine {
         val cfMitigated: String?,
         val cfRay: String?,
         val body: String?,
+        val rateLimitLimit: Int? = null,
+        val rateLimitRemaining: Int? = null,
+        val rateLimitReset: Long? = null,
         val error: String? = null,
     ) {
         /** No answer at all counts as a failure, so a nullable status can still be tested. */
@@ -723,6 +726,21 @@ object SchaleEngine {
                 appendLine("Cuerpo: ${text.take(200).replace('\n', ' ')}")
             }
         }
+
+        /**
+         * The auth server meters the verifications it accepts, and a refused one still spends its
+         * unit, so a refused check with nothing left is a quota answer rather than a dead token.
+         */
+        fun quotaNote(): String? {
+            val limit = rateLimitLimit ?: return null
+            val remaining = rateLimitRemaining ?: return null
+            val window = rateLimitReset?.let { " (reinicio ${java.util.Date(it * 1000L)})" } ?: ""
+            return if (remaining <= 0) {
+                "Cuota del servidor: $remaining/$limit restantes$window — esta conexión está agotada, la comprobación fallará hasta el reinicio."
+            } else {
+                "Cuota del servidor: $remaining/$limit restantes$window."
+            }
+        }
     }
 
     private suspend fun probe(url: String, httpMethod: HttpMethod, bearer: String? = null): Probe = try {
@@ -737,6 +755,9 @@ object SchaleEngine {
                 cfMitigated = resp.headers["cf-mitigated"],
                 cfRay = resp.headers["cf-ray"],
                 body = resp.bodyAsText(),
+                rateLimitLimit = resp.headers["X-Ratelimit-Limit"]?.toIntOrNull(),
+                rateLimitRemaining = resp.headers["X-Ratelimit-Remaining"]?.toIntOrNull(),
+                rateLimitReset = resp.headers["X-Ratelimit-Reset"]?.toLongOrNull(),
             )
         }
     } catch (e: CancellationException) {
@@ -781,6 +802,9 @@ object SchaleEngine {
         val authProbe = probe("${EhUrl.AUTH_SCHALE}/clearance", HttpMethod.Get, bearer = credential)
         report.append(authProbe.report())
         report.appendLine(if (authProbe.status == 200) "Resultado: ÉXITO (Auth reconoció el token)" else "Resultado: FALLÓ")
+        // The same server refuses the site's own check from this device, so the quota is the one
+        // fact that tells a connection-level refusal apart from a token the server simply rejects.
+        authProbe.quotaNote()?.let { report.appendLine(it) }
 
         // Test 2: Public list
         report.appendLine("\n--- 2. Lista pública (GET /books) ---")
