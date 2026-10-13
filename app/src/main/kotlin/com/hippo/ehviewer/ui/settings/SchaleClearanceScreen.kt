@@ -67,18 +67,35 @@ private const val SITE_MINT_TIMEOUT_MS = 8_000L
  * - Reports the clearance however the site produces it: the storage write, the `crt` of a call the
  *   server accepted, or the body of the site's own `POST auth.schale.network/clearance`.
  * - Captures the captcha answer from every path that can see it — the `turnstile.render` callback
- *   (wrapped by intercepting the `window.turnstile` assignment, before the site can call it), the
- *   widget's own `getResponse`, the hidden input Turnstile writes, and the `Authorization` header
- *   of the site's own POST. A timer cannot win the render race, and losing it left the screen stuck
- *   with no answer and nothing to report.
- * - Reports a compact page state on every poll, so a screen that looks frozen can say whether the
- *   widget rendered, whether the captcha was solved and whether a clearance is stored.
+ *   (wrapped on a fast poll, best effort: a self-solving widget can fire it first), the widget's
+ *   own `getResponse`, the hidden input Turnstile writes, and the `Authorization` header of the
+ *   site's own POST. Nothing here writes to a page global, so the widget always initialises.
+ * - Answers the embedded-browser signal the site guards its captcha with: the UA it is given has no
+ *   `wv` token, and `navigator.webdriver` is answered the way a plain browser answers it.
+ * - Reports a compact page state on every poll — the page, the Turnstile script, Cloudflare frames,
+ *   captcha, clearance, and what the embedded-browser signals really said — so a stuck verification
+ *   says what it is waiting for instead of looking frozen.
  */
 private const val JS_OBSERVER_INJECTION = """
     (function () {
         try {
             if (!window.outerWidth) Object.defineProperty(window, 'outerWidth', { get: () => window.innerWidth || 1080 });
             if (!window.outerHeight) Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight || 1920 });
+        } catch (e) {}
+
+        // The site renders its captcha only when it believes it is not an embedded browser:
+        // `/webview|wv/i.test(navigator.userAgent) || navigator.webdriver` guards the widget, so a
+        // WebView that reports the automation flag never gets one. Our UA carries no such token, and
+        // a plain (non-debuggable) WebView answers false already; answer it that way regardless and
+        // remember what it really said, so the report can name the guard as the reason.
+        try {
+            if (window.__schaleWebdriver === undefined) window.__schaleWebdriver = !!window.navigator.webdriver;
+        } catch (e) {}
+        try {
+            Object.defineProperty(Navigator.prototype, 'webdriver', {
+                configurable: true,
+                get: function () { return false; },
+            });
         } catch (e) {}
 
         function report(value) {
@@ -147,21 +164,10 @@ private const val JS_OBSERVER_INJECTION = """
         if (window.__schaleObserverInstalled !== true) {
             window.__schaleObserverInstalled = true;
 
-            // The site renders the widget in the same turn its loader resolves, so intercept the
-            // assignment that publishes `window.turnstile` instead of polling for the object: a
-            // timer cannot win that race, and losing it means we never see the captcha callback.
-            try {
-                const holder = { value: window.turnstile };
-                if (window.turnstile) wrapTurnstile(window.turnstile);
-                Object.defineProperty(window, 'turnstile', {
-                    configurable: true,
-                    get: function () { return holder.value; },
-                    set: function (value) {
-                        try { wrapTurnstile(value); } catch (e) {}
-                        holder.value = value;
-                    },
-                });
-            } catch (e) {}
+            // Do NOT redefine `window.turnstile` here. Creating it as an accessor made the widget
+            // disappear in the app's WebView — `'turnstile' in window` was already true before the
+            // loader ran, so the page never published the object. The page owns that global; the
+            // answer is read back by the watch below without touching anything the page sets.
 
             try {
                 const originalSetItem = Storage.prototype.setItem;
@@ -248,9 +254,10 @@ private const val JS_OBSERVER_INJECTION = """
         var turnstileTries = 0;
         (function pollTurnstile() {
             try { wrapTurnstile(window.turnstile); } catch (e) {}
-            // The assignment interception above covers the normal case; this fast poll is only the
-            // fallback for a page that publishes the object some other way.
-            if (++turnstileTries < 400) setTimeout(pollTurnstile, 50);
+            // Best effort: a self-solving widget can fire its callback the moment it is rendered,
+            // before this poll reaches the object. The answer does not depend on the wrapper — the
+            // watch below reads it back from Turnstile itself and from the hidden field.
+            if (++turnstileTries < 600) setTimeout(pollTurnstile, 50);
         })();
 
         // Turnstile also exposes the answer it produced and writes it into a hidden input, so
@@ -277,7 +284,7 @@ private const val JS_OBSERVER_INJECTION = """
                 const answer = answerFromWidget() || answerFromInput();
                 if (answer) reportAnswer(answer);
             } catch (e) {}
-            if (++answerWatches < 1800) setTimeout(watchAnswer, 400);
+            if (++answerWatches < 3000) setTimeout(watchAnswer, 200);
         })();
 
         window.__schaleFreshCaptcha = function () {
@@ -306,7 +313,25 @@ private const val JS_OBSERVER_INJECTION = """
             try {
                 if (document.querySelector('input[name="cf-turnstile-response"]')) field = 1;
             } catch (e) {}
-            return [clearance, answer, frames, field].join(String.fromCharCode(31));
+            // Page identity and the two facts that decide whether the site renders a captcha at
+            // all: the Turnstile script's presence and the automation/embedded-browser signals.
+            var ready = 0;
+            try { if (window.turnstile) ready = 1; } catch (e) {}
+            var scripts = 0;
+            try {
+                scripts = document.querySelectorAll('script[src*="challenges.cloudflare.com"]').length;
+            } catch (e) {}
+            var where = '';
+            var title = '';
+            var cleanUa = 1;
+            var webdriver = 0;
+            try {
+                where = window.location.host + window.location.pathname;
+                title = (document.title || '').slice(0, 40);
+                cleanUa = /webview|wv/i.test(String(window.navigator.userAgent)) ? 0 : 1;
+                webdriver = window.__schaleWebdriver ? 1 : 0;
+            } catch (e) {}
+            return [clearance, answer, frames, field, ready, scripts, where, title, cleanUa, webdriver].join(String.fromCharCode(31));
         };
     })();
 """
@@ -350,11 +375,32 @@ private fun normalizeClearanceToken(raw: String?): String? {
  * it was given, how many Cloudflare frames it has and whether the Turnstile field exists at all. A
  * screen that looks frozen can then say which of those it is waiting for.
  */
-private data class PageState(val clearance: String?, val answer: String?, val frames: Int, val field: Boolean) {
+private data class PageState(
+    val clearance: String?,
+    val answer: String?,
+    val frames: Int,
+    val field: Boolean,
+    val turnstile: Boolean,
+    val scripts: Int,
+    val where: String,
+    val title: String,
+    val cleanUa: Boolean,
+    val webdriver: Boolean,
+) {
     fun describe(): String = buildString {
-        append("Estado: frames CF=")
+        append(if (where.isNotEmpty()) where else "página desconocida")
+        if (title.isNotEmpty()) append(" \"").append(title).append("\"")
+        append(" · ua=")
+        append(if (cleanUa) "limpio" else "con \"wv\"")
+        append(" · webdriver=")
+        append(if (webdriver) "sí" else "no")
+        append(" · turnstile=")
+        append(if (turnstile) "presente" else "ausente")
+        append(" · scripts CF=")
+        append(scripts)
+        append(" · frames CF=")
         append(frames)
-        append(" · campo Turnstile=")
+        append(" · campo=")
         append(if (field) "sí" else "no")
         append(" · captcha=")
         append(if (answer != null) "resuelta" else "pendiente")
@@ -378,13 +424,22 @@ private fun parsePageState(raw: String?): PageState? {
     } catch (e: Throwable) {
         encoded.removeSurrounding("\"")
     }
-    val parts = decoded.split(PAGE_STATE_SEPARATOR)
-    if (parts.size < 4) return PageState(normalizeClearanceToken(decoded), null, 0, false)
+    // limit = 10 keeps empty trailing fields (an empty title must not shrink the list).
+    val parts = decoded.split(PAGE_STATE_SEPARATOR, limit = 10)
+    if (parts.size < 10) {
+        return PageState(normalizeClearanceToken(decoded), null, 0, false, false, 0, "", "", true, false)
+    }
     return PageState(
         clearance = normalizeClearanceToken(parts[0]),
         answer = normalizeClearanceToken(parts[1]),
         frames = parts[2].trim().toIntOrNull() ?: 0,
         field = parts[3].trim() == "1",
+        turnstile = parts[4].trim() == "1",
+        scripts = parts[5].trim().toIntOrNull() ?: 0,
+        where = parts[6],
+        title = parts[7],
+        cleanUa = parts[8].trim() != "0",
+        webdriver = parts[9].trim() == "1",
     )
 }
 
