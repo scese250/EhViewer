@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -86,85 +87,88 @@ fun GalleryInfoListItem(
                 modifier = Modifier.aspectRatio(DEFAULT_RATIO),
             )
         }
-        Column(modifier = Modifier.padding(start = 8.dp, top = 2.dp, end = 4.dp, bottom = 4.dp)) {
-            Text(
-                text = EhUtils.getSuitableTitle(info),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.titleSmall,
-            )
-            val showWatchedTags by Settings.showGalleryTags.collectAsState()
-            if (showWatchedTags) {
-                info.watchedTags?.takeIf { it.isNotEmpty() }?.let { tags ->
-                    WatchedTagsRow(
-                        tags = tags,
-                        modifier = Modifier.padding(top = 2.dp),
-                    )
+        Box(modifier = Modifier.fillMaxSize().padding(start = 8.dp, top = 2.dp, end = 4.dp, bottom = 4.dp)) {
+            Column(modifier = Modifier.align(Alignment.TopStart)) {
+                Text(
+                    text = EhUtils.getSuitableTitle(info),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                val showWatchedTags by Settings.showGalleryTags.collectAsState()
+                if (showWatchedTags) {
+                    info.watchedTags?.takeIf { it.isNotEmpty() }?.let { tags ->
+                        WatchedTagsRow(
+                            tags = tags,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
                 }
             }
-            Spacer(modifier = Modifier.weight(1f))
-            ProvideTextStyle(MaterialTheme.typography.labelLarge) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        text = info.uploader.orEmpty(),
-                        modifier = Modifier.alignByBaseline().alpha(if (info.disowned) 0.5f else 1f),
-                    )
-                    Spacer(modifier = Modifier.weight(1f))
-                    if (isInFavScene) {
-                        info.favoriteNote?.let {
-                            Text(text = it, modifier = Modifier.alignByBaseline(), fontStyle = FontStyle.Italic)
-                        }
-                    } else {
-                        val showFav by FavouriteStatusRouter.collectAsState(info) { it != NOT_FAVORITED }
-                        if (showFav) {
-                            Icon(
-                                Icons.Default.Favorite,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp).align(Alignment.CenterVertically),
-                            )
-                            info.favoriteName?.let {
-                                Text(text = it, modifier = Modifier.alignByBaseline())
+            Column(modifier = Modifier.align(Alignment.BottomStart)) {
+                ProvideTextStyle(MaterialTheme.typography.labelLarge) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = info.uploader.orEmpty(),
+                            modifier = Modifier.alignByBaseline().alpha(if (info.disowned) 0.5f else 1f),
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        if (isInFavScene) {
+                            info.favoriteNote?.let {
+                                Text(text = it, modifier = Modifier.alignByBaseline(), fontStyle = FontStyle.Italic)
+                            }
+                        } else {
+                            val showFav by FavouriteStatusRouter.collectAsState(info) { it != NOT_FAVORITED }
+                            if (showFav) {
+                                Icon(
+                                    Icons.Default.Favorite,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp).align(Alignment.CenterVertically),
+                                )
+                                info.favoriteName?.let {
+                                    Text(text = it, modifier = Modifier.alignByBaseline())
+                                }
                             }
                         }
                     }
-                }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // Place the rating near the uploader text as there's more visual space
-                    GalleryListCardRating(rating = info.rating, modifier = Modifier.padding(top = 1.dp, bottom = 3.dp))
-                    Spacer(modifier = Modifier.weight(1f))
-                    val downloaded by DownloadManager.collectContainDownloadInfo(info.gid)
-                    if (downloaded) {
-                        Icon(
-                            Icons.Default.Download,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
-                    info.simpleLanguage?.let {
-                        Text(text = it)
-                    }
-                    if (info.pages != 0 && showPages) {
-                        val readProgress = if (showProgress) {
-                            remember { EhDB.getReadProgressFlow(info.gid) }.collectAsState(0).value
-                        } else {
-                            0
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        // Place the rating near the uploader text as there's more visual space.
+                        GalleryListCardRating(rating = info.rating, modifier = Modifier.padding(top = 1.dp, bottom = 3.dp))
+                        Spacer(modifier = Modifier.weight(1f))
+                        val downloaded by DownloadManager.collectContainDownloadInfo(info.gid)
+                        if (downloaded) {
+                            Icon(
+                                Icons.Default.Download,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
                         }
-                        Text(text = if (readProgress > 0) "${readProgress + 1}/${info.pages}P" else "${info.pages}P")
+                        info.simpleLanguage?.let {
+                            Text(text = it)
+                        }
+                        if (info.pages != 0 && showPages) {
+                            val readProgress = if (showProgress) {
+                                remember { EhDB.getReadProgressFlow(info.gid) }.collectAsState(0).value
+                            } else {
+                                0
+                            }
+                            Text(text = if (readProgress > 0) "${readProgress + 1}/${info.pages}P" else "${info.pages}P")
+                        }
                     }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    val categoryColor = EhUtils.getCategoryColor(info.category)
-                    val categoryText = EhUtils.getCategory(info.category).uppercase()
-                    Text(
-                        text = categoryText,
-                        modifier = Modifier.clip(ShapeDefaults.Small).background(categoryColor).padding(vertical = 2.dp, horizontal = 8.dp),
-                        color = EhUtils.getCategoryTextColor(categoryColor),
-                    )
-                    Spacer(modifier = Modifier.weight(1f))
-                    Text(text = info.posted.orEmpty())
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val categoryColor = EhUtils.getCategoryColor(info.category)
+                        val categoryText = EhUtils.getCategory(info.category).uppercase()
+                        Text(
+                            text = categoryText,
+                            modifier = Modifier.clip(ShapeDefaults.Small).background(categoryColor).padding(vertical = 2.dp, horizontal = 8.dp),
+                            color = EhUtils.getCategoryTextColor(categoryColor),
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        Text(text = info.posted.orEmpty())
+                    }
                 }
             }
         }
