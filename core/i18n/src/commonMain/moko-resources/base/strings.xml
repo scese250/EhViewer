@@ -562,6 +562,7 @@
     <string name="vertical_viewer">Vertical</string>
     <string name="webtoon_viewer">Webtoon</string>
     <string name="vertical_plus_viewer">Continuous vertical</string>
+    <string name="vertical_manga_viewer">Vertical manga read</string>
     <string name="pager_viewer">Paged</string>
     <string name="pref_fullscreen">Fullscreen</string>
     <string name="pref_cutout_short">Show content in cutout area</string>

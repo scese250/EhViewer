@@ -1,5 +1,6 @@
 package com.hippo.ehviewer.ui.reader
 
+import androidx.compose.animation.core.SnapSpec
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -10,10 +11,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -40,6 +45,7 @@ import eu.kanade.tachiyomi.ui.reader.viewer.getAction
 import kotlin.contracts.contract
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import me.saket.telephoto.zoomable.OverzoomEffect
@@ -57,6 +63,7 @@ fun PagerViewer(
     pagerState: PagerState,
     isRtl: Boolean,
     isVertical: Boolean,
+    isVerticalManga: Boolean = false,
     pageLoader: PageLoader,
     navigator: () -> NavigationRegions,
     onSelectPage: (Page) -> Unit,
@@ -68,12 +75,38 @@ fun PagerViewer(
     val scaleType by Settings.imageScaleType.collectAsState()
     val landscapeZoom by Settings.landscapeZoom.collectAsState()
     val zoomStart by Settings.zoomStart.collectAsState()
-    val alignment = Alignment.fromPreferences(zoomStart, isRtl, isVertical)
+    val alignment = if (isVerticalManga) {
+        AbsoluteAlignment.Right
+    } else {
+        Alignment.fromPreferences(zoomStart, isRtl, isVertical)
+    }
     val layoutSize by remember(pagerState) {
         derivedStateOf {
             pagerState.layoutInfo.viewportSize.toSize()
         }
     }
+
+    // Estados para persistir el zoom solo al avanzar de página en Vertical Manga Read
+    var savedZoomFactor by remember { mutableFloatStateOf(1f) }
+    var lastPage by remember { mutableIntStateOf(pagerState.currentPage) }
+    var forwardTargetPage by remember { mutableIntStateOf(-1) }
+
+    LaunchedEffect(pagerState, isVerticalManga) {
+        if (!isVerticalManga) {
+            savedZoomFactor = 1f
+            forwardTargetPage = -1
+            return@LaunchedEffect
+        }
+        snapshotFlow { pagerState.currentPage }.collect { currentPage ->
+            if (currentPage > lastPage) {
+                forwardTargetPage = currentPage
+            } else if (currentPage < lastPage) {
+                forwardTargetPage = -1
+            }
+            lastPage = currentPage
+        }
+    }
+
     if (isVertical) {
         VerticalPager(
             state = pagerState,
@@ -85,7 +118,12 @@ fun PagerViewer(
             PageContainer(
                 page = page,
                 pageLoader = pageLoader,
-                isRtl = false,
+                isRtl = isVerticalManga,
+                isVerticalManga = isVerticalManga,
+                savedZoomFactor = { savedZoomFactor },
+                onZoomChanged = { savedZoomFactor = it },
+                shouldApplySavedZoom = forwardTargetPage == index,
+                onSavedZoomApplied = { if (forwardTargetPage == index) forwardTargetPage = -1 },
                 scaleType = scaleType,
                 landscapeZoom = landscapeZoom,
                 alignment = alignment,
@@ -111,6 +149,11 @@ fun PagerViewer(
                 page = page,
                 pageLoader = pageLoader,
                 isRtl = isRtl,
+                isVerticalManga = false,
+                savedZoomFactor = { 1f },
+                onZoomChanged = {},
+                shouldApplySavedZoom = false,
+                onSavedZoomApplied = {},
                 scaleType = scaleType,
                 landscapeZoom = landscapeZoom,
                 alignment = alignment,
@@ -130,6 +173,11 @@ private fun PageContainer(
     page: Page,
     pageLoader: PageLoader,
     isRtl: Boolean,
+    isVerticalManga: Boolean,
+    savedZoomFactor: () -> Float,
+    onZoomChanged: (Float) -> Unit,
+    shouldApplySavedZoom: Boolean,
+    onSavedZoomApplied: () -> Unit,
     scaleType: Int,
     landscapeZoom: Boolean,
     alignment: Alignment.Horizontal,
@@ -148,18 +196,20 @@ private fun PageContainer(
         val size = status.image.intrinsicSize.toSize()
         val contentScale = ContentScale.fromPreferences(scaleType, size, layoutSize)
         zoomableState.contentScale = contentScale
-        LaunchedEffect(size, contentScale, alignment) {
+        LaunchedEffect(size, contentScale, alignment, isVerticalManga) {
             val contentSize = if (contentScale is FixedScale) { // Original
                 size
             } else {
                 size * contentScale.computeScaleFactor(size, layoutSize)
             }
-            val horizontalAlignment = if (contentSize.width > layoutSize.width) {
+            val horizontalAlignment = if (isVerticalManga) {
+                AbsoluteAlignment.Right
+            } else if (contentSize.width > layoutSize.width) {
                 alignment
             } else {
                 Alignment.CenterHorizontally
             }
-            val verticalAlignment = if (contentSize.height > layoutSize.height) {
+            val verticalAlignment = if (isVerticalManga || contentSize.height > layoutSize.height) {
                 Alignment.Top
             } else {
                 Alignment.CenterVertically
@@ -170,7 +220,43 @@ private fun PageContainer(
             val contentLocation = ZoomableContentLocation.scaledInsideAndCenterAligned(size)
             zoomableState.setContentLocation(contentLocation)
         }
-        if (landscapeZoom && contentScale == ContentScale.Fit && size.width > size.height) {
+        // 1. Rastrear cambios de zoom en la página actual cuando Vertical Manga Read está activo
+        if (isVerticalManga) {
+            val isCurrentPage = pagerState.currentPage == page.index
+            LaunchedEffect(isCurrentPage, zoomableState) {
+                if (isCurrentPage) {
+                    snapshotFlow {
+                        val metadata = zoomableState.contentTransformation.scaleMetadata
+                        val baseScale = metadata.initialScale.scaleX
+                        val currentScale = zoomableState.contentTransformation.scale.scaleX
+                        if (baseScale > 0f) currentScale / baseScale else 1f
+                    }.collect { relativeZoom ->
+                        if (relativeZoom >= 1f) {
+                            onZoomChanged(relativeZoom)
+                        }
+                    }
+                }
+            }
+            // 2. Aplicar el zoom guardado y posicionar en la esquina superior derecha al avanzar a la página subsiguiente
+            LaunchedEffect(shouldApplySavedZoom, size, layoutSize) {
+                if (shouldApplySavedZoom) {
+                    // Esperar a que telephoto inicialice las coordenadas del contenido
+                    snapshotFlow { zoomableState.zoomFraction }.first { it != null }
+                    val relativeZoom = savedZoomFactor()
+                    if (relativeZoom > 1.01f) {
+                        val baseScale = zoomableState.contentTransformation.scaleMetadata.initialScale.scaleX
+                        val targetScale = (baseScale * relativeZoom).coerceAtMost(zoomableState.zoomSpec.maximum.factor)
+                        zoomableState.zoomTo(
+                            zoomFactor = targetScale,
+                            centroid = Offset(layoutSize.width, 0f),
+                            animationSpec = SnapSpec(),
+                        )
+                    }
+                    onSavedZoomApplied()
+                }
+            }
+        }
+        if (landscapeZoom && contentScale == ContentScale.Fit && size.width > size.height && !isVerticalManga) {
             LaunchedEffect(alignment) {
                 val zoomFraction = snapshotFlow { zoomableState.zoomFraction }.first { it != null }
                 if (zoomFraction == 0f) {

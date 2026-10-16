@@ -26,6 +26,7 @@ import eu.kanade.tachiyomi.ui.reader.setting.ReadingModeType
 import eu.kanade.tachiyomi.ui.reader.setting.ReadingModeType.CONTINUOUS_VERTICAL
 import eu.kanade.tachiyomi.ui.reader.setting.ReadingModeType.RIGHT_TO_LEFT
 import eu.kanade.tachiyomi.ui.reader.setting.ReadingModeType.VERTICAL
+import eu.kanade.tachiyomi.ui.reader.setting.ReadingModeType.VERTICAL_MANGA
 import eu.kanade.tachiyomi.ui.reader.setting.TappingInvertMode
 import eu.kanade.tachiyomi.ui.reader.viewer.ViewerNavigation
 import kotlinx.coroutines.channels.Channel
@@ -76,7 +77,8 @@ fun GalleryPager(
         PagerViewer(
             pagerState = pagerState,
             isRtl = type == RIGHT_TO_LEFT,
-            isVertical = type == VERTICAL,
+            isVertical = type == VERTICAL || type == VERTICAL_MANGA,
+            isVerticalManga = type == VERTICAL_MANGA,
             pageLoader = pageLoader,
             navigator = { navigator },
             onSelectPage = onSelectPage,

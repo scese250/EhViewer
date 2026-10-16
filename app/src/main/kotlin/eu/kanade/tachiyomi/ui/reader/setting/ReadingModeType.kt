@@ -23,18 +23,19 @@ enum class ReadingModeType(
     VERTICAL(3, R.string.vertical_viewer, EhIcons.Reader.Vertical),
     WEBTOON(4, R.string.webtoon_viewer, EhIcons.Reader.Webtoon),
     CONTINUOUS_VERTICAL(5, R.string.vertical_plus_viewer, EhIcons.Reader.ContinuousVertical),
+    VERTICAL_MANGA(6, R.string.vertical_manga_viewer, EhIcons.Reader.Vertical),
     ;
 
     companion object {
         @Stable
         fun isWebtoon(type: ReadingModeType) = when (type) {
-            DEFAULT, LEFT_TO_RIGHT, RIGHT_TO_LEFT, VERTICAL -> false
+            DEFAULT, LEFT_TO_RIGHT, RIGHT_TO_LEFT, VERTICAL, VERTICAL_MANGA -> false
             WEBTOON, CONTINUOUS_VERTICAL -> true
         }
 
         fun isVertical(type: ReadingModeType) = when (type) {
             DEFAULT, LEFT_TO_RIGHT, RIGHT_TO_LEFT -> false
-            VERTICAL, WEBTOON, CONTINUOUS_VERTICAL -> true
+            VERTICAL, VERTICAL_MANGA, WEBTOON, CONTINUOUS_VERTICAL -> true
         }
 
         fun fromPreference(preference: Int): ReadingModeType = entries.find { it.prefValue == preference } ?: DEFAULT

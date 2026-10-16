@@ -370,4 +370,5 @@
     <string name="u_config">Ajustes EHentai</string>
     <string name="apply_tip">Toca la marca de verificación para guardar los cambios</string>
     <string name="dark_theme_follow_system">Sigue el sistema</string>
+    <string name="vertical_manga_viewer">Vertical manga read</string>
 </resources>
