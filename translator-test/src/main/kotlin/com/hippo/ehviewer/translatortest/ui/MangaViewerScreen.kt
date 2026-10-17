@@ -217,7 +217,6 @@ fun MangaViewerScreen(
                                     color = MaterialTheme.colorScheme.primary,
                                 )
                             }
-
                             isTranslationEnabled && translationCache.containsKey(currentPageIndex) -> {
                                 val trans = translationCache[currentPageIndex]!!
                                 Row(
@@ -230,7 +229,6 @@ fun MangaViewerScreen(
                                     MetricChip(label = "💬 ${trans.bubbles.size} viñetas")
                                 }
                             }
-
                             !isTranslationEnabled -> {
                                 Text(
                                     text = "Traducción desactivada",
@@ -238,7 +236,6 @@ fun MangaViewerScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-
                             else -> {
                                 Text(
                                     text = "Listo",
