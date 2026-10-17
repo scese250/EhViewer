@@ -12,6 +12,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -45,6 +47,7 @@ import kotlin.contracts.contract
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import me.saket.telephoto.zoomable.OverzoomEffect
@@ -85,10 +88,36 @@ fun PagerViewer(
         }
     }
 
-    // Zoom of the current page, relative to the scale used when the whole image fits on
-    // screen. It is handed over to whichever page becomes current next, so that Vertical
-    // Manga Read keeps the user's zoom level while reading.
-    var carriedZoom by remember { mutableFloatStateOf(1f) }
+    val pageZooms = remember { mutableMapOf<Int, Float>() }
+    val pagePans = remember { mutableMapOf<Int, Offset>() }
+    var lastPage by remember { mutableIntStateOf(pagerState.currentPage) }
+
+    LaunchedEffect(pagerState, isVerticalManga) {
+        if (!isVerticalManga) {
+            pageZooms.clear()
+            pagePans.clear()
+            return@LaunchedEffect
+        }
+        snapshotFlow { pagerState.currentPage }.collect { currentPage ->
+            if (currentPage > lastPage) {
+                val inheritedZoom = pageZooms[lastPage] ?: 1f
+                pageZooms[currentPage] = inheritedZoom
+                pagePans[currentPage] = Offset.Zero
+            } else if (currentPage < lastPage) {
+                val srcPan = pagePans[lastPage] ?: Offset.Zero
+                pagePans[currentPage] = srcPan
+            }
+            lastPage = currentPage
+        }
+    }
+
+    fun getTargetZoom(index: Int): Float = pageZooms[index] ?: if (index > lastPage) (pageZooms[lastPage] ?: 1f) else 1f
+
+    fun getTargetPan(index: Int): Offset = if (index < lastPage) {
+        pagePans[lastPage] ?: Offset.Zero
+    } else {
+        pagePans[index] ?: Offset.Zero
+    }
 
     if (isVertical) {
         VerticalPager(
@@ -103,8 +132,12 @@ fun PagerViewer(
                 pageLoader = pageLoader,
                 isRtl = isVerticalManga,
                 isVerticalManga = isVerticalManga,
-                carriedZoom = { carriedZoom },
-                onZoomChanged = { carriedZoom = it },
+                targetZoom = { getTargetZoom(page.index) },
+                targetPan = { getTargetPan(page.index) },
+                onZoomAndPanChanged = { zoom, pan ->
+                    pageZooms[page.index] = zoom
+                    pagePans[page.index] = pan
+                },
                 scaleType = scaleType,
                 landscapeZoom = landscapeZoom,
                 alignment = alignment,
@@ -131,8 +164,9 @@ fun PagerViewer(
                 pageLoader = pageLoader,
                 isRtl = isRtl,
                 isVerticalManga = false,
-                carriedZoom = { 1f },
-                onZoomChanged = {},
+                targetZoom = { 1f },
+                targetPan = { Offset.Zero },
+                onZoomAndPanChanged = { _, _ -> },
                 scaleType = scaleType,
                 landscapeZoom = landscapeZoom,
                 alignment = alignment,
@@ -153,8 +187,9 @@ private fun PageContainer(
     pageLoader: PageLoader,
     isRtl: Boolean,
     isVerticalManga: Boolean,
-    carriedZoom: () -> Float,
-    onZoomChanged: (Float) -> Unit,
+    targetZoom: () -> Float,
+    targetPan: () -> Offset,
+    onZoomAndPanChanged: (Float, Offset) -> Unit,
     scaleType: Int,
     landscapeZoom: Boolean,
     alignment: Alignment.Horizontal,
@@ -197,40 +232,70 @@ private fun PageContainer(
             val contentLocation = ZoomableContentLocation.scaledInsideAndCenterAligned(size)
             zoomableState.setContentLocation(contentLocation)
         }
-        // Vertical Manga Read: hand the current zoom over to the next page and start it from
-        // the top-right corner, because manga panels are read from right to left.
+        // Vertical Manga Read: preserve zoom when moving forward starting at top-right,
+        // and preserve original page zoom while inheriting pan when navigating backwards.
         if (isVerticalManga) {
             val isCurrentPage = pagerState.currentPage == page.index
             LaunchedEffect(isCurrentPage, size, layoutSize, zoomableState) {
                 if (!isCurrentPage) return@LaunchedEffect
-                // Wait until telephoto has measured the content and knows where it is.
-                snapshotFlow { zoomableState.zoomFraction }.first { it != null }
-                val relativeZoom = carriedZoom()
-                val baseScale = zoomableState.contentTransformation.scaleMetadata.initialScale.scaleX
-                var restored = false
-                if (relativeZoom > 1.01f && baseScale > 0f) {
-                    // The centroid is kept stationary. Telephoto clamps any axis that overflows the
-                    // viewport instead of honouring the alignment, so pinning the viewport's top-right
-                    // corner lands on the image's top-right corner once the page is larger than the
-                    // screen, while a page that still fits stays centered by the alignment above.
+                // Wait until telephoto has measured the content with a valid base scale
+                val baseScale = snapshotFlow {
+                    val meta = zoomableState.contentTransformation.scaleMetadata
+                    meta.initialScale.scaleX.takeIf { it > 0f }
+                }.filterNotNull().first()
+
+                val expectedZoom = targetZoom()
+                val expectedPan = targetPan()
+
+                if (expectedZoom > 1.01f) {
+                    val targetScale = (baseScale * expectedZoom).coerceAtMost(zoomableState.zoomSpec.maximum.factor)
                     zoomableState.zoomTo(
-                        zoomFactor = baseScale * relativeZoom,
+                        zoomFactor = targetScale,
                         centroid = Offset(layoutSize.width, 0f),
                         animationSpec = SnapSpec(),
                     )
-                    restored = true
-                }
-                // Track this page's zoom only after the inherited one was applied, otherwise
-                // the freshly composed page would report its default zoom and lose it again.
-                snapshotFlow { zoomableState.contentTransformation.scaleMetadata.userZoom }
-                    .collect { userZoom ->
-                        if (!userZoom.isFinite() || userZoom <= 0f) return@collect
-                        if (restored) {
-                            if (userZoom < relativeZoom - 0.01f) return@collect
-                            restored = false
+                    if (expectedPan != Offset.Zero) {
+                        val bounds = with(zoomableState.coordinateSystem) {
+                            contentBounds(false).rectIn(CoordinateSpace.Viewport)
                         }
-                        onZoomChanged(userZoom)
+                        val maxPanX = (bounds.width - layoutSize.width).coerceAtLeast(0f)
+                        val maxPanY = (bounds.height - layoutSize.height).coerceAtLeast(0f)
+                        val dx = expectedPan.x * maxPanX
+                        val dy = -expectedPan.y * maxPanY
+                        if (dx != 0f || dy != 0f) {
+                            zoomableState.panBy(Offset(dx, dy))
+                        }
                     }
+                } else if ((zoomableState.zoomFraction ?: 0f) > 0.05f) {
+                    zoomableState.resetZoom(animationSpec = SnapSpec())
+                }
+
+                // Track user zoom and pan adjustments on this page
+                snapshotFlow {
+                    val meta = zoomableState.contentTransformation.scaleMetadata
+                    val currentScale = zoomableState.contentTransformation.scale.scaleX
+                    val relZoom = if (meta.initialScale.scaleX > 0f) currentScale / meta.initialScale.scaleX else 1f
+                    val bounds = with(zoomableState.coordinateSystem) {
+                        contentBounds(false).rectIn(CoordinateSpace.Viewport)
+                    }
+                    val maxPanX = (bounds.width - layoutSize.width).coerceAtLeast(0f)
+                    val maxPanY = (bounds.height - layoutSize.height).coerceAtLeast(0f)
+                    val fractionX = if (maxPanX > 0f) {
+                        ((bounds.left - (layoutSize.width - bounds.width)) / maxPanX).coerceIn(0f, 1f)
+                    } else {
+                        0f
+                    }
+                    val fractionY = if (maxPanY > 0f) {
+                        ((-bounds.top) / maxPanY).coerceIn(0f, 1f)
+                    } else {
+                        0f
+                    }
+                    Triple(relZoom, fractionX, fractionY)
+                }.collect { (zoom, fracX, fracY) ->
+                    if (zoom.isFinite() && zoom >= 0.99f) {
+                        onZoomAndPanChanged(zoom, Offset(fracX, fracY))
+                    }
+                }
             }
         }
         if (landscapeZoom && contentScale == ContentScale.Fit && size.width > size.height && !isVerticalManga) {
