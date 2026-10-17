@@ -29,6 +29,10 @@ fun TranslationOverlay(
     bubbles: List<TranslatedBubble>,
     bitmapWidth: Int,
     bitmapHeight: Int,
+    globalBubbleScale: Float = 1.25f,
+    horizontalExpansion: Float = 2.0f,
+    globalFontScale: Float = 1.0f,
+    bubbleOpacity: Float = 0.95f,
     onBubbleClick: (TranslatedBubble) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -65,41 +69,68 @@ fun TranslationOverlay(
         val scaleY = displayedHeight / bitmapHeight.toFloat()
 
         bubbles.forEach { bubble ->
-            val boxLeft = offsetX + (bubble.boundingBox.left * scaleX)
-            val boxTop = offsetY + (bubble.boundingBox.top * scaleY)
-            val boxWidth = (bubble.boundingBox.width() * scaleX).coerceAtLeast(10f)
-            val boxHeight = (bubble.boundingBox.height() * scaleY).coerceAtLeast(10f)
+            val origWidthPx = (bubble.boundingBox.width() * scaleX).coerceAtLeast(10f)
+            val origHeightPx = (bubble.boundingBox.height() * scaleY).coerceAtLeast(10f)
+
+            val centerX = offsetX + (bubble.boundingBox.centerX() * scaleX)
+            val centerY = offsetY + (bubble.boundingBox.centerY() * scaleY)
+
+            // In manga, speech bubbles are tall and narrow for Japanese vertical text.
+            // Horizontal languages (Spanish/English) need wider boxes to avoid breaking words into single letters.
+            val isVerticalText = origHeightPx > origWidthPx * 1.15f
+            val baseWidth = if (isVerticalText) {
+                maxOf(
+                    origWidthPx * horizontalExpansion,
+                    minOf(origHeightPx * 0.70f, containerWidthPx * 0.42f),
+                )
+            } else {
+                origWidthPx * 1.2f
+            }
+            val baseHeight = origHeightPx * 1.08f
+
+            val finalWidthPx = baseWidth * globalBubbleScale * bubble.widthScale
+            val finalHeightPx = baseHeight * globalBubbleScale * bubble.heightScale
+
+            val boxLeft = (centerX - (finalWidthPx / 2f)).coerceIn(
+                0f,
+                (containerWidthPx - finalWidthPx).coerceAtLeast(0f),
+            )
+            val boxTop = (centerY - (finalHeightPx / 2f)).coerceIn(
+                0f,
+                (containerHeightPx - finalHeightPx).coerceAtLeast(0f),
+            )
 
             val boxLeftDp = with(density) { boxLeft.toDp() }
             val boxTopDp = with(density) { boxTop.toDp() }
-            val boxWidthDp = with(density) { boxWidth.toDp() }
-            val boxHeightDp = with(density) { boxHeight.toDp() }
+            val boxWidthDp = with(density) { finalWidthPx.toDp() }
+            val boxHeightDp = with(density) { finalHeightPx.toDp() }
 
-            // Dynamic font sizing based on box area and translated text length
+            // Dynamic font sizing
             val textLen = bubble.translatedText.length.coerceAtLeast(1)
-            val area = boxWidth * boxHeight
+            val area = finalWidthPx * finalHeightPx
             val charArea = area / textLen
-            val calculatedSp = (sqrt(charArea) * 0.70f).coerceIn(8f, 16f)
+            val estimatedSp = (sqrt(charArea) * 0.72f).coerceIn(8.5f, 22f)
+            val finalFontSizeSp = bubble.customFontSizeSp ?: (estimatedSp * globalFontScale).coerceIn(7f, 26f)
 
             Box(
                 modifier = Modifier
                     .offset(x = boxLeftDp, y = boxTopDp)
                     .width(boxWidthDp)
                     .height(boxHeightDp)
-                    .background(Color.White.copy(alpha = 0.95f), RoundedCornerShape(6.dp))
-                    .border(1.dp, Color.Black.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
+                    .background(Color.White.copy(alpha = bubbleOpacity), RoundedCornerShape(8.dp))
+                    .border(1.dp, Color.Black.copy(alpha = 0.65f), RoundedCornerShape(8.dp))
                     .clickable { onBubbleClick(bubble) }
-                    .padding(horizontal = 2.dp, vertical = 1.dp),
+                    .padding(horizontal = 3.dp, vertical = 2.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = bubble.translatedText,
                     color = Color.Black,
-                    fontSize = calculatedSp.sp,
-                    lineHeight = (calculatedSp * 1.15f).sp,
+                    fontSize = finalFontSizeSp.sp,
+                    lineHeight = (finalFontSizeSp * 1.16f).sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
-                    maxLines = 10,
+                    maxLines = 12,
                 )
             }
         }

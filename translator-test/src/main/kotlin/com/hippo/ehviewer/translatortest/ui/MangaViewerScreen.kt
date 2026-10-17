@@ -20,11 +20,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Translate
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -33,7 +32,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -59,6 +57,7 @@ import com.hippo.ehviewer.translatortest.MangaLoader
 import com.hippo.ehviewer.translatortest.MangaTranslator
 import com.hippo.ehviewer.translatortest.PageTranslation
 import com.hippo.ehviewer.translatortest.TranslatedBubble
+import com.hippo.ehviewer.translatortest.TranslatorSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -69,11 +68,13 @@ fun MangaViewerScreen(
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
+    val settings = remember { TranslatorSettings(context) }
+
     var currentPageIndex by remember { mutableIntStateOf(0) }
     var isTranslationEnabled by remember { mutableStateOf(true) }
-    var targetLang by remember { mutableStateOf("es") }
-    var isLangMenuExpanded by remember { mutableStateOf(false) }
     var selectedBubble by remember { mutableStateOf<TranslatedBubble?>(null) }
+    var isSettingsOpen by remember { mutableStateOf(false) }
+    var isBatchDialogOpen by remember { mutableStateOf(false) }
 
     val translationCache = remember { mutableStateMapOf<Int, PageTranslation>() }
     var currentBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -92,18 +93,47 @@ fun MangaViewerScreen(
         isBitmapLoading = false
     }
 
-    // Trigger translation when page, bitmap, or target language changes
-    LaunchedEffect(currentPageIndex, currentBitmap, isTranslationEnabled, targetLang) {
+    // Trigger translation for current page
+    LaunchedEffect(currentPageIndex, currentBitmap, isTranslationEnabled, settings.engine) {
         val bitmap = currentBitmap
         if (isTranslationEnabled && bitmap != null && !translationCache.containsKey(currentPageIndex)) {
             isTranslating = true
             val result = MangaTranslator.translatePage(
                 pageIndex = currentPageIndex,
                 bitmap = bitmap,
-                targetLang = targetLang,
+                targetLang = "es",
+                engine = settings.engine,
+                geminiApiKeys = settings.getGeminiApiKeys(),
+                geminiModel = settings.geminiModel,
             )
             translationCache[currentPageIndex] = result
             isTranslating = false
+        }
+    }
+
+    // Background pre-translation of upcoming pages
+    LaunchedEffect(currentPageIndex, isTranslating, settings.autoPretranslate, settings.batchSize, settings.engine) {
+        if (!isTranslating && settings.autoPretranslate && isTranslationEnabled) {
+            val maxAhead = minOf(currentPageIndex + settings.batchSize, book.pages.size - 1)
+            val keys = settings.getGeminiApiKeys()
+            for (nextPage in (currentPageIndex + 1)..maxAhead) {
+                if (!translationCache.containsKey(nextPage)) {
+                    val bmp = withContext(Dispatchers.IO) {
+                        MangaLoader.loadBitmap(context, book.pages[nextPage].uriString)
+                    }
+                    if (bmp != null) {
+                        val trans = MangaTranslator.translatePage(
+                            pageIndex = nextPage,
+                            bitmap = bmp,
+                            targetLang = "es",
+                            engine = settings.engine,
+                            geminiApiKeys = keys,
+                            geminiModel = settings.geminiModel,
+                        )
+                        translationCache[nextPage] = trans
+                    }
+                }
+            }
         }
     }
 
@@ -136,38 +166,19 @@ fun MangaViewerScreen(
                     }
                 },
                 actions = {
-                    Box {
-                        TextButton(onClick = { isLangMenuExpanded = true }) {
-                            Text(
-                                text = targetLang.uppercase(),
-                                fontWeight = FontWeight.Bold,
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = isLangMenuExpanded,
-                            onDismissRequest = { isLangMenuExpanded = false },
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Español (ES)") },
-                                onClick = {
-                                    if (targetLang != "es") {
-                                        targetLang = "es"
-                                        translationCache.clear()
-                                    }
-                                    isLangMenuExpanded = false
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("English (EN)") },
-                                onClick = {
-                                    if (targetLang != "en") {
-                                        targetLang = "en"
-                                        translationCache.clear()
-                                    }
-                                    isLangMenuExpanded = false
-                                },
-                            )
-                        }
+                    IconButton(onClick = { isBatchDialogOpen = true }) {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = "Traducir en Lote",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+
+                    IconButton(onClick = { isSettingsOpen = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Ajustes",
+                        )
                     }
 
                     IconButton(onClick = { isTranslationEnabled = !isTranslationEnabled }) {
@@ -212,7 +223,11 @@ fun MangaViewerScreen(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Traduciendo viñetas con ML Kit...",
+                                    text = if (settings.engine == TranslatorSettings.ENGINE_GEMINI) {
+                                        "Traduciendo con Gemini IA..."
+                                    } else {
+                                        "Traduciendo viñetas con ML Kit..."
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary,
                                 )
@@ -227,6 +242,7 @@ fun MangaViewerScreen(
                                     MetricChip(label = "🌐 Trad: ${trans.translateDurationMs}ms")
                                     MetricChip(label = "⏱️ Total: ${trans.totalDurationMs}ms")
                                     MetricChip(label = "💬 ${trans.bubbles.size} viñetas")
+                                    MetricChip(label = "🤖 ${trans.engineName}")
                                 }
                             }
                             !isTranslationEnabled -> {
@@ -309,6 +325,10 @@ fun MangaViewerScreen(
                             bubbles = pageTrans.bubbles,
                             bitmapWidth = bitmap.width,
                             bitmapHeight = bitmap.height,
+                            globalBubbleScale = settings.globalBubbleScale,
+                            horizontalExpansion = settings.horizontalExpansion,
+                            globalFontScale = settings.globalFontScale,
+                            bubbleOpacity = settings.bubbleOpacity,
                             onBubbleClick = { selectedBubble = it },
                         )
                     }
@@ -318,39 +338,37 @@ fun MangaViewerScreen(
     }
 
     selectedBubble?.let { bubble ->
-        AlertDialog(
-            onDismissRequest = { selectedBubble = null },
-            title = { Text(text = "Detalle de Viñeta") },
-            text = {
-                Column {
-                    Text(
-                        text = "🇯🇵 Japonés Original:",
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Text(
-                        text = bubble.originalText,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = "🌐 Traducción (${targetLang.uppercase()}):",
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Text(
-                        text = bubble.translatedText,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+        BubbleEditDialog(
+            bubble = bubble,
+            onDismiss = { selectedBubble = null },
+            onSave = { updatedBubble ->
+                val pageTrans = translationCache[currentPageIndex]
+                if (pageTrans != null) {
+                    val updatedList = pageTrans.bubbles.map {
+                        if (it.id == updatedBubble.id) updatedBubble else it
+                    }
+                    translationCache[currentPageIndex] = pageTrans.copy(bubbles = updatedList)
                 }
+                selectedBubble = null
             },
-            confirmButton = {
-                TextButton(onClick = { selectedBubble = null }) {
-                    Text(text = "Cerrar")
-                }
-            },
+        )
+    }
+
+    if (isSettingsOpen) {
+        SettingsDialog(
+            settings = settings,
+            onDismiss = { isSettingsOpen = false },
+        )
+    }
+
+    if (isBatchDialogOpen) {
+        BatchTranslateDialog(
+            context = context,
+            book = book,
+            currentPageIndex = currentPageIndex,
+            settings = settings,
+            translationCache = translationCache,
+            onDismiss = { isBatchDialogOpen = false },
         )
     }
 }
