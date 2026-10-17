@@ -17,12 +17,18 @@ class TranslatorSettings(context: Context) {
     var geminiModel by mutableStateOf(
         prefs.getString("gemini_model", DEFAULT_GEMINI_MODEL) ?: DEFAULT_GEMINI_MODEL,
     )
+    var sourceLang by mutableStateOf(prefs.getString("source_lang", "ja") ?: "ja")
+    var targetLang by mutableStateOf(prefs.getString("target_lang", "es") ?: "es")
     var globalBubbleScale by mutableFloatStateOf(prefs.getFloat("global_bubble_scale", 1.25f))
     var horizontalExpansion by mutableFloatStateOf(prefs.getFloat("horizontal_expansion", 2.0f))
     var globalFontScale by mutableFloatStateOf(prefs.getFloat("global_font_scale", 1.0f))
     var bubbleOpacity by mutableFloatStateOf(prefs.getFloat("bubble_opacity", 0.95f))
+    var dynamicBubbleSize by mutableStateOf(prefs.getBoolean("dynamic_bubble_size", true))
     var autoPretranslate by mutableStateOf(prefs.getBoolean("auto_pretranslate", true))
     var batchSize by mutableIntStateOf(prefs.getInt("batch_size", 3))
+    var geminiPromptTemplate by mutableStateOf(
+        prefs.getString("gemini_prompt_template", DEFAULT_PROMPT_TEMPLATE) ?: DEFAULT_PROMPT_TEMPLATE,
+    )
 
     fun getGeminiApiKeys(): List<String> = geminiApiKeysRaw
         .split('\n', ',', ';')
@@ -34,10 +40,14 @@ class TranslatorSettings(context: Context) {
             .putString("engine", engine)
             .putString("gemini_api_keys", geminiApiKeysRaw)
             .putString("gemini_model", geminiModel)
+            .putString("source_lang", sourceLang)
+            .putString("target_lang", targetLang)
+            .putString("gemini_prompt_template", geminiPromptTemplate)
             .putFloat("global_bubble_scale", globalBubbleScale)
             .putFloat("horizontal_expansion", horizontalExpansion)
             .putFloat("global_font_scale", globalFontScale)
             .putFloat("bubble_opacity", bubbleOpacity)
+            .putBoolean("dynamic_bubble_size", dynamicBubbleSize)
             .putBoolean("auto_pretranslate", autoPretranslate)
             .putInt("batch_size", batchSize)
             .apply()
@@ -47,5 +57,59 @@ class TranslatorSettings(context: Context) {
         const val ENGINE_GOOGLE = "google"
         const val ENGINE_GEMINI = "gemini"
         const val DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
+        const val DEFAULT_PROMPT_TEMPLATE =
+            "Translate from {lang input} to {lang output}. Translate the following manga dialogue lines into natural, expressive, and concise {lang output} suitable for speech bubbles. Maintain conversational tone and context between lines on the same page."
+
+        val SOURCE_LANGUAGES = listOf(
+            "ja" to "Japonés (日本語)",
+            "en" to "Inglés (English)",
+            "zh" to "Chino (中文)",
+            "ko" to "Coreano (한국어)",
+            "es" to "Español (Español)",
+            "fr" to "Francés (Français)",
+            "de" to "Alemán (Deutsch)",
+        )
+
+        val TARGET_LANGUAGES = listOf(
+            "es" to "Español (ES)",
+            "en" to "Inglés (EN)",
+            "pt" to "Portugués (PT)",
+            "fr" to "Francés (FR)",
+            "de" to "Alemán (DE)",
+            "it" to "Italiano (IT)",
+            "ru" to "Ruso (RU)",
+        )
+
+        fun getLanguageName(code: String): String = when (code.lowercase()) {
+            "ja" -> "Japanese"
+            "es" -> "Spanish"
+            "en" -> "English"
+            "zh" -> "Chinese"
+            "ko" -> "Korean"
+            "pt" -> "Portuguese"
+            "fr" -> "French"
+            "de" -> "German"
+            "it" -> "Italian"
+            "ru" -> "Russian"
+            else -> code
+        }
+
+        fun formatGeminiPrompt(
+            template: String,
+            sourceLang: String,
+            targetLang: String,
+        ): String {
+            val srcName = getLanguageName(sourceLang)
+            val tgtName = getLanguageName(targetLang)
+            return template
+                .replace("{lang input}", srcName, ignoreCase = true)
+                .replace("{lang output}", tgtName, ignoreCase = true)
+                .replace("{lang_input}", srcName, ignoreCase = true)
+                .replace("{lang_output}", tgtName, ignoreCase = true)
+                .replace("{source_lang}", srcName, ignoreCase = true)
+                .replace("{target_lang}", tgtName, ignoreCase = true)
+                .replace("{sourceLang}", srcName, ignoreCase = true)
+                .replace("{targetLang}", tgtName, ignoreCase = true)
+        }
     }
 }

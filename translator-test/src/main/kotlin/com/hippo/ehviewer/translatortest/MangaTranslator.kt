@@ -33,7 +33,9 @@ object MangaTranslator {
     suspend fun translatePage(
         pageIndex: Int,
         bitmap: Bitmap,
+        sourceLang: String = "ja",
         targetLang: String = "es",
+        promptTemplate: String = TranslatorSettings.DEFAULT_PROMPT_TEMPLATE,
         engine: String = TranslatorSettings.ENGINE_GOOGLE,
         geminiApiKeys: List<String> = emptyList(),
         geminiModel: String = TranslatorSettings.DEFAULT_GEMINI_MODEL,
@@ -54,7 +56,7 @@ object MangaTranslator {
         }
 
         // Merge adjacent columns in Japanese vertical manga speech bubbles
-        val mergedBlocks = mergeAdjacentMangaBlocks(rawBlocks)
+        val mergedBlocks = if (sourceLang == "ja") mergeAdjacentMangaBlocks(rawBlocks) else rawBlocks
 
         var bubbles: List<TranslatedBubble> = emptyList()
         var engineUsed = "Google"
@@ -66,7 +68,9 @@ object MangaTranslator {
                 try {
                     val translatedTexts = translateWithGemini(
                         texts = texts,
+                        sourceLang = sourceLang,
                         targetLang = targetLang,
+                        promptTemplate = promptTemplate,
                         apiKeys = geminiApiKeys,
                         model = geminiModel,
                     )
@@ -80,11 +84,11 @@ object MangaTranslator {
                     }
                 } catch (e: Exception) {
                     // Fallback to Google if Gemini fails
-                    engineUsed = "Google (Fallback)"
-                    bubbles = translateWithGoogleBatch(mergedBlocks, targetLang)
+                    engineUsed = "Google (Fallback: ${e.message?.take(20)})"
+                    bubbles = translateWithGoogleBatch(mergedBlocks, sourceLang, targetLang)
                 }
             } else {
-                bubbles = translateWithGoogleBatch(mergedBlocks, targetLang)
+                bubbles = translateWithGoogleBatch(mergedBlocks, sourceLang, targetLang)
             }
         }
 
@@ -100,11 +104,12 @@ object MangaTranslator {
 
     private suspend fun translateWithGoogleBatch(
         blocks: List<RawBlock>,
+        sourceLang: String,
         targetLang: String,
     ): List<TranslatedBubble> = coroutineScope {
         blocks.mapIndexed { idx, block ->
             async(Dispatchers.IO) {
-                val translated = translateTextGoogle(block.text, targetLang)
+                val translated = translateTextGoogle(block.text, sourceLang, targetLang)
                 TranslatedBubble(
                     id = idx,
                     originalText = block.text,
@@ -115,17 +120,23 @@ object MangaTranslator {
         }.awaitAll()
     }
 
-    private suspend fun translateTextGoogle(text: String, targetLang: String): String = withContext(Dispatchers.IO) {
+    private suspend fun translateTextGoogle(
+        text: String,
+        sourceLang: String,
+        targetLang: String,
+    ): String = withContext(Dispatchers.IO) {
         if (text.isBlank()) return@withContext text
-        runCatching {
+
+        // Primary Google endpoint with explicit source and target languages (never auto)
+        val primaryResult = runCatching {
             val encoded = URLEncoder.encode(text, "UTF-8")
-            val urlString = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=$targetLang&dt=t&q=$encoded"
+            val urlString = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=$sourceLang&tl=$targetLang&dt=t&q=$encoded"
             val url = URI.create(urlString).toURL()
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile)")
-                connectTimeout = 8000
-                readTimeout = 8000
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10)")
+                connectTimeout = 7000
+                readTimeout = 7000
             }
             val response = conn.inputStream.bufferedReader().use { it.readText() }
             val array = JSONArray(response)
@@ -138,19 +149,55 @@ object MangaTranslator {
                 }
             }
             sb.toString().trim()
-        }.getOrElse { text }
+        }.getOrNull()
+
+        if (primaryResult != null && primaryResult.isNotBlank()) {
+            if (sourceLang != "ja" || !containsJapanese(primaryResult)) {
+                return@withContext primaryResult
+            }
+        }
+
+        // Secondary Google endpoint (dict-chrome-ex) fallback with explicit languages
+        val secondaryResult = runCatching {
+            val encoded = URLEncoder.encode(text, "UTF-8")
+            val urlString = "https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=$sourceLang&tl=$targetLang&q=$encoded"
+            val url = URI.create(urlString).toURL()
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                setRequestProperty("User-Agent", "Mozilla/5.0")
+                connectTimeout = 7000
+                readTimeout = 7000
+            }
+            val response = conn.inputStream.bufferedReader().use { it.readText() }
+            val array = JSONArray(response)
+            array.optString(0).trim()
+        }.getOrNull()
+
+        if (secondaryResult != null && secondaryResult.isNotBlank()) {
+            if (sourceLang != "ja" || !containsJapanese(secondaryResult)) {
+                return@withContext secondaryResult
+            }
+        }
+
+        primaryResult ?: secondaryResult ?: text
     }
 
     private suspend fun translateWithGemini(
         texts: List<String>,
+        sourceLang: String,
         targetLang: String,
+        promptTemplate: String,
         apiKeys: List<String>,
         model: String,
     ): List<String> = withContext(Dispatchers.IO) {
         if (texts.isEmpty()) return@withContext emptyList()
         if (apiKeys.isEmpty()) error("No hay claves de API disponibles")
 
-        val langName = if (targetLang.equals("es", ignoreCase = true)) "Spanish" else "English"
+        val formattedInstruction = TranslatorSettings.formatGeminiPrompt(
+            template = promptTemplate,
+            sourceLang = sourceLang,
+            targetLang = targetLang,
+        )
 
         val inputItems = JSONArray()
         texts.forEachIndexed { idx, txt ->
@@ -163,10 +210,10 @@ object MangaTranslator {
         }
 
         val prompt = """
-            You are an expert manga translator. Translate the following Japanese manga dialogue lines into natural, expressive, and concise $langName suitable for speech bubbles.
-            Maintain context and speaker tone between lines on the same page.
+            $formattedInstruction
             Return ONLY a valid JSON array of objects with "id" and "translated".
-            Example: [{"id": 0, "translated": "¡Hola!"}]
+            Example format:
+            [{"id": 0, "translated": "text"}]
 
             Input dialogue:
             $inputItems
@@ -227,23 +274,48 @@ object MangaTranslator {
                     val part = content.getJSONArray("parts").getJSONObject(0)
                     val rawJson = part.getString("text").trim()
 
+                    val parsedArray = extractJsonArray(rawJson)
                     val results = arrayOfNulls<String>(texts.size)
-                    val parsedArray = JSONArray(rawJson)
+
                     for (i in 0 until parsedArray.length()) {
-                        val obj = parsedArray.getJSONObject(i)
-                        val id = obj.getInt("id")
-                        val trans = obj.getString("translated")
-                        if (id in results.indices) {
-                            results[id] = trans
+                        val item = parsedArray.get(i)
+                        var transText = ""
+                        var targetId = i
+
+                        if (item is JSONObject) {
+                            targetId = item.optInt("id", -1).takeIf { it != -1 }
+                                ?: item.optString("id").toIntOrNull()
+                                ?: i
+                            transText = item.optString("translated").takeIf { it.isNotBlank() }
+                                ?: item.optString("translation").takeIf { it.isNotBlank() }
+                                ?: item.optString("text").takeIf { it.isNotBlank() }
+                                ?: item.optString(targetLang).takeIf { it.isNotBlank() }
+                                ?: ""
+                        } else if (item is String) {
+                            transText = item
+                        }
+
+                        if (targetId in results.indices && transText.isNotBlank()) {
+                            results[targetId] = transText.trim()
                         }
                     }
 
-                    return@withContext texts.mapIndexed { idx, orig ->
-                        results[idx] ?: orig
+                    // Fallback to Google Translate for any missing or untranslated items
+                    val finalTexts = mutableListOf<String>()
+                    for (idx in texts.indices) {
+                        val gText = results[idx]
+                        if (gText != null && gText.isNotBlank() && (sourceLang != "ja" || !containsJapanese(gText))) {
+                            finalTexts.add(gText)
+                        } else {
+                            val googleFallback = translateTextGoogle(texts[idx], sourceLang, targetLang)
+                            finalTexts.add(googleFallback)
+                        }
                     }
+
+                    return@withContext finalTexts
                 } else {
                     val errorText = conn.errorStream?.bufferedReader()?.use { it.readText() }
-                    lastError = IllegalStateException("Gemini API error ($responseCode) clave #${keyIndex + 1}: $errorText")
+                    lastError = IllegalStateException("Gemini API ($responseCode): $errorText")
                 }
             } catch (e: Exception) {
                 lastError = e
@@ -251,6 +323,43 @@ object MangaTranslator {
         }
 
         throw lastError ?: IllegalStateException("Todas las claves de API fallaron")
+    }
+
+    private fun extractJsonArray(raw: String): JSONArray {
+        var text = raw.trim()
+        if (text.startsWith("```json", ignoreCase = true)) {
+            text = text.substringAfter("```json", text)
+        } else if (text.startsWith("```")) {
+            text = text.substringAfter("```", text)
+        }
+        if (text.endsWith("```")) {
+            text = text.substringBeforeLast("```", text)
+        }
+        text = text.trim()
+
+        val startArr = text.indexOf('[')
+        val endArr = text.lastIndexOf(']')
+        if (startArr != -1 && endArr != -1 && endArr > startArr) {
+            return JSONArray(text.substring(startArr, endArr + 1))
+        }
+
+        val startObj = text.indexOf('{')
+        val endObj = text.lastIndexOf('}')
+        if (startObj != -1 && endObj != -1 && endObj > startObj) {
+            val rootObj = JSONObject(text.substring(startObj, endObj + 1))
+            val keys = rootObj.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val arr = rootObj.optJSONArray(key)
+                if (arr != null) return arr
+            }
+        }
+
+        return JSONArray(text)
+    }
+
+    private fun containsJapanese(str: String): Boolean = str.any { ch ->
+        ch in '\u3040'..'\u309F' || ch in '\u30A0'..'\u30FF' || ch in '\u4E00'..'\u9FAF'
     }
 
     suspend fun testGeminiConnection(apiKeys: List<String>, model: String): Result<String> = withContext(Dispatchers.IO) {

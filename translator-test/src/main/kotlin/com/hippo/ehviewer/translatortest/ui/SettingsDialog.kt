@@ -17,10 +17,15 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -43,14 +48,18 @@ import com.hippo.ehviewer.translatortest.MangaTranslator
 import com.hippo.ehviewer.translatortest.TranslatorSettings
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsDialog(
     settings: TranslatorSettings,
+    onLanguagesChanged: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     var isTestingKey by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
     var isTestSuccess by remember { mutableStateOf(false) }
+    var isSourceExpanded by remember { mutableStateOf(false) }
+    var isTargetExpanded by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     AlertDialog(
@@ -70,6 +79,99 @@ fun SettingsDialog(
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
             ) {
+                // Section 0: Idiomas de Entrada y Salida (Sin autodetección)
+                Text(
+                    text = "Idiomas de Traducción",
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = "Aplica tanto para Google Translate como para Gemini IA. Idioma de entrada por defecto: Japonés.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Source Language
+                ExposedDropdownMenuBox(
+                    expanded = isSourceExpanded,
+                    onExpandedChange = { isSourceExpanded = it },
+                ) {
+                    val currentSrc = TranslatorSettings.SOURCE_LANGUAGES.find { it.first == settings.sourceLang }?.second
+                        ?: settings.sourceLang
+                    OutlinedTextField(
+                        value = currentSrc,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Idioma de entrada (Manga)") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isSourceExpanded) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                    )
+                    ExposedDropdownMenu(
+                        expanded = isSourceExpanded,
+                        onDismissRequest = { isSourceExpanded = false },
+                    ) {
+                        TranslatorSettings.SOURCE_LANGUAGES.forEach { (code, name) ->
+                            DropdownMenuItem(
+                                text = { Text(name) },
+                                onClick = {
+                                    if (settings.sourceLang != code) {
+                                        settings.sourceLang = code
+                                        onLanguagesChanged()
+                                    }
+                                    isSourceExpanded = false
+                                },
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Target Language
+                ExposedDropdownMenuBox(
+                    expanded = isTargetExpanded,
+                    onExpandedChange = { isTargetExpanded = it },
+                ) {
+                    val currentTgt = TranslatorSettings.TARGET_LANGUAGES.find { it.first == settings.targetLang }?.second
+                        ?: settings.targetLang
+                    OutlinedTextField(
+                        value = currentTgt,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Idioma de salida (Traducción)") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isTargetExpanded) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                    )
+                    ExposedDropdownMenu(
+                        expanded = isTargetExpanded,
+                        onDismissRequest = { isTargetExpanded = false },
+                    ) {
+                        TranslatorSettings.TARGET_LANGUAGES.forEach { (code, name) ->
+                            DropdownMenuItem(
+                                text = { Text(name) },
+                                onClick = {
+                                    if (settings.targetLang != code) {
+                                        settings.targetLang = code
+                                        onLanguagesChanged()
+                                    }
+                                    isTargetExpanded = false
+                                },
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+
                 // Section 1: Engine Selection
                 Text(
                     text = "Motor de Traducción",
@@ -157,7 +259,7 @@ fun SettingsDialog(
                             Spacer(modifier = Modifier.height(4.dp))
 
                             Text(
-                                text = "💡 Si ingresas varias claves, rotarán automáticamente si una alcanza el límite de cuota (429).",
+                                text = "💡 Puedes ingresar varias claves. Rotarán automáticamente si una alcanza la cuota (429).",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -196,7 +298,43 @@ fun SettingsDialog(
                                 )
                             }
 
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "Plantilla de Prompt IA:",
+                                    fontWeight = FontWeight.SemiBold,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                TextButton(
+                                    onClick = { settings.geminiPromptTemplate = TranslatorSettings.DEFAULT_PROMPT_TEMPLATE },
+                                ) {
+                                    Text("Restablecer", fontSize = 11.sp)
+                                }
+                            }
+
+                            OutlinedTextField(
+                                value = settings.geminiPromptTemplate,
+                                onValueChange = { settings.geminiPromptTemplate = it },
+                                label = { Text("Prompt con comodines") },
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 2,
+                                maxLines = 4,
+                            )
+
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            Text(
+                                text = "💡 Comodines: {lang input} y {lang output}. Se sustituyen automáticamente por los idiomas seleccionados.",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+
+                            Spacer(modifier = Modifier.height(10.dp))
 
                             OutlinedButton(
                                 onClick = {
@@ -249,13 +387,37 @@ fun SettingsDialog(
 
                 // Section 2: Globos y Fuentes
                 Text(
-                    text = "Tamaño de Globos y Fuentes (Global)",
+                    text = "Ajuste de Globos y Fuentes",
                     fontWeight = FontWeight.Bold,
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Burbuja Dinámica Automática",
+                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            text = "Ajusta el tamaño solo para que entre todo el texto sin cortarse",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = settings.dynamicBubbleSize,
+                        onCheckedChange = { settings.dynamicBubbleSize = it },
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),

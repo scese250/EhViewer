@@ -83,8 +83,10 @@ fun BatchTranslateDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
+                    val srcName = TranslatorSettings.getLanguageName(settings.sourceLang)
+                    val tgtName = TranslatorSettings.getLanguageName(settings.targetLang)
                     Text(
-                        text = "Selecciona cuántas páginas deseas traducir por adelantado usando ${if (settings.engine == TranslatorSettings.ENGINE_GEMINI) "Gemini IA" else "Google Translate"}:",
+                        text = "Traducir de $srcName a $tgtName usando ${if (settings.engine == TranslatorSettings.ENGINE_GEMINI) "Gemini IA" else "Google Translate"}:",
                         style = MaterialTheme.typography.bodyMedium,
                     )
 
@@ -150,7 +152,9 @@ fun BatchTranslateDialog(
                                     val trans = MangaTranslator.translatePage(
                                         pageIndex = i,
                                         bitmap = bitmap,
-                                        targetLang = "es",
+                                        sourceLang = settings.sourceLang,
+                                        targetLang = settings.targetLang,
+                                        promptTemplate = settings.geminiPromptTemplate,
                                         engine = settings.engine,
                                         geminiApiKeys = keys,
                                         geminiModel = settings.geminiModel,

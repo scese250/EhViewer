@@ -94,14 +94,24 @@ fun MangaViewerScreen(
     }
 
     // Trigger translation for current page
-    LaunchedEffect(currentPageIndex, currentBitmap, isTranslationEnabled, settings.engine) {
+    LaunchedEffect(
+        currentPageIndex,
+        currentBitmap,
+        isTranslationEnabled,
+        settings.engine,
+        settings.sourceLang,
+        settings.targetLang,
+        settings.geminiPromptTemplate,
+    ) {
         val bitmap = currentBitmap
         if (isTranslationEnabled && bitmap != null && !translationCache.containsKey(currentPageIndex)) {
             isTranslating = true
             val result = MangaTranslator.translatePage(
                 pageIndex = currentPageIndex,
                 bitmap = bitmap,
-                targetLang = "es",
+                sourceLang = settings.sourceLang,
+                targetLang = settings.targetLang,
+                promptTemplate = settings.geminiPromptTemplate,
                 engine = settings.engine,
                 geminiApiKeys = settings.getGeminiApiKeys(),
                 geminiModel = settings.geminiModel,
@@ -112,7 +122,16 @@ fun MangaViewerScreen(
     }
 
     // Background pre-translation of upcoming pages
-    LaunchedEffect(currentPageIndex, isTranslating, settings.autoPretranslate, settings.batchSize, settings.engine) {
+    LaunchedEffect(
+        currentPageIndex,
+        isTranslating,
+        settings.autoPretranslate,
+        settings.batchSize,
+        settings.engine,
+        settings.sourceLang,
+        settings.targetLang,
+        settings.geminiPromptTemplate,
+    ) {
         if (!isTranslating && settings.autoPretranslate && isTranslationEnabled) {
             val maxAhead = minOf(currentPageIndex + settings.batchSize, book.pages.size - 1)
             val keys = settings.getGeminiApiKeys()
@@ -125,7 +144,9 @@ fun MangaViewerScreen(
                         val trans = MangaTranslator.translatePage(
                             pageIndex = nextPage,
                             bitmap = bmp,
-                            targetLang = "es",
+                            sourceLang = settings.sourceLang,
+                            targetLang = settings.targetLang,
+                            promptTemplate = settings.geminiPromptTemplate,
                             engine = settings.engine,
                             geminiApiKeys = keys,
                             geminiModel = settings.geminiModel,
@@ -238,6 +259,10 @@ fun MangaViewerScreen(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                                 ) {
+                                    MetricChip(label = "🔤 ${settings.sourceLang.uppercase()} ➔ ${settings.targetLang.uppercase()}")
+                                    if (settings.dynamicBubbleSize) {
+                                        MetricChip(label = "📐 Auto-ajuste")
+                                    }
                                     MetricChip(label = "⚡ OCR: ${trans.ocrDurationMs}ms")
                                     MetricChip(label = "🌐 Trad: ${trans.translateDurationMs}ms")
                                     MetricChip(label = "⏱️ Total: ${trans.totalDurationMs}ms")
@@ -329,6 +354,7 @@ fun MangaViewerScreen(
                             horizontalExpansion = settings.horizontalExpansion,
                             globalFontScale = settings.globalFontScale,
                             bubbleOpacity = settings.bubbleOpacity,
+                            dynamicBubbleSize = settings.dynamicBubbleSize,
                             onBubbleClick = { selectedBubble = it },
                         )
                     }
@@ -357,6 +383,7 @@ fun MangaViewerScreen(
     if (isSettingsOpen) {
         SettingsDialog(
             settings = settings,
+            onLanguagesChanged = { translationCache.clear() },
             onDismiss = { isSettingsOpen = false },
         )
     }
