@@ -162,3 +162,28 @@ jobs:
         with:
           name: marshmallow-native-debug-symbols-${{ github.sha }}
           path: app/build/outputs/native-debug-symbols/marshmallowRelease/native-debug-symbols.zip
+
+  translator-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version-file: .java-version
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build Translator Test APK
+        run: ./gradlew :translator-test:assembleRelease
+
+      - name: Upload Translator Test APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: manga-translator-test-release-${{ github.sha }}
+          path: translator-test/build/outputs/apk/release/*.apk
+
