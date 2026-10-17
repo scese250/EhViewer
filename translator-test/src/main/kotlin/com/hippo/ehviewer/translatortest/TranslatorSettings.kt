@@ -24,12 +24,10 @@ class TranslatorSettings(context: Context) {
     var autoPretranslate by mutableStateOf(prefs.getBoolean("auto_pretranslate", true))
     var batchSize by mutableIntStateOf(prefs.getInt("batch_size", 3))
 
-    fun getGeminiApiKeys(): List<String> {
-        return geminiApiKeysRaw
-            .split('\n', ',', ';')
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-    }
+    fun getGeminiApiKeys(): List<String> = geminiApiKeysRaw
+        .split('\n', ',', ';')
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
 
     fun save() {
         prefs.edit()
