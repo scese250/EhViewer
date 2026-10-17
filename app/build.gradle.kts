@@ -18,7 +18,14 @@ plugins {
     alias(libs.plugins.baselineprofile)
 }
 
-val supportedAbis = arrayOf("arm64-v8a", "x86_64", "armeabi-v7a")
+// Snapshot builds (everything except tagged releases, which pass -Prelease) only need to run on
+// arm64-v8a devices. Leaving out the other ABIs skips their native builds, which is by far the
+// slowest part of the build. Tagged releases keep shipping every supported ABI.
+val supportedAbis = if (hasProperty("release")) {
+    arrayOf("arm64-v8a", "x86_64", "armeabi-v7a")
+} else {
+    arrayOf("arm64-v8a")
+}
 
 android {
     splits {

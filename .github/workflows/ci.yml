@@ -94,18 +94,6 @@ jobs:
           name: default-arm64-v8a-${{ github.sha }}
           path: app/build/outputs/apk/default/release/app-default-arm64-v8a-release.apk
 
-      - name: Upload x86_64
-        uses: actions/upload-artifact@v7
-        with:
-          name: default-x86_64-${{ github.sha }}
-          path: app/build/outputs/apk/default/release/app-default-x86_64-release.apk
-
-      - name: Upload ARM32
-        uses: actions/upload-artifact@v7
-        with:
-          name: default-armeabi-v7a-${{ github.sha }}
-          path: app/build/outputs/apk/default/release/app-default-armeabi-v7a-release.apk
-
       - name: Upload mapping
         if: always()
         uses: actions/upload-artifact@v7
@@ -161,18 +149,6 @@ jobs:
         with:
           name: marshmallow-arm64-v8a-${{ github.sha }}
           path: app/build/outputs/apk/marshmallow/release/app-marshmallow-arm64-v8a-release.apk
-
-      - name: Upload x86_64
-        uses: actions/upload-artifact@v7
-        with:
-          name: marshmallow-x86_64-${{ github.sha }}
-          path: app/build/outputs/apk/marshmallow/release/app-marshmallow-x86_64-release.apk
-
-      - name: Upload ARM32
-        uses: actions/upload-artifact@v7
-        with:
-          name: marshmallow-armeabi-v7a-${{ github.sha }}
-          path: app/build/outputs/apk/marshmallow/release/app-marshmallow-armeabi-v7a-release.apk
 
       - name: Upload mapping
         if: always()

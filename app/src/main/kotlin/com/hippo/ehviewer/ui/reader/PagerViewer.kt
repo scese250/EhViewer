@@ -12,7 +12,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -86,26 +85,10 @@ fun PagerViewer(
         }
     }
 
-    // Estados para persistir el zoom solo al avanzar de página en Vertical Manga Read
-    var savedZoomFactor by remember { mutableFloatStateOf(1f) }
-    var lastPage by remember { mutableIntStateOf(pagerState.currentPage) }
-    var forwardTargetPage by remember { mutableIntStateOf(-1) }
-
-    LaunchedEffect(pagerState, isVerticalManga) {
-        if (!isVerticalManga) {
-            savedZoomFactor = 1f
-            forwardTargetPage = -1
-            return@LaunchedEffect
-        }
-        snapshotFlow { pagerState.currentPage }.collect { currentPage ->
-            if (currentPage > lastPage) {
-                forwardTargetPage = currentPage
-            } else if (currentPage < lastPage) {
-                forwardTargetPage = -1
-            }
-            lastPage = currentPage
-        }
-    }
+    // Zoom of the current page, relative to the scale used when the whole image fits on
+    // screen. It is handed over to whichever page becomes current next, so that Vertical
+    // Manga Read keeps the user's zoom level while reading.
+    var carriedZoom by remember { mutableFloatStateOf(1f) }
 
     if (isVertical) {
         VerticalPager(
@@ -120,10 +103,8 @@ fun PagerViewer(
                 pageLoader = pageLoader,
                 isRtl = isVerticalManga,
                 isVerticalManga = isVerticalManga,
-                savedZoomFactor = { savedZoomFactor },
-                onZoomChanged = { savedZoomFactor = it },
-                shouldApplySavedZoom = forwardTargetPage == index,
-                onSavedZoomApplied = { if (forwardTargetPage == index) forwardTargetPage = -1 },
+                carriedZoom = { carriedZoom },
+                onZoomChanged = { carriedZoom = it },
                 scaleType = scaleType,
                 landscapeZoom = landscapeZoom,
                 alignment = alignment,
@@ -150,10 +131,8 @@ fun PagerViewer(
                 pageLoader = pageLoader,
                 isRtl = isRtl,
                 isVerticalManga = false,
-                savedZoomFactor = { 1f },
+                carriedZoom = { 1f },
                 onZoomChanged = {},
-                shouldApplySavedZoom = false,
-                onSavedZoomApplied = {},
                 scaleType = scaleType,
                 landscapeZoom = landscapeZoom,
                 alignment = alignment,
@@ -174,10 +153,8 @@ private fun PageContainer(
     pageLoader: PageLoader,
     isRtl: Boolean,
     isVerticalManga: Boolean,
-    savedZoomFactor: () -> Float,
+    carriedZoom: () -> Float,
     onZoomChanged: (Float) -> Unit,
-    shouldApplySavedZoom: Boolean,
-    onSavedZoomApplied: () -> Unit,
     scaleType: Int,
     landscapeZoom: Boolean,
     alignment: Alignment.Horizontal,
@@ -220,40 +197,39 @@ private fun PageContainer(
             val contentLocation = ZoomableContentLocation.scaledInsideAndCenterAligned(size)
             zoomableState.setContentLocation(contentLocation)
         }
-        // 1. Rastrear cambios de zoom en la página actual cuando Vertical Manga Read está activo
+        // Vertical Manga Read: hand the current zoom over to the next page and start it from
+        // the top-right corner, because manga panels are read from right to left.
         if (isVerticalManga) {
             val isCurrentPage = pagerState.currentPage == page.index
-            LaunchedEffect(isCurrentPage, zoomableState) {
-                if (isCurrentPage) {
-                    snapshotFlow {
-                        val metadata = zoomableState.contentTransformation.scaleMetadata
-                        val baseScale = metadata.initialScale.scaleX
-                        val currentScale = zoomableState.contentTransformation.scale.scaleX
-                        if (baseScale > 0f) currentScale / baseScale else 1f
-                    }.collect { relativeZoom ->
-                        if (relativeZoom >= 1f) {
-                            onZoomChanged(relativeZoom)
+            LaunchedEffect(isCurrentPage, size, layoutSize, zoomableState) {
+                if (!isCurrentPage) return@LaunchedEffect
+                // Wait until telephoto has measured the content and knows where it is.
+                snapshotFlow { zoomableState.zoomFraction }.first { it != null }
+                zoomableState.contentAlignment = AbsoluteAlignment.Right + Alignment.Top
+                val relativeZoom = carriedZoom()
+                val baseScale = zoomableState.contentTransformation.scaleMetadata.initialScale.scaleX
+                var restored = false
+                if (relativeZoom > 1.01f && baseScale > 0f) {
+                    // The centroid stays pinned, so zooming around the viewport's top-right
+                    // corner leaves the image's top-right corner right where the user expects it.
+                    zoomableState.zoomTo(
+                        zoomFactor = baseScale * relativeZoom,
+                        centroid = Offset(layoutSize.width, 0f),
+                        animationSpec = SnapSpec(),
+                    )
+                    restored = true
+                }
+                // Track this page's zoom only after the inherited one was applied, otherwise
+                // the freshly composed page would report its default zoom and lose it again.
+                snapshotFlow { zoomableState.contentTransformation.scaleMetadata.userZoom }
+                    .collect { userZoom ->
+                        if (!userZoom.isFinite() || userZoom <= 0f) return@collect
+                        if (restored) {
+                            if (userZoom < relativeZoom - 0.01f) return@collect
+                            restored = false
                         }
+                        onZoomChanged(userZoom)
                     }
-                }
-            }
-            // 2. Aplicar el zoom guardado y posicionar en la esquina superior derecha al avanzar a la página subsiguiente
-            LaunchedEffect(shouldApplySavedZoom, size, layoutSize) {
-                if (shouldApplySavedZoom) {
-                    // Esperar a que telephoto inicialice las coordenadas del contenido
-                    snapshotFlow { zoomableState.zoomFraction }.first { it != null }
-                    val relativeZoom = savedZoomFactor()
-                    if (relativeZoom > 1.01f) {
-                        val baseScale = zoomableState.contentTransformation.scaleMetadata.initialScale.scaleX
-                        val targetScale = (baseScale * relativeZoom).coerceAtMost(zoomableState.zoomSpec.maximum.factor)
-                        zoomableState.zoomTo(
-                            zoomFactor = targetScale,
-                            centroid = Offset(layoutSize.width, 0f),
-                            animationSpec = SnapSpec(),
-                        )
-                    }
-                    onSavedZoomApplied()
-                }
             }
         }
         if (landscapeZoom && contentScale == ContentScale.Fit && size.width > size.height && !isVerticalManga) {
