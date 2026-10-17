@@ -186,7 +186,7 @@ private fun PageContainer(
             } else {
                 Alignment.CenterHorizontally
             }
-            val verticalAlignment = if (isVerticalManga || contentSize.height > layoutSize.height) {
+            val verticalAlignment = if (contentSize.height > layoutSize.height) {
                 Alignment.Top
             } else {
                 Alignment.CenterVertically
@@ -205,13 +205,14 @@ private fun PageContainer(
                 if (!isCurrentPage) return@LaunchedEffect
                 // Wait until telephoto has measured the content and knows where it is.
                 snapshotFlow { zoomableState.zoomFraction }.first { it != null }
-                zoomableState.contentAlignment = AbsoluteAlignment.Right + Alignment.Top
                 val relativeZoom = carriedZoom()
                 val baseScale = zoomableState.contentTransformation.scaleMetadata.initialScale.scaleX
                 var restored = false
                 if (relativeZoom > 1.01f && baseScale > 0f) {
-                    // The centroid stays pinned, so zooming around the viewport's top-right
-                    // corner leaves the image's top-right corner right where the user expects it.
+                    // The centroid is kept stationary. Telephoto clamps any axis that overflows the
+                    // viewport instead of honouring the alignment, so pinning the viewport's top-right
+                    // corner lands on the image's top-right corner once the page is larger than the
+                    // screen, while a page that still fits stays centered by the alignment above.
                     zoomableState.zoomTo(
                         zoomFactor = baseScale * relativeZoom,
                         centroid = Offset(layoutSize.width, 0f),
