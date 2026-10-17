@@ -115,36 +115,54 @@ private fun DynamicBubbleView(
     onBubbleClick: (TranslatedBubble) -> Unit,
 ) {
     val density = LocalDensity.current
-    val origWidthPx = (bubble.boundingBox.width() * scaleX).coerceAtLeast(10f)
-    val origHeightPx = (bubble.boundingBox.height() * scaleY).coerceAtLeast(10f)
+    val origWidthPx = (bubble.boundingBox.width() * scaleX).coerceAtLeast(12f)
+    val origHeightPx = (bubble.boundingBox.height() * scaleY).coerceAtLeast(12f)
 
     val centerX = offsetX + (bubble.boundingBox.centerX() * scaleX)
     val centerY = offsetY + (bubble.boundingBox.centerY() * scaleY)
 
-    val isVerticalText = origHeightPx > origWidthPx * 1.15f
-    val baseWidth = if (isVerticalText) {
-        maxOf(
-            origWidthPx * horizontalExpansion,
-            minOf(origHeightPx * 0.72f, containerWidthPx * 0.48f),
-        )
-    } else {
-        origWidthPx * 1.25f
+    val words = remember(bubble.translatedText) {
+        bubble.translatedText.split("\\s+".toRegex()).filter { it.isNotBlank() }
     }
-    val baseHeight = origHeightPx * 1.08f
+    val longestWordLen = remember(words) {
+        words.maxOfOrNull { it.length } ?: 1
+    }
+    val textLen = bubble.translatedText.length.coerceAtLeast(1)
 
-    val targetWidthPx = (baseWidth * globalBubbleScale * bubble.widthScale)
-        .coerceIn(40f, containerWidthPx * 0.85f)
-    val targetHeightPx = (baseHeight * globalBubbleScale * bubble.heightScale)
-        .coerceIn(24f, containerHeightPx * 0.85f)
+    // Base horizontal width according to text length to provide horizontal breathing room
+    val minContentWidthPx = when {
+        textLen <= 6 -> 55f
+        textLen <= 18 -> 85f
+        textLen <= 40 -> 115f
+        textLen <= 80 -> 140f
+        else -> 165f
+    } * density.density
+
+    // Estimate suitable font size based on text length and area
+    val baseArea = maxOf(origWidthPx * 1.5f, minContentWidthPx) * origHeightPx * 1.15f
+    val charArea = baseArea / textLen
+    val autoFontSizeSp = (sqrt(charArea / (density.density * density.density)) * 0.78f).coerceIn(9.5f, 16f)
+    val finalFontSizeSp = bubble.customFontSizeSp ?: (autoFontSizeSp * globalFontScale).coerceIn(8.5f, 24f)
+
+    // Ensure the box width is NEVER narrower than the longest word + horizontal padding.
+    // In Latin typography, approx char width is ~0.60 * fontSizeSp.
+    // This strictly prevents words from breaking mid-word with orphan letters on the next line!
+    val approxCharWidthPx = finalFontSizeSp * density.density * 0.60f
+    val minWordWidthPx = (longestWordLen * approxCharWidthPx) + (20f * density.density)
+
+    val calculatedWidthPx = maxOf(
+        origWidthPx * horizontalExpansion,
+        minContentWidthPx,
+        minWordWidthPx,
+    )
+
+    val targetWidthPx = (calculatedWidthPx * globalBubbleScale * bubble.widthScale)
+        .coerceIn(minWordWidthPx, containerWidthPx * 0.92f)
+    val targetHeightPx = (origHeightPx * 1.12f * globalBubbleScale * bubble.heightScale)
+        .coerceIn(28f, containerHeightPx * 0.90f)
 
     var measuredSize by remember(bubble.translatedText, targetWidthPx, globalFontScale, dynamicBubbleSize) {
         mutableStateOf<IntSize?>(null)
-    }
-
-    val finalWidth = if (dynamicBubbleSize && measuredSize != null) {
-        measuredSize!!.width.toFloat()
-    } else {
-        targetWidthPx
     }
 
     val finalHeight = if (dynamicBubbleSize && measuredSize != null) {
@@ -153,21 +171,14 @@ private fun DynamicBubbleView(
         targetHeightPx
     }
 
-    val boxLeft = (centerX - (finalWidth / 2f)).coerceIn(
+    val boxLeft = (centerX - (targetWidthPx / 2f)).coerceIn(
         0f,
-        (containerWidthPx - finalWidth).coerceAtLeast(0f),
+        (containerWidthPx - targetWidthPx).coerceAtLeast(0f),
     )
     val boxTop = (centerY - (finalHeight / 2f)).coerceIn(
         0f,
         (containerHeightPx - finalHeight).coerceAtLeast(0f),
     )
-
-    // Dynamic typography
-    val textLen = bubble.translatedText.length.coerceAtLeast(1)
-    val area = targetWidthPx * targetHeightPx
-    val charArea = area / textLen
-    val estimatedSp = (sqrt(charArea) * 0.72f).coerceIn(8.5f, 20f)
-    val finalFontSizeSp = bubble.customFontSizeSp ?: (estimatedSp * globalFontScale).coerceIn(7.5f, 26f)
 
     val targetWidthDp = with(density) { targetWidthPx.toDp() }
     val targetHeightDp = with(density) { targetHeightPx.toDp() }
@@ -189,14 +200,14 @@ private fun DynamicBubbleView(
             .background(Color.White.copy(alpha = bubbleOpacity), RoundedCornerShape(8.dp))
             .border(1.dp, Color.Black.copy(alpha = 0.65f), RoundedCornerShape(8.dp))
             .clickable { onBubbleClick(bubble) }
-            .padding(horizontal = 4.dp, vertical = 3.dp),
+            .padding(horizontal = 6.dp, vertical = 4.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = bubble.translatedText,
             color = Color.Black,
             fontSize = finalFontSizeSp.sp,
-            lineHeight = (finalFontSizeSp * 1.18f).sp,
+            lineHeight = (finalFontSizeSp * 1.20f).sp,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
             softWrap = true,

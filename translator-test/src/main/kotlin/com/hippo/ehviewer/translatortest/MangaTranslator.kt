@@ -55,8 +55,8 @@ object MangaTranslator {
             )
         }
 
-        // Merge adjacent columns in Japanese vertical manga speech bubbles
-        val mergedBlocks = if (sourceLang == "ja") mergeAdjacentMangaBlocks(rawBlocks) else rawBlocks
+        // Merge adjacent vertical columns in Japanese manga only if they belong to the same bubble
+        val mergedBlocks = if (sourceLang == "ja") mergeAdjacentMangaBlocks(rawBlocks, bitmap) else rawBlocks
 
         var bubbles: List<TranslatedBubble> = emptyList()
         var engineUsed = "Google"
@@ -412,7 +412,7 @@ object MangaTranslator {
         }
     }
 
-    private fun mergeAdjacentMangaBlocks(blocks: List<RawBlock>): List<RawBlock> {
+    private fun mergeAdjacentMangaBlocks(blocks: List<RawBlock>, bitmap: Bitmap): List<RawBlock> {
         if (blocks.size <= 1) return blocks
         val remaining = blocks.toMutableList()
         var changed = true
@@ -426,7 +426,7 @@ object MangaTranslator {
                     val b1 = remaining[i]
                     val b2 = remaining[j]
 
-                    if (shouldMergeMangaBlocks(b1.rect, b2.rect)) {
+                    if (shouldMergeMangaColumns(b1, b2, bitmap)) {
                         val mergedRect = Rect(
                             minOf(b1.rect.left, b2.rect.left),
                             minOf(b1.rect.top, b2.rect.top),
@@ -453,26 +453,68 @@ object MangaTranslator {
         return remaining
     }
 
-    private fun shouldMergeMangaBlocks(r1: Rect, r2: Rect): Boolean {
+    private fun shouldMergeMangaColumns(b1: RawBlock, b2: RawBlock, bitmap: Bitmap): Boolean {
+        val r1 = b1.rect
+        val r2 = b2.rect
+
+        // If either block is already multi-column, do NOT merge with other speech bubbles
+        if (r1.width() > r1.height() * 0.70f || r2.width() > r2.height() * 0.70f) {
+            return false
+        }
+
+        // Must share strong vertical overlap (at least 70% of the shorter column)
         val overlapTop = maxOf(r1.top, r2.top)
         val overlapBottom = minOf(r1.bottom, r2.bottom)
         val overlapHeight = (overlapBottom - overlapTop).coerceAtLeast(0)
         val minHeight = minOf(r1.height(), r2.height())
+        if (overlapHeight < minHeight * 0.70f) return false
 
-        // Must share at least 45% of vertical height
-        if (overlapHeight < minHeight * 0.45f) return false
+        // Horizontal distance between adjacent columns
+        val leftRect = if (r1.left < r2.left) r1 else r2
+        val rightRect = if (r1.left < r2.left) r2 else r1
+        val horizontalGap = rightRect.left - leftRect.right
 
-        // Horizontal distance between columns
-        val horizontalGap = if (r1.left > r2.right) {
-            r1.left - r2.right
-        } else if (r2.left > r1.right) {
-            r2.left - r1.right
-        } else {
-            0 // Overlapping horizontally
+        // Inside a single manga speech bubble, column gap is tiny (typically 0-18px).
+        // Gaps >= 20px indicate separate bubbles or panel borders.
+        if (horizontalGap < -4 || horizontalGap > 18) return false
+
+        // Check if there is a dark bubble border or ink line between the two columns
+        if (hasDarkStrokeBetween(leftRect.right, rightRect.left, overlapTop, overlapBottom, bitmap)) {
+            return false
         }
 
-        val maxWidth = maxOf(r1.width(), r2.width())
-        return horizontalGap < maxWidth * 2.2f && horizontalGap < 70
+        return true
+    }
+
+    private fun hasDarkStrokeBetween(
+        xStart: Int,
+        xEnd: Int,
+        yTop: Int,
+        yBottom: Int,
+        bitmap: Bitmap,
+    ): Boolean {
+        if (xEnd <= xStart) return false
+        val startX = xStart.coerceIn(0, bitmap.width - 1)
+        val endX = xEnd.coerceIn(0, bitmap.width - 1)
+        if (endX - startX < 2) return false
+
+        val midY1 = (yTop + (yBottom - yTop) * 0.35f).toInt().coerceIn(0, bitmap.height - 1)
+        val midY2 = (yTop + (yBottom - yTop) * 0.65f).toInt().coerceIn(0, bitmap.height - 1)
+
+        var darkFound1 = false
+        var darkFound2 = false
+
+        for (x in startX..endX) {
+            val p1 = bitmap.getPixel(x, midY1)
+            val luma1 = (0.299f * ((p1 shr 16) and 0xFF) + 0.587f * ((p1 shr 8) and 0xFF) + 0.114f * (p1 and 0xFF))
+            if (luma1 < 95) darkFound1 = true
+
+            val p2 = bitmap.getPixel(x, midY2)
+            val luma2 = (0.299f * ((p2 shr 16) and 0xFF) + 0.587f * ((p2 shr 8) and 0xFF) + 0.114f * (p2 and 0xFF))
+            if (luma2 < 95) darkFound2 = true
+        }
+
+        return darkFound1 || darkFound2
     }
 
     private suspend fun TextRecognizer.processImage(
