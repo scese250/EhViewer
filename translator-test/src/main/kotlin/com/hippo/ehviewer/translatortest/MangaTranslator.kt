@@ -148,7 +148,7 @@ object MangaTranslator {
                     sb.append(part.optString(0))
                 }
             }
-            sb.toString().trim()
+            cleanMangaText(sb.toString())
         }.getOrNull()
 
         if (primaryResult != null && primaryResult.isNotBlank()) {
@@ -170,7 +170,7 @@ object MangaTranslator {
             }
             val response = conn.inputStream.bufferedReader().use { it.readText() }
             val array = JSONArray(response)
-            array.optString(0).trim()
+            cleanMangaText(array.optString(0))
         }.getOrNull()
 
         if (secondaryResult != null && secondaryResult.isNotBlank()) {
@@ -179,8 +179,15 @@ object MangaTranslator {
             }
         }
 
-        primaryResult ?: secondaryResult ?: text
+        cleanMangaText(primaryResult ?: secondaryResult ?: text)
     }
+
+    private fun cleanMangaText(text: String): String = text
+        .replace(Regex("[\\r\\n]+"), " ")
+        .replace(Regex("([¿¡])\\s+"), "$1")
+        .replace(Regex("\\s+([!?,.:;])"), "$1")
+        .replace(Regex("\\s+"), " ")
+        .trim()
 
     private suspend fun translateWithGemini(
         texts: List<String>,
@@ -296,7 +303,7 @@ object MangaTranslator {
                         }
 
                         if (targetId in results.indices && transText.isNotBlank()) {
-                            results[targetId] = transText.trim()
+                            results[targetId] = cleanMangaText(transText)
                         }
                     }
 

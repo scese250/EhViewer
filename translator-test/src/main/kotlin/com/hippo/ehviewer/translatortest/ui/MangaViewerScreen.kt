@@ -188,7 +188,12 @@ fun MangaViewerScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { settings.isManipulationMode = !settings.isManipulationMode }) {
+                    IconButton(
+                        onClick = {
+                            settings.isManipulationMode = !settings.isManipulationMode
+                            settings.save()
+                        },
+                    ) {
                         Icon(
                             imageVector = Icons.Default.TouchApp,
                             contentDescription = "Manipular burbujas",
