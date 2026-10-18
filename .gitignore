@@ -9,3 +9,4 @@ build
 .vscode
 /captures
 .freebuff
+build-artifacts/
