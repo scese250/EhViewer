@@ -921,23 +921,21 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
             when (status) {
                 TranslationStatus.WaitingForPage,
                 TranslationStatus.RecognizingText,
-                TranslationStatus.TranslatingText -> CircularProgressIndicator(
+                TranslationStatus.TranslatingText,
+                -> CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
                     strokeWidth = 2.dp,
                 )
-
                 TranslationStatus.Done -> Icon(
                     imageVector = Icons.Filled.Check,
                     contentDescription = null,
                     modifier = Modifier.size(20.dp),
                 )
-
                 is TranslationStatus.Failed -> Icon(
                     imageVector = Icons.Filled.Warning,
                     contentDescription = null,
                     modifier = Modifier.size(20.dp),
                 )
-
                 TranslationStatus.Idle -> Icon(
                     imageVector = Icons.Filled.Translate,
                     contentDescription = null,

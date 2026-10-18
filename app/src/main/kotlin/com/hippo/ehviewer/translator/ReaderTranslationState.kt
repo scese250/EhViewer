@@ -197,10 +197,10 @@ class ReaderTranslationState(
             throw e
         } catch (e: OutOfMemoryError) {
             logcat("ReaderTranslator", e)
-            fail(index, "Memoria insuficiente para traducir esta página")
+            return fail(index, "Memoria insuficiente para traducir esta página")
         } catch (e: Throwable) {
             logcat("ReaderTranslator", e)
-            fail(index, "Error: ${e.message ?: e.javaClass.simpleName}")
+            return fail(index, "Error: ${e.message ?: e.javaClass.simpleName}")
         }
     }
 
