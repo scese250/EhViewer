@@ -28,6 +28,7 @@ kotlinx-io = "0.9.0"
 kotlinx-serialization = "1.11.0"
 ksp = "2.3.8"
 ktor = "3.5.0"
+mlkit-text-recognition = "16.0.1"
 moko-resources = "0.26.4"
 okhttp = "5.3.2"
 okio = "3.17.0"
@@ -109,6 +110,8 @@ ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "kto
 logcat = "com.squareup.logcat:logcat:0.4"
 
 moko-resources = { module = "dev.icerock.moko:resources", version.ref = "moko-resources" }
+
+mlkit-text-recognition-japanese = { module = "com.google.mlkit:text-recognition-japanese", version.ref = "mlkit-text-recognition" }
 
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 

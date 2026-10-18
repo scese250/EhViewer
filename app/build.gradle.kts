@@ -235,6 +235,9 @@ dependencies {
     implementation(libs.aboutlibraries.compose.m3)
     implementation(libs.accompanist.drawable.painter)
 
+    // Bundled Japanese OCR model for the in-reader manga translator
+    implementation(libs.mlkit.text.recognition.japanese)
+
     implementation(libs.reorderable)
 
     implementation(platform(libs.arrow.stack))

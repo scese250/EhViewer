@@ -39,6 +39,7 @@ fun BoxScope.ReaderAppBars(
     totalPages: Int,
     onSliderValueChange: (Int) -> Unit,
     onClickSettings: () -> Unit,
+    onClickTranslation: () -> Unit,
 ) {
     val backgroundColor = BottomAppBarDefaults.containerColor.copy(alpha = if (isSystemInDarkTheme()) 0.9f else 0.95f)
 
@@ -71,7 +72,11 @@ fun BoxScope.ReaderAppBars(
                     containerColor = backgroundColor,
                 )
             }
-            BottomReaderBar(onClickSettings = onClickSettings, containerColor = backgroundColor)
+            BottomReaderBar(
+                onClickSettings = onClickSettings,
+                onClickTranslation = onClickTranslation,
+                containerColor = backgroundColor,
+            )
         }
     }
 }

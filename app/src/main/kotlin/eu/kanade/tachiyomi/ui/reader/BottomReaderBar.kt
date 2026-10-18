@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
@@ -38,7 +39,11 @@ import eu.kanade.tachiyomi.ui.reader.setting.PreferenceType
 import eu.kanade.tachiyomi.ui.reader.setting.ReadingModeType
 
 @Composable
-fun BottomReaderBar(onClickSettings: () -> Unit, containerColor: Color) = FlexibleBottomAppBar(
+fun BottomReaderBar(
+    onClickSettings: () -> Unit,
+    onClickTranslation: () -> Unit,
+    containerColor: Color,
+) = FlexibleBottomAppBar(
     containerColor = containerColor,
     contentPadding = PaddingValues.Zero,
     horizontalArrangement = Arrangement.SpaceEvenly,
@@ -68,6 +73,11 @@ fun BottomReaderBar(onClickSettings: () -> Unit, containerColor: Color) = Flexib
         onClick = { cropBorder = !cropBorder },
         imageVector = if (cropBorder) EhIcons.Default.Crop else EhIcons.Default.CropOff,
         contentDescription = stringResource(R.string.pref_crop_borders),
+    )
+    ActionButton(
+        onClick = onClickTranslation,
+        imageVector = Icons.Default.Translate,
+        contentDescription = "Traducción",
     )
     ActionButton(
         onClick = onClickSettings,

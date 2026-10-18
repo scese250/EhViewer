@@ -56,6 +56,9 @@ import com.hippo.ehviewer.gallery.PageStatus
 import com.hippo.ehviewer.gallery.progressObserved
 import com.hippo.ehviewer.gallery.statusObserved
 import com.hippo.ehviewer.image.Image
+import com.hippo.ehviewer.translator.LocalReaderTranslation
+import com.hippo.ehviewer.translator.ui.OverlayFitMode
+import com.hippo.ehviewer.translator.ui.ReaderTranslationOverlay
 import com.hippo.ehviewer.util.AdsPlaceholderFile
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.drop
@@ -126,23 +129,50 @@ fun PagerItem(
                 val drawable = (painter as? DrawablePainter)?.drawable
                 val grayScale by Settings.grayScale.collectAsState()
                 val invert by Settings.invertedColors.collectAsState()
-                Image(
-                    // DrawablePainter <: RememberObserver
-                    painter = remember(painter) { painter },
-                    contentDescription = null,
-                    modifier = Modifier.thenIf(drawable is Animatable) {
-                        onVisibilityChanged(minDurationMs = 33, minFractionVisible = 0.5f) {
-                            drawable!!.setVisible(it, false)
-                        }
-                    }.then(contentModifier).fillMaxSize(),
-                    contentScale = contentScale,
-                    colorFilter = when {
-                        grayScale && invert -> grayScaleAndInvertFilter
-                        grayScale -> grayScaleFilter
-                        invert -> invertFilter
-                        else -> null
-                    },
-                )
+                val translation = LocalReaderTranslation.current?.translations?.get(page.index)
+                val intrinsic = image.intrinsicSize
+                val fillWidth = contentScale == ContentScale.FillWidth
+                val imageAspect = if (intrinsic.width > 0 && intrinsic.height > 0) {
+                    intrinsic.width.toFloat() / intrinsic.height
+                } else {
+                    DEFAULT_ASPECT
+                }
+                val boxModifier = if (fillWidth) {
+                    modifier.fillMaxWidth().aspectRatio(imageAspect)
+                } else {
+                    modifier.fillMaxSize()
+                }
+                // Keep the image and the translation overlay in the same
+                // layout node, so telephoto's zoom and pan transform both.
+                Box(modifier = boxModifier.then(contentModifier)) {
+                    Image(
+                        // DrawablePainter <: RememberObserver
+                        painter = remember(painter) { painter },
+                        contentDescription = null,
+                        modifier = Modifier.thenIf(drawable is Animatable) {
+                            onVisibilityChanged(minDurationMs = 33, minFractionVisible = 0.5f) {
+                                drawable!!.setVisible(it, false)
+                            }
+                        }.fillMaxSize(),
+                        contentScale = contentScale,
+                        colorFilter = when {
+                            grayScale && invert -> grayScaleAndInvertFilter
+                            grayScale -> grayScaleFilter
+                            invert -> invertFilter
+                            else -> null
+                        },
+                    )
+                    translation?.let { pageTranslation ->
+                        ReaderTranslationOverlay(
+                            pageIndex = page.index,
+                            translation = pageTranslation,
+                            bitmapWidth = intrinsic.width,
+                            bitmapHeight = intrinsic.height,
+                            fitMode = if (fillWidth) OverlayFitMode.FILL_WIDTH else OverlayFitMode.INSIDE,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
             } ?: Spacer(modifier = modifier.fillMaxWidth().aspectRatio(DEFAULT_ASPECT))
         }
         is PageStatus.Blocked -> {

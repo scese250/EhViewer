@@ -36,6 +36,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -49,6 +50,7 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.keepScreenOn
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.colorResource
 import arrow.core.Either
 import arrow.core.Either.Companion.catch
@@ -75,6 +77,11 @@ import com.hippo.ehviewer.gallery.status
 import com.hippo.ehviewer.gallery.unblock
 import com.hippo.ehviewer.gallery.useArchivePageLoader
 import com.hippo.ehviewer.gallery.useEhPageLoader
+import com.hippo.ehviewer.translator.LocalReaderTranslation
+import com.hippo.ehviewer.translator.ReaderTranslationState
+import com.hippo.ehviewer.translator.TranslatorSettings
+import com.hippo.ehviewer.translator.ui.BubbleEditDialog
+import com.hippo.ehviewer.translator.ui.TranslatorSettingsDialog
 import com.hippo.ehviewer.ui.MainActivity
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.theme.EhTheme
@@ -94,6 +101,7 @@ import eu.kanade.tachiyomi.ui.reader.setting.ReadingModeType
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.sample
@@ -177,6 +185,14 @@ fun AnimatedVisibilityScope.ReaderScreen(args: ReaderScreenArgs, navigator: Dest
 @Composable
 context(activity: MainActivity, _: SnackbarHostState, _: DialogState, _: CoroutineScope, _: DestinationsNavigator)
 fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
+    val context = LocalContext.current
+    val translatorSettings = remember(context) { TranslatorSettings(context) }
+    val translatorState = remember(pageLoader, translatorSettings) {
+        ReaderTranslationState(pageLoader, translatorSettings)
+    }
+    val preloadLimit by Settings.preloadImage.collectAsState()
+    var translationRestart by remember { mutableIntStateOf(0) }
+
     LaunchedEffect(Unit) {
         val orientation = activity.requestedOrientation
         Settings.orientationMode.valueFlow()
@@ -187,8 +203,16 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
         with(Settings) {
             merge(cropBorder.changesFlow(), stripExtraneousAds.changesFlow()).collect {
                 pageLoader.restart()
+                // The page bitmaps change when borders are cropped, so the
+                // bubble boxes no longer match the image.
+                translatorState.clear()
+                translationRestart++
             }
         }
+    }
+
+    LaunchedEffect(translatorState, translatorSettings.revision) {
+        translatorState.onRevisionChanged()
     }
     val webtoon = remember(info) {
         // Tags in database may or may not have the prefix "other:"
@@ -218,7 +242,38 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
     val pagerState = rememberPagerState(pageLoader.startPage) { pageLoader.size }
     val syncState = rememberSliderPagerDoubleSyncState(lazyListState, pagerState, pageLoader)
     var appbarVisible by remember { mutableStateOf(false) }
+    var showTranslationSettings by remember { mutableStateOf(false) }
+    var manualTranslateRequest by remember { mutableIntStateOf(0) }
+    val currentPage = (syncState.sliderValue - 1)
+        .coerceIn(0, (pageLoader.size - 1).coerceAtLeast(0))
     val isWebtoon by rememberUpdatedState(ReadingModeType.isWebtoon(readingMode))
+    val currentPageIndexFlow = remember(syncState, isWebtoon) {
+        syncState.currentPageFlow(isWebtoon)
+    }
+    LaunchedEffect(
+        translatorState,
+        isWebtoon,
+        translatorSettings.autoTranslate,
+        translatorSettings.revision,
+        translatorSettings.batchSize,
+        preloadLimit,
+        translationRestart,
+    ) {
+        if (!translatorSettings.autoTranslate) return@LaunchedEffect
+        translatorState.onRevisionChanged()
+        // Never OCR pages that EhViewer has not downloaded yet: the batch is
+        // capped to the configured preload count.
+        val maxAhead = minOf(translatorSettings.batchSize, preloadLimit).coerceAtLeast(0)
+        currentPageIndexFlow.collectLatest { index ->
+            translatorState.translateAround(index, maxAhead)
+        }
+    }
+    LaunchedEffect(manualTranslateRequest) {
+        if (manualTranslateRequest == 0) return@LaunchedEffect
+        // The button re-runs OCR even when a cached page exists.
+        translatorState.translations.remove(currentPage)
+        translatorState.translatePage(currentPage)
+    }
     val focusRequester = remember { FocusRequester() }
     Box(
         Modifier.keyEventHandler(
@@ -283,23 +338,25 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
             } else {
                 WindowInsets.systemBars
             }
-            GalleryPager(
-                type = readingMode,
-                pagerState = pagerState,
-                lazyListState = lazyListState,
-                pageLoader = pageLoader,
-                showNavigationOverlay = showNavigationOverlay,
-                onNavigationModeChange = { showNavigationOverlay = true },
-                onSelectPage = onSelectPage,
-                onMenuRegionClick = { appbarVisible = !appbarVisible },
-                modifier = Modifier.background(bgColor).pointerInput(syncState) {
-                    awaitEachGesture {
-                        waitForUpOrCancellation()
-                        syncState.reset()
-                        showNavigationOverlay = false
-                    }
-                }.fillMaxSize().windowInsetsPadding(insets),
-            )
+            CompositionLocalProvider(LocalReaderTranslation provides translatorState) {
+                GalleryPager(
+                    type = readingMode,
+                    pagerState = pagerState,
+                    lazyListState = lazyListState,
+                    pageLoader = pageLoader,
+                    showNavigationOverlay = showNavigationOverlay,
+                    onNavigationModeChange = { showNavigationOverlay = true },
+                    onSelectPage = onSelectPage,
+                    onMenuRegionClick = { appbarVisible = !appbarVisible },
+                    modifier = Modifier.background(bgColor).pointerInput(syncState) {
+                        awaitEachGesture {
+                            waitForUpOrCancellation()
+                            syncState.reset()
+                            showNavigationOverlay = false
+                        }
+                    }.fillMaxSize().windowInsetsPadding(insets),
+                )
+            }
         }
         val brightness by Settings.customBrightness.collectAsState()
         val brightnessValue by Settings.customBrightnessValue.collectAsState()
@@ -346,6 +403,7 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
             currentPage = syncState.sliderValue,
             totalPages = pageLoader.size,
             onSliderValueChange = syncState::sliderScrollTo,
+            onClickTranslation = { showTranslationSettings = true },
             onClickSettings = {
                 launch {
                     dialog { cont ->
@@ -370,6 +428,32 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
                         }
                     }
                 }
+            },
+        )
+    }
+
+    if (showTranslationSettings) {
+        TranslatorSettingsDialog(
+            settings = translatorSettings,
+            maxBatchSize = preloadLimit,
+            isTranslatingCurrent = translatorState.isTranslating(currentPage),
+            hasTranslation = translatorState.translations.containsKey(currentPage),
+            bubbleCount = translatorState.translations[currentPage]?.bubbles?.size ?: 0,
+            onTranslateCurrent = { manualTranslateRequest++ },
+            onDismiss = {
+                translatorSettings.save()
+                showTranslationSettings = false
+            },
+        )
+    }
+
+    translatorState.editingBubble?.let { (pageIndex, bubble) ->
+        BubbleEditDialog(
+            bubble = bubble,
+            onDismiss = { translatorState.editingBubble = null },
+            onSave = { updated ->
+                translatorState.updateBubble(pageIndex, updated)
+                translatorState.editingBubble = null
             },
         )
     }
