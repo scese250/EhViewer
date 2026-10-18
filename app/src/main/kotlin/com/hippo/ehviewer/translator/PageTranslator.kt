@@ -17,6 +17,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -27,8 +29,13 @@ object PageTranslator {
         TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build())
     }
 
+    private val googleSemaphore = Semaphore(6)
+
     @Volatile
     private var currentKeyIndex = 0
+
+    /** Reported before each expensive step so the UI can show what is running. */
+    enum class Phase { OCR, TRANSLATE }
 
     suspend fun translatePage(
         pageIndex: Int,
@@ -40,7 +47,9 @@ object PageTranslator {
         geminiApiKeys: List<String> = emptyList(),
         geminiModel: String = TranslatorSettings.DEFAULT_GEMINI_MODEL,
         grouping: BubbleGroupingConfig = BubbleGroupingConfig(),
+        onPhase: (Phase) -> Unit = {},
     ): PageTranslation = withContext(Dispatchers.Default) {
+        onPhase(Phase.OCR)
         var visionText: Text
         val ocrTime = measureTimeMillis {
             val inputImage = InputImage.fromBitmap(bitmap, 0)
@@ -67,6 +76,7 @@ object PageTranslator {
         var bubbles: List<TranslatedBubble> = emptyList()
         var engineUsed = "Google"
 
+        onPhase(Phase.TRANSLATE)
         val transTime = measureTimeMillis {
             val texts = mergedBlocks.map { it.text }
             if (engine == TranslatorSettings.ENGINE_GEMINI && geminiApiKeys.isNotEmpty()) {
@@ -94,6 +104,9 @@ object PageTranslator {
                     bubbles = translateWithGoogleBatch(mergedBlocks, sourceLang, targetLang)
                 }
             } else {
+                if (engine == TranslatorSettings.ENGINE_GEMINI) {
+                    engineUsed = "Google (sin claves de Gemini)"
+                }
                 bubbles = translateWithGoogleBatch(mergedBlocks, sourceLang, targetLang)
             }
         }
@@ -115,7 +128,12 @@ object PageTranslator {
     ): List<TranslatedBubble> = coroutineScope {
         blocks.mapIndexed { idx, block ->
             async(Dispatchers.IO) {
-                val translated = translateTextGoogle(block.text, sourceLang, targetLang)
+                // A page can have dozens of bubbles; firing them all at once
+                // makes the endpoint throttle every request and the page takes
+                // minutes. Keep a small pool so results still stream in order.
+                val translated = googleSemaphore.withPermit {
+                    translateTextGoogle(block.text, sourceLang, targetLang)
+                }
                 TranslatedBubble(
                     id = idx,
                     originalText = block.text,
@@ -141,8 +159,8 @@ object PageTranslator {
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10)")
-                connectTimeout = 7000
-                readTimeout = 7000
+                connectTimeout = 5000
+                readTimeout = 5000
             }
             val response = conn.inputStream.bufferedReader().use { it.readText() }
             val array = JSONArray(response)
@@ -171,8 +189,8 @@ object PageTranslator {
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 setRequestProperty("User-Agent", "Mozilla/5.0")
-                connectTimeout = 7000
-                readTimeout = 7000
+                connectTimeout = 5000
+                readTimeout = 5000
             }
             val response = conn.inputStream.bufferedReader().use { it.readText() }
             val array = JSONArray(response)
@@ -329,6 +347,9 @@ object PageTranslator {
                 } else {
                     val errorText = conn.errorStream?.bufferedReader()?.use { it.readText() }
                     lastError = IllegalStateException("Gemini API ($responseCode): $errorText")
+                    // A malformed request or an unknown model fails the same way
+                    // with every key: don't burn the 12s timeout once per key.
+                    if (responseCode in 400..499 && responseCode != 429) break
                 }
             } catch (e: Exception) {
                 lastError = e

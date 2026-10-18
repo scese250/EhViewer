@@ -13,6 +13,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -45,7 +47,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hippo.ehviewer.translator.PageTranslation
 import com.hippo.ehviewer.translator.PageTranslator
+import com.hippo.ehviewer.translator.TranslationStatus
 import com.hippo.ehviewer.translator.TranslatorSettings
 import kotlinx.coroutines.launch
 
@@ -54,9 +58,8 @@ import kotlinx.coroutines.launch
 fun TranslatorSettingsDialog(
     settings: TranslatorSettings,
     maxBatchSize: Int,
-    isTranslatingCurrent: Boolean,
-    hasTranslation: Boolean,
-    bubbleCount: Int,
+    status: TranslationStatus,
+    translation: PageTranslation?,
     onTranslateCurrent: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -85,26 +88,27 @@ fun TranslatorSettingsDialog(
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
             ) {
-                // Section 0: current page action
+                // Section 0: state of the current page translation
+                TranslationStatusCard(status = status, translation = translation)
+                Spacer(modifier = Modifier.height(8.dp))
                 OutlinedButton(
                     onClick = onTranslateCurrent,
-                    enabled = !isTranslatingCurrent,
+                    enabled = !status.isBusy,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    if (isTranslatingCurrent) {
+                    if (status.isBusy) {
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Traduciendo…")
+                        Text(status.busyLabel())
                     } else {
-                        Text(if (hasTranslation) "Traducir de nuevo esta página" else "Traducir esta página")
+                        Text(
+                            when (status) {
+                                is TranslationStatus.Failed -> "Reintentar traducción"
+                                TranslationStatus.Done -> "Traducir de nuevo esta página"
+                                else -> "Traducir esta página"
+                            },
+                        )
                     }
-                }
-                if (hasTranslation) {
-                    Text(
-                        text = "$bubbleCount viñetas traducidas en caché",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -859,6 +863,100 @@ fun TranslatorSettingsDialog(
             }
         },
     )
+}
+
+private fun TranslationStatus.busyLabel(): String = when (this) {
+    TranslationStatus.WaitingForPage -> "Esperando la imagen…"
+    TranslationStatus.RecognizingText -> "Reconociendo texto (OCR)…"
+    TranslationStatus.TranslatingText -> "Traduciendo texto…"
+    else -> "Traduciendo…"
+}
+
+@Composable
+private fun TranslationStatusCard(status: TranslationStatus, translation: PageTranslation?) {
+    val container = when (status) {
+        is TranslationStatus.Failed -> MaterialTheme.colorScheme.errorContainer
+        TranslationStatus.Done -> MaterialTheme.colorScheme.secondaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val content = when (status) {
+        is TranslationStatus.Failed -> MaterialTheme.colorScheme.onErrorContainer
+        TranslationStatus.Done -> MaterialTheme.colorScheme.onSecondaryContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val title = when (status) {
+        TranslationStatus.Idle -> "Sin traducir"
+        TranslationStatus.WaitingForPage -> "Preparando la página"
+        TranslationStatus.RecognizingText -> "Reconociendo texto (OCR)"
+        TranslationStatus.TranslatingText -> "Traduciendo"
+        TranslationStatus.Done -> "Traducción lista"
+        is TranslationStatus.Failed -> "Error al traducir"
+    }
+    val detail = when (status) {
+        TranslationStatus.Idle -> "Esta página todavía no se ha traducido."
+        TranslationStatus.WaitingForPage -> "Esperando a que la imagen se descargue y decodifique."
+        TranslationStatus.RecognizingText -> "ML Kit está localizando los globos de la página."
+        TranslationStatus.TranslatingText -> "Enviando los textos al motor de traducción."
+        TranslationStatus.Done -> translation?.let {
+            if (it.bubbles.isEmpty()) {
+                "No se detectó texto en esta página. Prueba otra página o revisa la detección."
+            } else {
+                "${it.bubbles.size} viñetas · ${it.engineName}\nOCR ${it.ocrDurationMs} ms · Traducción ${it.translateDurationMs} ms"
+            }
+        } ?: "Página traducida."
+        is TranslationStatus.Failed -> status.message
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = container, contentColor = content),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            when (status) {
+                TranslationStatus.WaitingForPage,
+                TranslationStatus.RecognizingText,
+                TranslationStatus.TranslatingText -> CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                )
+
+                TranslationStatus.Done -> Icon(
+                    imageVector = Icons.Filled.Check,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
+
+                is TranslationStatus.Failed -> Icon(
+                    imageVector = Icons.Filled.Warning,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
+
+                TranslationStatus.Idle -> Icon(
+                    imageVector = Icons.Filled.Translate,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp,
+                )
+                Text(
+                    text = detail,
+                    fontSize = 11.sp,
+                )
+            }
+        }
+    }
 }
 
 @Composable

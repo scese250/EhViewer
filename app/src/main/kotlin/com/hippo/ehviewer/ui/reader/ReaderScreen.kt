@@ -101,6 +101,7 @@ import eu.kanade.tachiyomi.ui.reader.setting.ReadingModeType
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onCompletion
@@ -109,6 +110,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.Serializable
 import moe.tarsin.string
 import okio.Path.Companion.toPath
+
+private const val AUTO_TRANSLATE_DEBOUNCE_MS = 300L
 
 @Serializable
 sealed interface ReaderScreenArgs {
@@ -265,13 +268,17 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
         // capped to the configured preload count.
         val maxAhead = minOf(translatorSettings.batchSize, preloadLimit).coerceAtLeast(0)
         currentPageIndexFlow.collectLatest { index ->
+            // Debounce page flings: collectLatest cancels this delay as soon as
+            // another page becomes current, so OCR never starts for pages the
+            // user is only scrolling past.
+            delay(AUTO_TRANSLATE_DEBOUNCE_MS)
             translatorState.translateAround(index, maxAhead)
         }
     }
     LaunchedEffect(manualTranslateRequest) {
         if (manualTranslateRequest == 0) return@LaunchedEffect
         // The button re-runs OCR even when a cached page exists.
-        translatorState.translations.remove(currentPage)
+        translatorState.resetPage(currentPage)
         translatorState.translatePage(currentPage)
     }
     val focusRequester = remember { FocusRequester() }
@@ -436,9 +443,8 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
         TranslatorSettingsDialog(
             settings = translatorSettings,
             maxBatchSize = preloadLimit,
-            isTranslatingCurrent = translatorState.isTranslating(currentPage),
-            hasTranslation = translatorState.translations.containsKey(currentPage),
-            bubbleCount = translatorState.translations[currentPage]?.bubbles?.size ?: 0,
+            status = translatorState.status(currentPage),
+            translation = translatorState.translations[currentPage],
             onTranslateCurrent = { manualTranslateRequest++ },
             onDismiss = {
                 translatorSettings.save()
