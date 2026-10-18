@@ -19,10 +19,10 @@ class TranslatorSettings(context: Context) {
     )
     var sourceLang by mutableStateOf(prefs.getString("source_lang", "ja") ?: "ja")
     var targetLang by mutableStateOf(prefs.getString("target_lang", "es") ?: "es")
-    var globalBubbleScale by mutableFloatStateOf(prefs.getFloat("global_bubble_scale", 1.25f))
-    var horizontalExpansion by mutableFloatStateOf(prefs.getFloat("horizontal_expansion", 2.0f))
-    var globalFontScale by mutableFloatStateOf(prefs.getFloat("global_font_scale", 1.0f))
-    var bubbleOpacity by mutableFloatStateOf(prefs.getFloat("bubble_opacity", 0.95f))
+    var globalBubbleScale by mutableFloatStateOf(prefs.getFloat("global_bubble_scale", 1.0f))
+    var horizontalExpansion by mutableFloatStateOf(prefs.getFloat("horizontal_expansion", 1.20f))
+    var globalFontScale by mutableFloatStateOf(prefs.getFloat("global_font_scale", 0.90f))
+    var bubbleOpacity by mutableFloatStateOf(prefs.getFloat("bubble_opacity", 1.0f))
     var dynamicBubbleSize by mutableStateOf(prefs.getBoolean("dynamic_bubble_size", true))
     var autoPretranslate by mutableStateOf(prefs.getBoolean("auto_pretranslate", true))
     var batchSize by mutableIntStateOf(prefs.getInt("batch_size", 3))
@@ -35,9 +35,13 @@ class TranslatorSettings(context: Context) {
     var bubbleShape by mutableStateOf(
         prefs.getString("bubble_shape", SHAPE_OVAL) ?: SHAPE_OVAL,
     )
+    var bubblePadding by mutableStateOf(
+        prefs.getString("bubble_padding", PADDING_COMPACT) ?: PADDING_COMPACT,
+    )
     var uppercaseScanlation by mutableStateOf(prefs.getBoolean("uppercase_scanlation", true))
     var preventCollisions by mutableStateOf(prefs.getBoolean("prevent_collisions", true))
-    var borderThickness by mutableFloatStateOf(prefs.getFloat("border_thickness", 1.5f))
+    var collisionGap by mutableFloatStateOf(prefs.getFloat("collision_gap", 12f))
+    var borderThickness by mutableFloatStateOf(prefs.getFloat("border_thickness", 1.2f))
     var isManipulationMode by mutableStateOf(prefs.getBoolean("is_manipulation_mode", false))
 
     fun getGeminiApiKeys(): List<String> = geminiApiKeysRaw
@@ -55,8 +59,10 @@ class TranslatorSettings(context: Context) {
             .putString("gemini_prompt_template", geminiPromptTemplate)
             .putString("bubble_orientation", bubbleOrientation)
             .putString("bubble_shape", bubbleShape)
+            .putString("bubble_padding", bubblePadding)
             .putBoolean("uppercase_scanlation", uppercaseScanlation)
             .putBoolean("prevent_collisions", preventCollisions)
+            .putFloat("collision_gap", collisionGap)
             .putBoolean("is_manipulation_mode", isManipulationMode)
             .putFloat("border_thickness", borderThickness)
             .putFloat("global_bubble_scale", globalBubbleScale)
@@ -81,6 +87,10 @@ class TranslatorSettings(context: Context) {
         const val SHAPE_OVAL = "oval"
         const val SHAPE_ROUNDED = "rounded"
         const val SHAPE_BORDERLESS = "borderless"
+
+        const val PADDING_COMPACT = "compact"
+        const val PADDING_NORMAL = "normal"
+        const val PADDING_SPACIOUS = "spacious"
         const val DEFAULT_PROMPT_TEMPLATE =
             "Translate from {lang input} to {lang output}. Translate the following manga dialogue lines into natural, expressive, and concise {lang output} suitable for speech bubbles. Maintain conversational tone and context between lines on the same page."
 

@@ -55,8 +55,7 @@ object MangaTranslator {
             )
         }
 
-        // Merge adjacent vertical columns in Japanese manga only if they belong to the same bubble
-        val mergedBlocks = if (sourceLang == "ja") mergeAdjacentMangaBlocks(rawBlocks, bitmap) else rawBlocks
+        val mergedBlocks = rawBlocks
 
         var bubbles: List<TranslatedBubble> = emptyList()
         var engineUsed = "Google"

@@ -453,6 +453,36 @@ fun SettingsDialog(
                     )
                 }
 
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Margen de relleno
+                Text(
+                    text = "Margen de relleno del globo:",
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    FilterChip(
+                        selected = settings.bubblePadding == TranslatorSettings.PADDING_COMPACT,
+                        onClick = { settings.bubblePadding = TranslatorSettings.PADDING_COMPACT },
+                        label = { Text("Compacto (Manga)", fontSize = 11.sp) },
+                    )
+                    FilterChip(
+                        selected = settings.bubblePadding == TranslatorSettings.PADDING_NORMAL,
+                        onClick = { settings.bubblePadding = TranslatorSettings.PADDING_NORMAL },
+                        label = { Text("Normal", fontSize = 11.sp) },
+                    )
+                    FilterChip(
+                        selected = settings.bubblePadding == TranslatorSettings.PADDING_SPACIOUS,
+                        onClick = { settings.bubblePadding = TranslatorSettings.PADDING_SPACIOUS },
+                        label = { Text("Espacioso", fontSize = 11.sp) },
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // Scanlation Uppercase
@@ -501,6 +531,26 @@ fun SettingsDialog(
                         checked = settings.preventCollisions,
                         onCheckedChange = { settings.preventCollisions = it },
                     )
+                }
+
+                if (settings.preventCollisions) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "Margen de separación: ${settings.collisionGap.toInt()}px",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.width(170.dp),
+                        )
+                        Slider(
+                            value = settings.collisionGap,
+                            onValueChange = { settings.collisionGap = it },
+                            valueRange = 6f..30f,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -559,15 +609,16 @@ fun SettingsDialog(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    val borderLabel = if (settings.borderThickness <= 0.05f) "Sin borde" else "${"%.1f".format(settings.borderThickness)}dp"
                     Text(
-                        text = "Borde: ${"%.1f".format(settings.borderThickness)}dp",
+                        text = "Borde: $borderLabel",
                         style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.width(110.dp),
+                        modifier = Modifier.width(115.dp),
                     )
                     Slider(
                         value = settings.borderThickness,
                         onValueChange = { settings.borderThickness = it },
-                        valueRange = 0f..3.5f,
+                        valueRange = 0f..3.0f,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -577,14 +628,14 @@ fun SettingsDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Tamaño: ${"%.2f".format(settings.globalBubbleScale)}x",
+                        text = "Tamaño globo: ${"%.2f".format(settings.globalBubbleScale)}x",
                         style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.width(110.dp),
+                        modifier = Modifier.width(115.dp),
                     )
                     Slider(
                         value = settings.globalBubbleScale,
                         onValueChange = { settings.globalBubbleScale = it },
-                        valueRange = 0.6f..2.5f,
+                        valueRange = 0.7f..1.8f,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -594,14 +645,14 @@ fun SettingsDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Fuente: ${"%.2f".format(settings.globalFontScale)}x",
+                        text = "Tamaño fuente: ${"%.2f".format(settings.globalFontScale)}x",
                         style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.width(110.dp),
+                        modifier = Modifier.width(115.dp),
                     )
                     Slider(
                         value = settings.globalFontScale,
                         onValueChange = { settings.globalFontScale = it },
-                        valueRange = 0.6f..2.0f,
+                        valueRange = 0.6f..1.5f,
                         modifier = Modifier.weight(1f),
                     )
                 }
