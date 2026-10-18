@@ -432,5 +432,4 @@ object MangaTranslator {
             .addOnSuccessListener { cont.resume(it) }
             .addOnFailureListener { cont.resumeWithException(it) }
     }
-
 }

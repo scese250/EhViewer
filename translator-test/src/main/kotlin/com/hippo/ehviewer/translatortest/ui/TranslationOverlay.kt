@@ -195,7 +195,7 @@ fun TranslationOverlay(
                             fontSize = fontSp.sp,
                             fontWeight = FontWeight.Bold,
                         ),
-                    ).size.width
+                    ).size.width.toFloat()
                 } ?: 0f
 
                 fun measureTextHeight(fontSp: Float, widthPx: Float): Float = textMeasurer.measure(
