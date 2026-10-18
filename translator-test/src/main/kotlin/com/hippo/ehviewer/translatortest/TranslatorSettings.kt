@@ -41,8 +41,58 @@ class TranslatorSettings(context: Context) {
     var uppercaseScanlation by mutableStateOf(prefs.getBoolean("uppercase_scanlation", true))
     var preventCollisions by mutableStateOf(prefs.getBoolean("prevent_collisions", true))
     var collisionGap by mutableFloatStateOf(prefs.getFloat("collision_gap", 12f))
+    var collisionIterations by mutableIntStateOf(prefs.getInt("collision_iterations", 40))
+    var maxCollisionShiftRatio by mutableFloatStateOf(prefs.getFloat("max_collision_shift_ratio", 0.30f))
     var borderThickness by mutableFloatStateOf(prefs.getFloat("border_thickness", 1.2f))
     var isManipulationMode by mutableStateOf(prefs.getBoolean("is_manipulation_mode", false))
+
+    // Bubble detection (OCR fragment grouping)
+    var mergeBubbleColumns by mutableStateOf(prefs.getBoolean("merge_bubble_columns", true))
+    var maxColumnGapRatio by mutableFloatStateOf(prefs.getFloat("max_column_gap_ratio", 0.35f))
+    var minColumnOverlap by mutableFloatStateOf(prefs.getFloat("min_column_overlap", 0.55f))
+    var borderDarkRatio by mutableFloatStateOf(prefs.getFloat("border_dark_ratio", 0.40f))
+
+    // Text fitting inside the original balloon
+    var fitTextInsideBubble by mutableStateOf(prefs.getBoolean("fit_text_inside_bubble", true))
+    var minFontSizeSp by mutableFloatStateOf(prefs.getFloat("min_font_size_sp", 6.5f))
+    var maxFontSizeSp by mutableFloatStateOf(prefs.getFloat("max_font_size_sp", 16f))
+    var maxHeightExpansion by mutableFloatStateOf(prefs.getFloat("max_height_expansion", 1.6f))
+
+    /** Incremented when detection/grouping values change so pages are OCR'd again. */
+    var detectionRevision by mutableIntStateOf(0)
+        private set
+
+    private var savedDetectionSignature: String =
+        prefs.getString("detection_signature", null) ?: detectionSignature()
+
+    fun groupingConfig(): BubbleGroupingConfig = BubbleGroupingConfig(
+        enabled = mergeBubbleColumns,
+        maxColumnGapRatio = maxColumnGapRatio,
+        minColumnOverlap = minColumnOverlap,
+        borderDarkRatio = borderDarkRatio,
+    )
+
+    private fun detectionSignature(): String = buildString {
+        append(if (mergeBubbleColumns) 1 else 0)
+        append('|').append((maxColumnGapRatio * 1000).toInt())
+        append('|').append((minColumnOverlap * 1000).toInt())
+        append('|').append((borderDarkRatio * 1000).toInt())
+    }
+
+    fun resetDetectionDefaults() {
+        mergeBubbleColumns = true
+        maxColumnGapRatio = 0.35f
+        minColumnOverlap = 0.55f
+        borderDarkRatio = 0.40f
+        fitTextInsideBubble = true
+        minFontSizeSp = 6.5f
+        maxFontSizeSp = 16f
+        maxHeightExpansion = 1.6f
+        horizontalExpansion = 1.20f
+        collisionGap = 12f
+        collisionIterations = 40
+        maxCollisionShiftRatio = 0.30f
+    }
 
     fun getGeminiApiKeys(): List<String> = geminiApiKeysRaw
         .split('\n', ',', ';')
@@ -50,6 +100,9 @@ class TranslatorSettings(context: Context) {
         .filter { it.isNotBlank() }
 
     fun save() {
+        val signature = detectionSignature()
+        val detectionChanged = signature != savedDetectionSignature
+
         prefs.edit()
             .putString("engine", engine)
             .putString("gemini_api_keys", geminiApiKeysRaw)
@@ -63,8 +116,19 @@ class TranslatorSettings(context: Context) {
             .putBoolean("uppercase_scanlation", uppercaseScanlation)
             .putBoolean("prevent_collisions", preventCollisions)
             .putFloat("collision_gap", collisionGap)
+            .putInt("collision_iterations", collisionIterations)
+            .putFloat("max_collision_shift_ratio", maxCollisionShiftRatio)
             .putBoolean("is_manipulation_mode", isManipulationMode)
             .putFloat("border_thickness", borderThickness)
+            .putBoolean("merge_bubble_columns", mergeBubbleColumns)
+            .putFloat("max_column_gap_ratio", maxColumnGapRatio)
+            .putFloat("min_column_overlap", minColumnOverlap)
+            .putFloat("border_dark_ratio", borderDarkRatio)
+            .putBoolean("fit_text_inside_bubble", fitTextInsideBubble)
+            .putFloat("min_font_size_sp", minFontSizeSp)
+            .putFloat("max_font_size_sp", maxFontSizeSp)
+            .putFloat("max_height_expansion", maxHeightExpansion)
+            .putString("detection_signature", signature)
             .putFloat("global_bubble_scale", globalBubbleScale)
             .putFloat("horizontal_expansion", horizontalExpansion)
             .putFloat("global_font_scale", globalFontScale)
@@ -73,6 +137,11 @@ class TranslatorSettings(context: Context) {
             .putBoolean("auto_pretranslate", autoPretranslate)
             .putInt("batch_size", batchSize)
             .apply()
+
+        savedDetectionSignature = signature
+        if (detectionChanged) {
+            detectionRevision++
+        }
     }
 
     companion object {

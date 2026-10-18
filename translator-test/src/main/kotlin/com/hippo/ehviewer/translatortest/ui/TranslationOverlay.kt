@@ -9,10 +9,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -42,7 +42,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hippo.ehviewer.translatortest.TranslatedBubble
 import com.hippo.ehviewer.translatortest.TranslatorSettings
-import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -54,6 +53,10 @@ fun TranslationOverlay(
     globalBubbleScale: Float = 1.0f,
     horizontalExpansion: Float = 1.20f,
     globalFontScale: Float = 0.90f,
+    minFontSizeSp: Float = 6.5f,
+    maxFontSizeSp: Float = 16f,
+    fitTextInsideBubble: Boolean = true,
+    maxHeightExpansion: Float = 1.6f,
     bubbleOpacity: Float = 1.0f,
     dynamicBubbleSize: Boolean = true,
     bubbleOrientation: String = TranslatorSettings.ORIENTATION_VERTICAL,
@@ -62,6 +65,8 @@ fun TranslationOverlay(
     uppercaseScanlation: Boolean = true,
     preventCollisions: Boolean = true,
     collisionGap: Float = 12f,
+    collisionIterations: Int = 40,
+    maxCollisionShift: Float = 0.30f,
     borderThickness: Float = 1.2f,
     isManipulationEnabled: Boolean = false,
     onBubbleClick: (TranslatedBubble) -> Unit,
@@ -110,6 +115,11 @@ fun TranslationOverlay(
         val hPaddingPx = with(density) { (hPadDp * 2).toPx() }
         val vPaddingPx = with(density) { (vPadDp * 2).toPx() }
         val ovalCurveMarginPx = if (bubbleShape == TranslatorSettings.SHAPE_OVAL) with(density) { 8.dp.toPx() } else 0f
+        // collisionGap is configured in dp; layouts below are in pixels.
+        val collisionGapPx = with(density) { collisionGap.dp.toPx() }
+        // Defensive: corrupted prefs must not make coerceIn throw.
+        val effectiveMinFontSp = minFontSizeSp.coerceAtMost(maxFontSizeSp)
+        val effectiveMaxFontSp = maxFontSizeSp.coerceAtLeast(effectiveMinFontSp)
 
         // Pre-compute bubble layout with true rendered text heights for reliable collision detection
         val bubbleLayouts = remember(
@@ -122,6 +132,10 @@ fun TranslationOverlay(
             offsetY,
             globalBubbleScale,
             globalFontScale,
+            minFontSizeSp,
+            maxFontSizeSp,
+            fitTextInsideBubble,
+            maxHeightExpansion,
             horizontalExpansion,
             bubbleOrientation,
             bubbleShape,
@@ -129,6 +143,8 @@ fun TranslationOverlay(
             uppercaseScanlation,
             preventCollisions,
             collisionGap,
+            collisionIterations,
+            maxCollisionShift,
             dynamicBubbleSize,
             isManipulationEnabled,
         ) {
@@ -159,78 +175,99 @@ fun TranslationOverlay(
                     else -> origHeightPx > origWidthPx * 1.15f
                 }
 
-                // Authentic manga typography font sizing (compact 7.5sp - 11.5sp)
+                // Base font size from the original balloon area, then clamped by the user.
                 val autoFontSizeSp = if (isVertical) {
                     val baseArea = origWidthPx * origHeightPx
                     val charArea = baseArea / textLen
-                    (sqrt(charArea / (density.density * density.density)) * 0.70f).coerceIn(7.5f, 11.5f)
+                    (sqrt(charArea / (density.density * density.density)) * 0.70f).coerceIn(6.0f, 14.0f)
                 } else {
                     val baseArea = maxOf(origWidthPx * 1.2f, 65f * density.density) * origHeightPx
                     val charArea = baseArea / textLen
-                    (sqrt(charArea / (density.density * density.density)) * 0.72f).coerceIn(8.0f, 12.0f)
+                    (sqrt(charArea / (density.density * density.density)) * 0.72f).coerceIn(6.5f, 15.0f)
                 }
-                var finalFontSizeSp = bubble.customFontSizeSp ?: (autoFontSizeSp * globalFontScale).coerceIn(6.5f, 18f)
+                var finalFontSizeSp = bubble.customFontSizeSp
+                    ?: (autoFontSizeSp * globalFontScale).coerceIn(effectiveMinFontSp, effectiveMaxFontSp)
 
-                // Measure the exact longest word in physical pixels
-                var maxWordWidthPx = words.maxOfOrNull { word ->
+                fun measureWordWidth(fontSp: Float): Float = words.maxOfOrNull { word ->
                     textMeasurer.measure(
                         text = AnnotatedString(word),
                         style = TextStyle(
-                            fontSize = finalFontSizeSp.sp,
+                            fontSize = fontSp.sp,
                             fontWeight = FontWeight.Bold,
                         ),
                     ).size.width
-                } ?: 0
+                } ?: 0f
 
-                // If word is exceptionally long, scale down font slightly so bubble doesn't blow up
-                while (finalFontSizeSp > 7.5f && (maxWordWidthPx + hPaddingPx + ovalCurveMarginPx) > containerWidthPx * 0.85f) {
-                    finalFontSizeSp -= 0.5f
-                    maxWordWidthPx = words.maxOfOrNull { word ->
-                        textMeasurer.measure(
-                            text = AnnotatedString(word),
-                            style = TextStyle(
-                                fontSize = finalFontSizeSp.sp,
-                                fontWeight = FontWeight.Bold,
-                            ),
-                        ).size.width
-                    } ?: 0
-                }
-
-                val minRequiredWidthPx = maxWordWidthPx + hPaddingPx + ovalCurveMarginPx
-
-                val baseWidthPx = if (isVertical) {
-                    val vBase = maxOf(origWidthPx * 1.05f, minRequiredWidthPx, with(density) { 40.dp.toPx() })
-                    (vBase * globalBubbleScale).coerceAtLeast(minRequiredWidthPx)
-                } else {
-                    val hBase = maxOf(origWidthPx * horizontalExpansion, with(density) { 60.dp.toPx() }, minRequiredWidthPx)
-                    (hBase * globalBubbleScale).coerceAtLeast(minRequiredWidthPx)
-                }
-
-                // Measure exact multi-line rendered text height before collision detection
-                val measuredTextLayout = textMeasurer.measure(
+                fun measureTextHeight(fontSp: Float, widthPx: Float): Float = textMeasurer.measure(
                     text = AnnotatedString(displayText),
                     style = TextStyle(
-                        fontSize = finalFontSizeSp.sp,
-                        lineHeight = (finalFontSizeSp * 1.16f).sp,
+                        fontSize = fontSp.sp,
+                        lineHeight = (fontSp * 1.16f).sp,
                         fontWeight = FontWeight.Bold,
                         lineBreak = LineBreak.Heading,
                         hyphens = Hyphens.None,
                     ),
-                    constraints = Constraints(maxWidth = baseWidthPx.roundToInt()),
-                )
-                val measuredTextHeightPx = measuredTextLayout.size.height.toFloat() + vPaddingPx
-                val actualHeightPx = if (dynamicBubbleSize) {
-                    maxOf(origHeightPx * globalBubbleScale, measuredTextHeightPx).coerceIn(24f, containerHeightPx * 0.90f)
+                    constraints = Constraints(maxWidth = widthPx.roundToInt().coerceAtLeast(1)),
+                ).size.height.toFloat()
+
+                // Never let one long word force the balloon wider than the page.
+                var maxWordWidthPx = measureWordWidth(finalFontSizeSp)
+                while (finalFontSizeSp > effectiveMinFontSp && maxWordWidthPx + hPaddingPx + ovalCurveMarginPx > containerWidthPx * 0.85f) {
+                    finalFontSizeSp = (finalFontSizeSp - 0.5f).coerceAtLeast(effectiveMinFontSp)
+                    maxWordWidthPx = measureWordWidth(finalFontSizeSp)
+                }
+
+                val minRequiredWidthPx = maxWordWidthPx + hPaddingPx + ovalCurveMarginPx
+
+                val desiredWidthPx = if (isVertical) {
+                    maxOf(origWidthPx * 1.10f, with(density) { 40.dp.toPx() })
                 } else {
-                    (origHeightPx * 1.05f * globalBubbleScale).coerceIn(24f, containerHeightPx * 0.90f)
+                    maxOf(origWidthPx * horizontalExpansion, with(density) { 60.dp.toPx() })
+                }
+                val maxWidthPx = containerWidthPx * 0.92f
+                val baseWidthPx = maxOf(desiredWidthPx * globalBubbleScale, minRequiredWidthPx)
+                    .coerceAtMost(maxWidthPx)
+                    .coerceAtLeast(minRequiredWidthPx.coerceAtMost(maxWidthPx))
+
+                // Height: keep covering the original balloon. When "fit inside"
+                // is enabled, shrink the font until the translation fits instead
+                // of growing the box into the neighbouring balloons.
+                val coverHeightPx = origHeightPx * (if (fitTextInsideBubble) 1.0f else 1.05f) * globalBubbleScale
+                val heightLimitPx = maxOf(24f, containerHeightPx * 0.92f)
+                val maxHeightPx = (coverHeightPx * maxHeightExpansion).coerceIn(24f, heightLimitPx)
+
+                // The text is laid out inside the horizontal padding, so the
+                // measured width must exclude it or the real rendered height is
+                // underestimated and the last lines get clipped.
+                val contentWidthPx = (baseWidthPx - hPaddingPx).coerceAtLeast(1f)
+                var measuredTextHeightPx = measureTextHeight(finalFontSizeSp, contentWidthPx) + vPaddingPx
+                if (fitTextInsideBubble && bubble.customFontSizeSp == null) {
+                    var guard = 0
+                    while (guard < 80 && finalFontSizeSp > effectiveMinFontSp && measuredTextHeightPx > coverHeightPx) {
+                        finalFontSizeSp = (finalFontSizeSp - 0.25f).coerceAtLeast(effectiveMinFontSp)
+                        measuredTextHeightPx = measureTextHeight(finalFontSizeSp, contentWidthPx) + vPaddingPx
+                        guard++
+                    }
+                }
+
+                val actualHeightPx = if (dynamicBubbleSize) {
+                    maxOf(coverHeightPx, measuredTextHeightPx).coerceIn(24f, maxHeightPx)
+                } else {
+                    coverHeightPx.coerceIn(24f, maxHeightPx)
                 }
 
                 val isManual = bubble.offsetX != 0f || bubble.offsetY != 0f
+                val initialLeft = (bubbleCenterX - baseWidthPx / 2f)
+                    .coerceIn(0f, (containerWidthPx - baseWidthPx).coerceAtLeast(0f))
+                val initialTop = (bubbleCenterY - actualHeightPx / 2f)
+                    .coerceIn(0f, (containerHeightPx - actualHeightPx).coerceAtLeast(0f))
 
                 BubbleLayoutItem(
                     id = bubble.id,
-                    left = (bubbleCenterX - baseWidthPx / 2f).coerceIn(0f, (containerWidthPx - baseWidthPx).coerceAtLeast(0f)),
-                    top = (bubbleCenterY - actualHeightPx / 2f).coerceIn(0f, (containerHeightPx - actualHeightPx).coerceAtLeast(0f)),
+                    left = initialLeft,
+                    top = initialTop,
+                    originLeft = initialLeft,
+                    originTop = initialTop,
                     baseWidthPx = baseWidthPx,
                     baseHeightPx = actualHeightPx,
                     minRequiredWidthPx = minRequiredWidthPx,
@@ -242,9 +279,17 @@ fun TranslationOverlay(
                 )
             }
 
-            // Only run proximity anti-collision in auto mode when user is not actively editing
-            if (preventCollisions && !isManipulationEnabled && initialList.size > 1) {
-                resolveBubbleProximityAndCollisions(initialList, containerWidthPx, containerHeightPx, minGap = collisionGap)
+            // Nudge auto-positioned balloons even in touch mode; balloons the
+            // user has already moved are anchored and stay put.
+            if (preventCollisions && initialList.size > 1) {
+                resolveBubbleCollisions(
+                    bubbles = initialList,
+                    containerWidth = containerWidthPx,
+                    containerHeight = containerHeightPx,
+                    gapPx = collisionGapPx,
+                    iterations = collisionIterations,
+                    maxShiftRatio = maxCollisionShift,
+                )
             }
             initialList.associateBy { it.id }
         }
@@ -328,8 +373,10 @@ private fun DynamicBubbleView(
         layout.baseHeightPx * liveHeightScale
     }.coerceAtLeast(20f)
 
-    val currentCenterX = layout.baseCenterX + with(density) { liveOffsetX.dp.toPx() }
-    val currentCenterY = layout.baseCenterY + with(density) { liveOffsetY.dp.toPx() }
+    // Use the resolved position (after anti-collision) instead of the raw OCR
+    // centre, otherwise the collision solver has no visible effect.
+    val currentCenterX = layout.centerX + with(density) { liveOffsetX.dp.toPx() }
+    val currentCenterY = layout.centerY + with(density) { liveOffsetY.dp.toPx() }
 
     val boxLeft = (currentCenterX - liveWidthPx / 2f).coerceIn(0f, (containerWidthPx - liveWidthPx).coerceAtLeast(0f))
     val boxTop = (currentCenterY - liveHeightPx / 2f).coerceIn(0f, (containerHeightPx - liveHeightPx).coerceAtLeast(0f))
@@ -461,7 +508,9 @@ private fun DynamicBubbleView(
             .width(targetWidthDp)
             .then(
                 if (dynamicBubbleSize) {
-                    Modifier.wrapContentHeight()
+                    // At least the measured height (so the original balloon is
+                    // covered), but allowed to grow if the text needs more room.
+                    Modifier.heightIn(min = targetHeightDp)
                 } else {
                     Modifier.height(targetHeightDp)
                 },
@@ -498,6 +547,8 @@ private class BubbleLayoutItem(
     val id: Int,
     var left: Float,
     var top: Float,
+    val originLeft: Float,
+    val originTop: Float,
     val baseWidthPx: Float,
     val baseHeightPx: Float,
     val minRequiredWidthPx: Float,
@@ -516,105 +567,108 @@ private class BubbleLayoutItem(
 }
 
 /**
- * Intelligent proximity and collision repulsion:
- * Smoothly separates touching bubbles using true rendered heights while respecting manual positioning.
+ * Separates balloons that overlap after the translation has been laid out.
+ *
+ * The old version only moved its internal layout copies, so nothing changed on
+ * screen. The renderer now follows [BubbleLayoutItem.left]/[BubbleLayoutItem.top].
+ * This solver separates each colliding pair along the axis that needs the least
+ * movement, falls back to the other axis when a container edge blocks it, keeps
+ * manually edited balloons fixed, and limits how far a balloon may drift from
+ * its detected position.
  */
-private fun resolveBubbleProximityAndCollisions(
+private fun resolveBubbleCollisions(
     bubbles: List<BubbleLayoutItem>,
     containerWidth: Float,
     containerHeight: Float,
-    minGap: Float = 12f,
-    iterations: Int = 10,
+    gapPx: Float,
+    iterations: Int = 40,
+    maxShiftRatio: Float = 0.30f,
 ) {
-    for (iter in 0 until iterations) {
-        var anyMoved = false
+    if (bubbles.size < 2 || iterations <= 0) return
+
+    val shiftRatio = maxShiftRatio.coerceIn(0.05f, 0.60f)
+    val maxShiftX = containerWidth * shiftRatio
+    val maxShiftY = containerHeight * shiftRatio
+
+    repeat(iterations) {
+        var moved = false
+
         for (i in bubbles.indices) {
             for (j in i + 1 until bubbles.size) {
-                val b1 = bubbles[i]
-                val b2 = bubbles[j]
+                val a = bubbles[i]
+                val b = bubbles[j]
 
-                val overlapX = minOf(b1.right + minGap - b2.left, b2.right + minGap - b1.left)
-                val overlapY = minOf(b1.bottom + minGap - b2.top, b2.bottom + minGap - b1.top)
+                // Penetration including the requested breathing gap.
+                val overlapX = minOf(a.right, b.right) - maxOf(a.left, b.left) + gapPx
+                val overlapY = minOf(a.bottom, b.bottom) - maxOf(a.top, b.top) + gapPx
+                if (overlapX <= 0f || overlapY <= 0f) continue
 
-                if (overlapX > 0f && overlapY > 0f) {
-                    anyMoved = true
-                    val dx = b2.centerX - b1.centerX
-                    val dy = b2.centerY - b1.centerY
+                val canMoveA = !a.isManuallyPositioned
+                val canMoveB = !b.isManuallyPositioned
+                if (!canMoveA && !canMoveB) continue
 
-                    val canMove1 = !b1.isManuallyPositioned
-                    val canMove2 = !b2.isManuallyPositioned
-                    if (!canMove1 && !canMove2) continue
-
-                    val moveFactor1 = when {
-                        canMove1 && canMove2 -> 0.5f
-                        canMove1 -> 1.0f
-                        else -> 0.0f
-                    }
-                    val moveFactor2 = when {
-                        canMove1 && canMove2 -> 0.5f
-                        canMove2 -> 1.0f
-                        else -> 0.0f
-                    }
-
-                    if (abs(dx) >= abs(dy) * 0.70f) {
-                        val pushX = overlapX.coerceAtLeast(2.5f)
-                        val slideY = pushX * 0.30f
-
-                        if (dx >= 0) {
-                            b1.left -= pushX * moveFactor1
-                            b2.left += pushX * moveFactor2
-                            if (dy >= 0) {
-                                b1.top -= slideY * moveFactor1
-                                b2.top += slideY * moveFactor2
-                            } else {
-                                b1.top += slideY * moveFactor1
-                                b2.top -= slideY * moveFactor2
-                            }
-                        } else {
-                            b1.left += pushX * moveFactor1
-                            b2.left -= pushX * moveFactor2
-                            if (dy >= 0) {
-                                b1.top -= slideY * moveFactor1
-                                b2.top += slideY * moveFactor2
-                            } else {
-                                b1.top += slideY * moveFactor1
-                                b2.top -= slideY * moveFactor2
-                            }
-                        }
-                    } else {
-                        val pushY = overlapY.coerceAtLeast(2.5f)
-                        val slideX = pushY * 0.30f
-
-                        if (dy >= 0) {
-                            b1.top -= pushY * moveFactor1
-                            b2.top += pushY * moveFactor2
-                            if (dx >= 0) {
-                                b1.left -= slideX * moveFactor1
-                                b2.left += slideX * moveFactor2
-                            } else {
-                                b1.left += slideX * moveFactor1
-                                b2.left -= slideX * moveFactor2
-                            }
-                        } else {
-                            b1.top += pushY * moveFactor1
-                            b2.top -= pushY * moveFactor2
-                            if (dx >= 0) {
-                                b1.left -= slideX * moveFactor1
-                                b2.left += slideX * moveFactor2
-                            } else {
-                                b1.left += slideX * moveFactor1
-                                b2.left -= slideX * moveFactor2
-                            }
-                        }
-                    }
-
-                    b1.left = b1.left.coerceIn(0f, (containerWidth - b1.width).coerceAtLeast(0f))
-                    b1.top = b1.top.coerceIn(0f, (containerHeight - b1.height).coerceAtLeast(0f))
-                    b2.left = b2.left.coerceIn(0f, (containerWidth - b2.width).coerceAtLeast(0f))
-                    b2.top = b2.top.coerceIn(0f, (containerHeight - b2.height).coerceAtLeast(0f))
+                val shareA = when {
+                    canMoveA && canMoveB -> 0.5f
+                    canMoveA -> 1f
+                    else -> 0f
                 }
+                val shareB = 1f - shareA
+
+                val moveHorizontally = overlapX <= overlapY
+
+                if (moveHorizontally) {
+                    val direction = if (a.centerX <= b.centerX) -1f else 1f
+                    a.left += direction * overlapX * shareA
+                    b.left -= direction * overlapX * shareB
+                } else {
+                    val direction = if (a.centerY <= b.centerY) -1f else 1f
+                    a.top += direction * overlapY * shareA
+                    b.top -= direction * overlapY * shareB
+                }
+
+                clampBubble(a, containerWidth, containerHeight, maxShiftX, maxShiftY)
+                clampBubble(b, containerWidth, containerHeight, maxShiftX, maxShiftY)
+
+                // If a container edge or the drift budget blocked the first
+                // correction, finish the separation on the other axis.
+                val remainingX = minOf(a.right, b.right) - maxOf(a.left, b.left) + gapPx
+                val remainingY = minOf(a.bottom, b.bottom) - maxOf(a.top, b.top) + gapPx
+                if (remainingX > 0f && remainingY > 0f) {
+                    if (moveHorizontally) {
+                        val direction = if (a.centerY <= b.centerY) -1f else 1f
+                        a.top += direction * remainingY * shareA
+                        b.top -= direction * remainingY * shareB
+                    } else {
+                        val direction = if (a.centerX <= b.centerX) -1f else 1f
+                        a.left += direction * remainingX * shareA
+                        b.left -= direction * remainingX * shareB
+                    }
+                    clampBubble(a, containerWidth, containerHeight, maxShiftX, maxShiftY)
+                    clampBubble(b, containerWidth, containerHeight, maxShiftX, maxShiftY)
+                }
+
+                moved = true
             }
         }
-        if (!anyMoved) break
+
+        if (!moved) return
     }
+}
+
+private fun clampBubble(
+    bubble: BubbleLayoutItem,
+    containerWidth: Float,
+    containerHeight: Float,
+    maxShiftX: Float,
+    maxShiftY: Float,
+) {
+    val maxLeft = (containerWidth - bubble.width).coerceAtLeast(0f)
+    val minLeft = (bubble.originLeft - maxShiftX).coerceIn(0f, maxLeft)
+    val limitLeft = (bubble.originLeft + maxShiftX).coerceIn(minLeft, maxLeft)
+    bubble.left = bubble.left.coerceIn(minLeft, limitLeft)
+
+    val maxTop = (containerHeight - bubble.height).coerceAtLeast(0f)
+    val minTop = (bubble.originTop - maxShiftY).coerceIn(0f, maxTop)
+    val limitTop = (bubble.originTop + maxShiftY).coerceIn(minTop, maxTop)
+    bubble.top = bubble.top.coerceIn(minTop, limitTop)
 }

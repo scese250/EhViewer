@@ -94,6 +94,8 @@ fun MangaViewerScreen(
         isBitmapLoading = false
     }
 
+    var lastDetectionRevision by remember { mutableIntStateOf(settings.detectionRevision) }
+
     // Trigger translation for current page
     LaunchedEffect(
         currentPageIndex,
@@ -103,7 +105,14 @@ fun MangaViewerScreen(
         settings.sourceLang,
         settings.targetLang,
         settings.geminiPromptTemplate,
+        settings.detectionRevision,
     ) {
+        // Changing detection settings invalidates every cached OCR result.
+        if (lastDetectionRevision != settings.detectionRevision) {
+            translationCache.clear()
+            lastDetectionRevision = settings.detectionRevision
+        }
+
         val bitmap = currentBitmap
         if (isTranslationEnabled && bitmap != null && !translationCache.containsKey(currentPageIndex)) {
             isTranslating = true
@@ -116,6 +125,7 @@ fun MangaViewerScreen(
                 engine = settings.engine,
                 geminiApiKeys = settings.getGeminiApiKeys(),
                 geminiModel = settings.geminiModel,
+                grouping = settings.groupingConfig(),
             )
             translationCache[currentPageIndex] = result
             isTranslating = false
@@ -132,6 +142,7 @@ fun MangaViewerScreen(
         settings.sourceLang,
         settings.targetLang,
         settings.geminiPromptTemplate,
+        settings.detectionRevision,
     ) {
         if (!isTranslating && settings.autoPretranslate && isTranslationEnabled) {
             val maxAhead = minOf(currentPageIndex + settings.batchSize, book.pages.size - 1)
@@ -151,6 +162,7 @@ fun MangaViewerScreen(
                             engine = settings.engine,
                             geminiApiKeys = keys,
                             geminiModel = settings.geminiModel,
+                            grouping = settings.groupingConfig(),
                         )
                         translationCache[nextPage] = trans
                     }
@@ -377,6 +389,10 @@ fun MangaViewerScreen(
                             globalBubbleScale = settings.globalBubbleScale,
                             horizontalExpansion = settings.horizontalExpansion,
                             globalFontScale = settings.globalFontScale,
+                            minFontSizeSp = settings.minFontSizeSp,
+                            maxFontSizeSp = settings.maxFontSizeSp,
+                            fitTextInsideBubble = settings.fitTextInsideBubble,
+                            maxHeightExpansion = settings.maxHeightExpansion,
                             bubbleOpacity = settings.bubbleOpacity,
                             dynamicBubbleSize = settings.dynamicBubbleSize,
                             bubbleOrientation = settings.bubbleOrientation,
@@ -385,6 +401,8 @@ fun MangaViewerScreen(
                             uppercaseScanlation = settings.uppercaseScanlation,
                             preventCollisions = settings.preventCollisions,
                             collisionGap = settings.collisionGap,
+                            collisionIterations = settings.collisionIterations,
+                            maxCollisionShift = settings.maxCollisionShiftRatio,
                             borderThickness = settings.borderThickness,
                             isManipulationEnabled = settings.isManipulationMode,
                             onBubbleClick = { selectedBubble = it },

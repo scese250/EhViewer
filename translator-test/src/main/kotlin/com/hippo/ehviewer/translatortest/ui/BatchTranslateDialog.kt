@@ -158,6 +158,7 @@ fun BatchTranslateDialog(
                                         engine = settings.engine,
                                         geminiApiKeys = keys,
                                         geminiModel = settings.geminiModel,
+                                        grouping = settings.groupingConfig(),
                                     )
                                     translationCache[i] = trans
                                 }

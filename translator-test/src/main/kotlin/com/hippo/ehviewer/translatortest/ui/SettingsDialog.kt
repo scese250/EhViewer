@@ -535,22 +535,24 @@ fun SettingsDialog(
 
                 if (settings.preventCollisions) {
                     Spacer(modifier = Modifier.height(4.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "Margen de separación: ${settings.collisionGap.toInt()}px",
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.width(170.dp),
-                        )
-                        Slider(
-                            value = settings.collisionGap,
-                            onValueChange = { settings.collisionGap = it },
-                            valueRange = 6f..30f,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
+                    SettingSlider(
+                        label = "Margen de separación: ${settings.collisionGap.toInt()}dp",
+                        value = settings.collisionGap,
+                        valueRange = 2f..40f,
+                        onValueChange = { settings.collisionGap = it },
+                    )
+                    SettingSlider(
+                        label = "Iteraciones anti-choque: ${settings.collisionIterations}",
+                        value = settings.collisionIterations.toFloat(),
+                        valueRange = 10f..80f,
+                        onValueChange = { settings.collisionIterations = it.toInt() },
+                    )
+                    SettingSlider(
+                        label = "Desplazamiento máx.: ${(settings.maxCollisionShiftRatio * 100).toInt()}%",
+                        value = settings.maxCollisionShiftRatio,
+                        valueRange = 0.10f..0.60f,
+                        onValueChange = { settings.maxCollisionShiftRatio = it },
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -678,7 +680,99 @@ fun SettingsDialog(
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Section 3: Pre-traducción en segundo plano
+                // Section 3: Detección de globos (agrupado de columnas OCR)
+                Text(
+                    text = "🔍 Detección de Globos (OCR)",
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+
+                Text(
+                    text = "ML Kit devuelve una columna de texto por bloque. Estos valores controlan cómo se vuelven a unir las columnas de un mismo bocadillo y cómo se ajusta el texto dentro de él. Al cerrar el diálogo la página actual se analiza de nuevo.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                SettingSwitch(
+                    title = "Unir columnas del mismo globo",
+                    subtitle = "Evita que un bocadillo vertical se detecte como dos burbujas superpuestas",
+                    checked = settings.mergeBubbleColumns,
+                    onCheckedChange = { settings.mergeBubbleColumns = it },
+                )
+
+                if (settings.mergeBubbleColumns) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    SettingSlider(
+                        label = "Separación máx. columnas: ${(settings.maxColumnGapRatio * 100).toInt()}%",
+                        value = settings.maxColumnGapRatio,
+                        valueRange = 0.10f..0.80f,
+                        onValueChange = { settings.maxColumnGapRatio = it },
+                    )
+                    SettingSlider(
+                        label = "Solapamiento mín. vertical: ${(settings.minColumnOverlap * 100).toInt()}%",
+                        value = settings.minColumnOverlap,
+                        valueRange = 0.30f..0.90f,
+                        onValueChange = { settings.minColumnOverlap = it },
+                    )
+                    SettingSlider(
+                        label = "Umbral de borde oscuro: ${(settings.borderDarkRatio * 100).toInt()}%",
+                        value = settings.borderDarkRatio,
+                        valueRange = 0.20f..0.70f,
+                        onValueChange = { settings.borderDarkRatio = it },
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                SettingSwitch(
+                    title = "Ajustar texto dentro del globo",
+                    subtitle = "Reduce la fuente para que la traducción quepa en el bocadillo original en vez de invadir los vecinos",
+                    checked = settings.fitTextInsideBubble,
+                    onCheckedChange = { settings.fitTextInsideBubble = it },
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                SettingSlider(
+                    label = "Fuente mínima: ${"%.1f".format(settings.minFontSizeSp)} sp",
+                    value = settings.minFontSizeSp,
+                    valueRange = 5f..12f,
+                    onValueChange = { settings.minFontSizeSp = it.coerceAtMost(settings.maxFontSizeSp - 1f) },
+                )
+                SettingSlider(
+                    label = "Fuente máxima: ${"%.1f".format(settings.maxFontSizeSp)} sp",
+                    value = settings.maxFontSizeSp,
+                    valueRange = 8f..24f,
+                    onValueChange = { settings.maxFontSizeSp = it.coerceAtLeast(settings.minFontSizeSp + 1f) },
+                )
+                SettingSlider(
+                    label = "Expansión máx. de alto: ${"%.1f".format(settings.maxHeightExpansion)}x",
+                    value = settings.maxHeightExpansion,
+                    valueRange = 1f..3f,
+                    onValueChange = { settings.maxHeightExpansion = it },
+                )
+                SettingSlider(
+                    label = "Expansión horizontal: ${"%.2f".format(settings.horizontalExpansion)}x",
+                    value = settings.horizontalExpansion,
+                    valueRange = 1f..2f,
+                    onValueChange = { settings.horizontalExpansion = it },
+                )
+
+                TextButton(
+                    onClick = { settings.resetDetectionDefaults() },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Restablecer valores de detección", fontSize = 12.sp)
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Section 4: Pre-traducción en segundo plano
                 Text(
                     text = "Pre-traducción en Segundo Plano",
                     fontWeight = FontWeight.Bold,
@@ -736,4 +830,61 @@ fun SettingsDialog(
             }
         },
     )
+}
+
+@Composable
+private fun SettingSwitch(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = subtitle,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+        )
+    }
+}
+
+@Composable
+private fun SettingSlider(
+    label: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int = 0,
+    onValueChange: (Float) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.width(178.dp),
+        )
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            steps = steps,
+            modifier = Modifier.weight(1f),
+        )
+    }
 }
