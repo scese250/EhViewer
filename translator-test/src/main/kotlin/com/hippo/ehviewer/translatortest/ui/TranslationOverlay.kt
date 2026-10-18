@@ -545,8 +545,16 @@ private fun resolveBubbleProximityAndCollisions(
                     val canMove2 = !b2.isManuallyPositioned
                     if (!canMove1 && !canMove2) continue
 
-                    val moveFactor1 = if (canMove1 && canMove2) 0.5f else if (canMove1) 1.0f else 0.0f
-                    val moveFactor2 = if (canMove1 && canMove2) 0.5f else if (canMove2) 1.0f else 0.0f
+                    val moveFactor1 = when {
+                        canMove1 && canMove2 -> 0.5f
+                        canMove1 -> 1.0f
+                        else -> 0.0f
+                    }
+                    val moveFactor2 = when {
+                        canMove1 && canMove2 -> 0.5f
+                        canMove2 -> 1.0f
+                        else -> 0.0f
+                    }
 
                     if (abs(dx) >= abs(dy) * 0.70f) {
                         val pushX = overlapX.coerceAtLeast(2.5f)
