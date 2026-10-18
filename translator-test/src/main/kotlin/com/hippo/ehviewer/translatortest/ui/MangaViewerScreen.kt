@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -187,6 +188,18 @@ fun MangaViewerScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { settings.isManipulationMode = !settings.isManipulationMode }) {
+                        Icon(
+                            imageVector = Icons.Default.TouchApp,
+                            contentDescription = "Manipular burbujas",
+                            tint = if (settings.isManipulationMode) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            },
+                        )
+                    }
+
                     IconButton(onClick = { isBatchDialogOpen = true }) {
                         Icon(
                             imageVector = Icons.Default.AutoAwesome,
@@ -260,6 +273,12 @@ fun MangaViewerScreen(
                                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                                 ) {
                                     MetricChip(label = "🔤 ${settings.sourceLang.uppercase()} ➔ ${settings.targetLang.uppercase()}")
+                                    if (settings.isManipulationMode) {
+                                        MetricChip(label = "✋ Modo táctil")
+                                    }
+                                    if (settings.bubbleOrientation == TranslatorSettings.ORIENTATION_VERTICAL) {
+                                        MetricChip(label = "📖 Manga Vertical")
+                                    }
                                     if (settings.dynamicBubbleSize) {
                                         MetricChip(label = "📐 Auto-ajuste")
                                     }
@@ -355,7 +374,19 @@ fun MangaViewerScreen(
                             globalFontScale = settings.globalFontScale,
                             bubbleOpacity = settings.bubbleOpacity,
                             dynamicBubbleSize = settings.dynamicBubbleSize,
+                            bubbleOrientation = settings.bubbleOrientation,
+                            bubbleShape = settings.bubbleShape,
+                            uppercaseScanlation = settings.uppercaseScanlation,
+                            preventCollisions = settings.preventCollisions,
+                            borderThickness = settings.borderThickness,
+                            isManipulationEnabled = settings.isManipulationMode,
                             onBubbleClick = { selectedBubble = it },
+                            onBubbleUpdated = { updatedBubble ->
+                                val updatedList = pageTrans.bubbles.map {
+                                    if (it.id == updatedBubble.id) updatedBubble else it
+                                }
+                                translationCache[currentPageIndex] = pageTrans.copy(bubbles = updatedList)
+                            },
                         )
                     }
                 }

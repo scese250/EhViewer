@@ -1,5 +1,6 @@
 package com.hippo.ehviewer.translatortest.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,6 +13,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -28,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.hippo.ehviewer.translatortest.TranslatedBubble
 
 @Composable
@@ -39,6 +43,9 @@ fun BubbleEditDialog(
     var editedText by remember { mutableStateOf(bubble.translatedText) }
     var widthScale by remember { mutableFloatStateOf(bubble.widthScale) }
     var heightScale by remember { mutableFloatStateOf(bubble.heightScale) }
+    var offsetX by remember { mutableFloatStateOf(bubble.offsetX) }
+    var offsetY by remember { mutableFloatStateOf(bubble.offsetY) }
+    var isVertical by remember { mutableStateOf(bubble.isVertical) }
     var useCustomFont by remember { mutableStateOf(bubble.customFontSizeSp != null) }
     var customFontSizeSp by remember { mutableFloatStateOf(bubble.customFontSizeSp ?: 12f) }
 
@@ -77,7 +84,7 @@ fun BubbleEditDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 OutlinedTextField(
                     value = editedText,
@@ -87,15 +94,93 @@ fun BubbleEditDialog(
                     maxLines = 5,
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Orientation selector for this bubble
+                Text(
+                    text = "Orientación de esta viñeta:",
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    FilterChip(
+                        selected = isVertical == null,
+                        onClick = { isVertical = null },
+                        label = { Text("Auto / Global", fontSize = 11.sp) },
+                    )
+                    FilterChip(
+                        selected = isVertical == true,
+                        onClick = { isVertical = true },
+                        label = { Text("Vertical (Manga)", fontSize = 11.sp) },
+                    )
+                    FilterChip(
+                        selected = isVertical == false,
+                        onClick = { isVertical = false },
+                        label = { Text("Horizontal", fontSize = 11.sp) },
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = "Ajustes de Tamaño para esta Viñeta:",
+                    text = "Posición Manual (Mover en pantalla):",
                     fontWeight = FontWeight.Bold,
                     style = MaterialTheme.typography.bodyMedium,
                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Mover X: ${offsetX.toInt()}dp",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.width(105.dp),
+                    )
+                    Slider(
+                        value = offsetX,
+                        onValueChange = { offsetX = it },
+                        valueRange = -80f..80f,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Mover Y: ${offsetY.toInt()}dp",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.width(105.dp),
+                    )
+                    Slider(
+                        value = offsetY,
+                        onValueChange = { offsetY = it },
+                        valueRange = -80f..80f,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "Escala de Tamaño:",
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -104,12 +189,12 @@ fun BubbleEditDialog(
                     Text(
                         text = "Ancho: ${"%.1f".format(widthScale)}x",
                         style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.width(100.dp),
+                        modifier = Modifier.width(105.dp),
                     )
                     Slider(
                         value = widthScale,
                         onValueChange = { widthScale = it },
-                        valueRange = 0.5f..3.0f,
+                        valueRange = 0.4f..3.0f,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -121,17 +206,19 @@ fun BubbleEditDialog(
                     Text(
                         text = "Alto: ${"%.1f".format(heightScale)}x",
                         style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.width(100.dp),
+                        modifier = Modifier.width(105.dp),
                     )
                     Slider(
                         value = heightScale,
                         onValueChange = { heightScale = it },
-                        valueRange = 0.5f..3.0f,
+                        valueRange = 0.4f..3.0f,
                         modifier = Modifier.weight(1f),
                     )
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(10.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -156,7 +243,7 @@ fun BubbleEditDialog(
                         Text(
                             text = "Tamaño: ${customFontSizeSp.toInt()} sp",
                             style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.width(100.dp),
+                            modifier = Modifier.width(105.dp),
                         )
                         Slider(
                             value = customFontSizeSp,
@@ -177,6 +264,9 @@ fun BubbleEditDialog(
                             widthScale = widthScale,
                             heightScale = heightScale,
                             customFontSizeSp = if (useCustomFont) customFontSizeSp else null,
+                            offsetX = offsetX,
+                            offsetY = offsetY,
+                            isVertical = isVertical,
                         ),
                     )
                 },
@@ -185,20 +275,8 @@ fun BubbleEditDialog(
             }
         },
         dismissButton = {
-            Row {
-                TextButton(
-                    onClick = {
-                        widthScale = 1.0f
-                        heightScale = 1.0f
-                        useCustomFont = false
-                    },
-                ) {
-                    Text("Restablecer")
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                TextButton(onClick = onDismiss) {
-                    Text("Cancelar")
-                }
+            TextButton(onClick = onDismiss) {
+                Text("Cancelar")
             }
         },
     )

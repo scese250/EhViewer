@@ -385,15 +385,150 @@ fun SettingsDialog(
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Section 2: Globos y Fuentes
+                // Section 2: Estilo de Manga y Globos
                 Text(
-                    text = "Ajuste de Globos y Fuentes",
+                    text = "🎨 Estilo de Manga y Globos",
                     fontWeight = FontWeight.Bold,
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
+
+                // Orientación de globos
+                Text(
+                    text = "Orientación de los globos:",
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    FilterChip(
+                        selected = settings.bubbleOrientation == TranslatorSettings.ORIENTATION_VERTICAL,
+                        onClick = { settings.bubbleOrientation = TranslatorSettings.ORIENTATION_VERTICAL },
+                        label = { Text("Vertical (Manga)", fontSize = 11.sp) },
+                    )
+                    FilterChip(
+                        selected = settings.bubbleOrientation == TranslatorSettings.ORIENTATION_HORIZONTAL,
+                        onClick = { settings.bubbleOrientation = TranslatorSettings.ORIENTATION_HORIZONTAL },
+                        label = { Text("Horizontal", fontSize = 11.sp) },
+                    )
+                    FilterChip(
+                        selected = settings.bubbleOrientation == TranslatorSettings.ORIENTATION_AUTO,
+                        onClick = { settings.bubbleOrientation = TranslatorSettings.ORIENTATION_AUTO },
+                        label = { Text("Auto", fontSize = 11.sp) },
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Forma del globo
+                Text(
+                    text = "Forma del bocadillo:",
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    FilterChip(
+                        selected = settings.bubbleShape == TranslatorSettings.SHAPE_OVAL,
+                        onClick = { settings.bubbleShape = TranslatorSettings.SHAPE_OVAL },
+                        label = { Text("Óvalo Manga", fontSize = 11.sp) },
+                    )
+                    FilterChip(
+                        selected = settings.bubbleShape == TranslatorSettings.SHAPE_ROUNDED,
+                        onClick = { settings.bubbleShape = TranslatorSettings.SHAPE_ROUNDED },
+                        label = { Text("Rectángulo Suave", fontSize = 11.sp) },
+                    )
+                    FilterChip(
+                        selected = settings.bubbleShape == TranslatorSettings.SHAPE_BORDERLESS,
+                        onClick = { settings.bubbleShape = TranslatorSettings.SHAPE_BORDERLESS },
+                        label = { Text("Sin Borde", fontSize = 11.sp) },
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Scanlation Uppercase
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Mayúsculas Manga (Scanlation)",
+                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            text = "Muestra el texto en MAYÚSCULAS como en las publicaciones oficiales",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = settings.uppercaseScanlation,
+                        onCheckedChange = { settings.uppercaseScanlation = it },
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Anti-Collision
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Detector Anti-Choque de Burbujas",
+                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            text = "Rueda y separa automáticamente globos adyacentes para que no se solapen",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = settings.preventCollisions,
+                        onCheckedChange = { settings.preventCollisions = it },
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // On-screen touch manipulation
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Modo Manipulación Táctil",
+                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            text = "Mover globos con 1 dedo o pellizcar con 2 dedos para cambiar tamaño",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = settings.isManipulationMode,
+                        onCheckedChange = { settings.isManipulationMode = it },
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -406,7 +541,7 @@ fun SettingsDialog(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                         Text(
-                            text = "Ajusta el tamaño solo para que entre todo el texto sin cortarse",
+                            text = "Ajusta la altura para que entre todo el texto sin cortarse",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -418,6 +553,24 @@ fun SettingsDialog(
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
+
+                // Border thickness slider
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Borde: ${"%.1f".format(settings.borderThickness)}dp",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.width(110.dp),
+                    )
+                    Slider(
+                        value = settings.borderThickness,
+                        onValueChange = { settings.borderThickness = it },
+                        valueRange = 0f..3.5f,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -431,24 +584,7 @@ fun SettingsDialog(
                     Slider(
                         value = settings.globalBubbleScale,
                         onValueChange = { settings.globalBubbleScale = it },
-                        valueRange = 0.8f..2.5f,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "Expansión: ${"%.1f".format(settings.horizontalExpansion)}x",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.width(110.dp),
-                    )
-                    Slider(
-                        value = settings.horizontalExpansion,
-                        onValueChange = { settings.horizontalExpansion = it },
-                        valueRange = 1.0f..3.5f,
+                        valueRange = 0.6f..2.5f,
                         modifier = Modifier.weight(1f),
                     )
                 }

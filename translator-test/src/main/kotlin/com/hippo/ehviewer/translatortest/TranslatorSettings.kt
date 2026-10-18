@@ -29,6 +29,16 @@ class TranslatorSettings(context: Context) {
     var geminiPromptTemplate by mutableStateOf(
         prefs.getString("gemini_prompt_template", DEFAULT_PROMPT_TEMPLATE) ?: DEFAULT_PROMPT_TEMPLATE,
     )
+    var bubbleOrientation by mutableStateOf(
+        prefs.getString("bubble_orientation", ORIENTATION_VERTICAL) ?: ORIENTATION_VERTICAL,
+    )
+    var bubbleShape by mutableStateOf(
+        prefs.getString("bubble_shape", SHAPE_OVAL) ?: SHAPE_OVAL,
+    )
+    var uppercaseScanlation by mutableStateOf(prefs.getBoolean("uppercase_scanlation", true))
+    var preventCollisions by mutableStateOf(prefs.getBoolean("prevent_collisions", true))
+    var borderThickness by mutableFloatStateOf(prefs.getFloat("border_thickness", 1.5f))
+    var isManipulationMode by mutableStateOf(prefs.getBoolean("is_manipulation_mode", false))
 
     fun getGeminiApiKeys(): List<String> = geminiApiKeysRaw
         .split('\n', ',', ';')
@@ -43,6 +53,12 @@ class TranslatorSettings(context: Context) {
             .putString("source_lang", sourceLang)
             .putString("target_lang", targetLang)
             .putString("gemini_prompt_template", geminiPromptTemplate)
+            .putString("bubble_orientation", bubbleOrientation)
+            .putString("bubble_shape", bubbleShape)
+            .putBoolean("uppercase_scanlation", uppercaseScanlation)
+            .putBoolean("prevent_collisions", preventCollisions)
+            .putBoolean("is_manipulation_mode", isManipulationMode)
+            .putFloat("border_thickness", borderThickness)
             .putFloat("global_bubble_scale", globalBubbleScale)
             .putFloat("horizontal_expansion", horizontalExpansion)
             .putFloat("global_font_scale", globalFontScale)
@@ -57,6 +73,14 @@ class TranslatorSettings(context: Context) {
         const val ENGINE_GOOGLE = "google"
         const val ENGINE_GEMINI = "gemini"
         const val DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
+
+        const val ORIENTATION_VERTICAL = "vertical"
+        const val ORIENTATION_HORIZONTAL = "horizontal"
+        const val ORIENTATION_AUTO = "auto"
+
+        const val SHAPE_OVAL = "oval"
+        const val SHAPE_ROUNDED = "rounded"
+        const val SHAPE_BORDERLESS = "borderless"
         const val DEFAULT_PROMPT_TEMPLATE =
             "Translate from {lang input} to {lang output}. Translate the following manga dialogue lines into natural, expressive, and concise {lang output} suitable for speech bubbles. Maintain conversational tone and context between lines on the same page."
 

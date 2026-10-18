@@ -10,6 +10,9 @@ data class TranslatedBubble(
     val widthScale: Float = 1.0f,
     val heightScale: Float = 1.0f,
     val customFontSizeSp: Float? = null,
+    val offsetX: Float = 0f,
+    val offsetY: Float = 0f,
+    val isVertical: Boolean? = null,
 )
 
 data class PageTranslation(
