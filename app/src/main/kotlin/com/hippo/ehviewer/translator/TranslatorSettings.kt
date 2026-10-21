@@ -72,6 +72,13 @@ class TranslatorSettings(context: Context) {
     var bubblePadding by mutableStateOf(
         prefs.getString("bubble_padding", PADDING_COMPACT) ?: PADDING_COMPACT,
     )
+
+    /**
+     * Use the rectangle returned by the model verbatim: no widening, no scaling
+     * and no collision shifting. Without this the translation drifts away from
+     * the balloons the model measured.
+     */
+    var exactPlacement by mutableStateOf(prefs.getBoolean("exact_placement", true))
     var uppercaseScanlation by mutableStateOf(prefs.getBoolean("uppercase_scanlation", true))
     var preventCollisions by mutableStateOf(prefs.getBoolean("prevent_collisions", true))
     var collisionGap by mutableFloatStateOf(prefs.getFloat("collision_gap", 12f))
@@ -119,6 +126,9 @@ class TranslatorSettings(context: Context) {
         append('|').append(geminiApiKeysRaw.hashCode())
         append('|').append(if (geminiVision) 1 else 0)
         append('|').append(if (skipOcr) 1 else 0)
+        // Bumped when the vision prompt or the way its boxes are read changes,
+        // so pages cached by an older build are translated again.
+        append("|v3")
         append('|').append(if (mergeBubbleColumns) 1 else 0)
         append('|').append((maxColumnGapRatio * 1000).toInt())
         append('|').append((minColumnOverlap * 1000).toInt())
@@ -164,6 +174,7 @@ class TranslatorSettings(context: Context) {
             .putString("bubble_orientation", bubbleOrientation)
             .putString("bubble_shape", bubbleShape)
             .putString("bubble_padding", bubblePadding)
+            .putBoolean("exact_placement", exactPlacement)
             .putBoolean("uppercase_scanlation", uppercaseScanlation)
             .putBoolean("prevent_collisions", preventCollisions)
             .putFloat("collision_gap", collisionGap)

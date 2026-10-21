@@ -662,6 +662,14 @@ fun TranslatorSettingsDialog(
                         SectionTitle("Ajuste del texto")
 
                         SettingSwitch(
+                            title = "Posición exacta de la IA",
+                            subtitle = "Usa la caja medida por el modelo tal cual: sin ensanchar, sin escalar y sin " +
+                                "anti-choque. El alto crece centrado solo si el texto no cabe.",
+                            checked = settings.exactPlacement,
+                            onCheckedChange = { settings.exactPlacement = it },
+                        )
+
+                        SettingSwitch(
                             title = "Burbuja dinámica",
                             subtitle = "Crece arriba y abajo para que entre todo el texto sin cortarse",
                             checked = settings.dynamicBubbleSize,

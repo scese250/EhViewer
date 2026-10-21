@@ -38,6 +38,7 @@ fun ReaderTranslationOverlay(
         bubbleShape = settings.bubbleShape,
         bubbleStyle = settings.bubbleStyle,
         bubblePadding = settings.bubblePadding,
+        exactPlacement = settings.exactPlacement,
         uppercaseScanlation = settings.uppercaseScanlation,
         preventCollisions = settings.preventCollisions,
         collisionGap = settings.collisionGap,

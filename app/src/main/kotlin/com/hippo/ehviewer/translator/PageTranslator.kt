@@ -54,7 +54,10 @@ object PageTranslator {
     private const val GEMINI_READ_TIMEOUT_MS = 15_000
     private const val GEMINI_VISION_READ_TIMEOUT_MS = 60_000
     private const val MAX_EXTRA_BUBBLES = 4
-    private const val GRID_CELLS = 10
+
+    /** A long sentence marked as SFX is a model slip: draw it as a normal balloon. */
+    private const val MAX_SFX_LENGTH = 24
+    private const val GRID_CELLS = 20
     private val markerColor = 0xFFFF0033.toInt()
 
     suspend fun translatePage(
@@ -721,8 +724,8 @@ object PageTranslator {
             appendLine("size may be wrong. Look at the page yourself, read the text that is really inside each place,")
             appendLine("translate it, and measure the area the translated text must cover.")
         }
-        appendLine("A blue grid is drawn over the page: 10 x 10 cells, each cell 100 units wide, with the")
-        appendLine("normalised coordinate (0-1000) printed along the top and left edges. Use it as a ruler.")
+        appendLine("A blue grid is drawn over the page: 20 x 20 cells, each cell 50 units wide, with the")
+        appendLine("normalised coordinate (0-1000) printed along all four edges. Use it as a ruler.")
         if (!noHints && boxCount == 0) {
             appendLine("This page has no numbered boxes: recover every speech balloon you can see with \"extra\".")
         }
@@ -933,7 +936,7 @@ object PageTranslator {
                 source = readSource(item),
                 translated = translated,
                 rect = readNormalizedRect(item, width, height),
-                isSfx = readSfx(item),
+                isSfx = readSfx(item) && translated.trim().length <= MAX_SFX_LENGTH,
             )
         }
 
@@ -949,7 +952,7 @@ object PageTranslator {
                 source = readSource(item),
                 translated = translated,
                 rect = rect,
-                isSfx = readSfx(item),
+                isSfx = readSfx(item) && translated.trim().length <= MAX_SFX_LENGTH,
             )
             extraCount++
         }
@@ -979,13 +982,20 @@ object PageTranslator {
                     }
                 }
             val guess = entry.rect?.takeIf { it.isPlausibleBubble(width, height) }
+            var fromModel = false
             val rect = when {
                 // The model's own rectangle wins: it follows the balloon outline,
                 // not the OCR text. Accept it only when it sits near the hint
                 // boxes, so a hallucinated rectangle cannot land on the artwork.
-                guess != null && (union == null || Rect.intersects(guess, union.expanded(width, height))) -> guess
+                guess != null && (union == null || Rect.intersects(guess, union.expanded(width, height))) -> {
+                    fromModel = true
+                    guess
+                }
                 union != null -> union
-                guess != null -> guess
+                guess != null -> {
+                    fromModel = true
+                    guess
+                }
                 else -> continue
             }
             val clipped = Rect(rect.left, rect.top, rect.right, rect.bottom).apply {
@@ -1012,6 +1022,7 @@ object PageTranslator {
                 translatedText = cleanMangaText(entry.translated),
                 boundingBox = clipped,
                 isSfx = entry.isSfx,
+                exactBox = fromModel,
             )
         }
 

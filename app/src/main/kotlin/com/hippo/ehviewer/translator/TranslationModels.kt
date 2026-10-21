@@ -19,6 +19,11 @@ data class TranslatedBubble(
      * does not get covered with boxes.
      */
     val isSfx: Boolean = false,
+    /**
+     * The rectangle was measured by the vision model over the text, not derived
+     * from the OCR blocks, so it can be trusted as the exact text area.
+     */
+    val exactBox: Boolean = false,
 )
 
 data class PageTranslation(

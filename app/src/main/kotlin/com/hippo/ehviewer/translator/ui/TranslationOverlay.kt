@@ -78,6 +78,12 @@ fun TranslationOverlay(
     bubbleShape: String = TranslatorSettings.SHAPE_OVAL,
     bubbleStyle: String = TranslatorSettings.STYLE_FILL,
     bubblePadding: String = TranslatorSettings.PADDING_COMPACT,
+    /**
+     * Draw the model's rectangle exactly where it was measured: no horizontal
+     * expansion, no scaling and no collision shifting. Only the height grows,
+     * symmetrically, when the translation does not fit.
+     */
+    exactPlacement: Boolean = true,
     uppercaseScanlation: Boolean = true,
     preventCollisions: Boolean = true,
     collisionGap: Float = 12f,
@@ -180,6 +186,7 @@ fun TranslationOverlay(
             maxCollisionShift,
             dynamicBubbleSize,
             isManipulationEnabled,
+            exactPlacement,
             fitMode,
         ) {
             val initialList = bubbles.map { bubble ->
@@ -187,6 +194,20 @@ fun TranslationOverlay(
                 val origHeightPx = (bubble.boundingBox.height() * scaleY).coerceAtLeast(14f)
                 val bubbleCenterX = offsetX + (bubble.boundingBox.centerX() * scaleX)
                 val bubbleCenterY = offsetY + (bubble.boundingBox.centerY() * scaleY)
+
+                // Only the rectangles measured by the model itself are exact;
+                // the ones derived from OCR blocks keep the usual margins.
+                val exact = exactPlacement && bubble.exactBox
+                val bubbleHPaddingPx = if (exact) {
+                    with(density) { (minOf(hPadDp, 4.dp) * 2).toPx() }
+                } else {
+                    hPaddingPx
+                }
+                val bubbleVPaddingPx = if (exact) {
+                    with(density) { (minOf(vPadDp, 2.dp) * 2).toPx() }
+                } else {
+                    vPaddingPx
+                }
 
                 val rawText = if (uppercaseScanlation) {
                     bubble.translatedText.uppercase()
@@ -246,12 +267,12 @@ fun TranslationOverlay(
 
                 // Never let one long word force the balloon wider than the page.
                 var maxWordWidthPx = measureWordWidth(finalFontSizeSp)
-                while (finalFontSizeSp > effectiveMinFontSp && maxWordWidthPx + hPaddingPx + ovalCurveMarginPx > containerWidthPx * 0.85f) {
+                while (finalFontSizeSp > effectiveMinFontSp && maxWordWidthPx + bubbleHPaddingPx + ovalCurveMarginPx > containerWidthPx * 0.85f) {
                     finalFontSizeSp = (finalFontSizeSp - 0.5f).coerceAtLeast(effectiveMinFontSp)
                     maxWordWidthPx = measureWordWidth(finalFontSizeSp)
                 }
 
-                val minRequiredWidthPx = maxWordWidthPx + hPaddingPx + ovalCurveMarginPx
+                val minRequiredWidthPx = maxWordWidthPx + bubbleHPaddingPx + ovalCurveMarginPx
 
                 val desiredWidthPx = if (isVertical) {
                     maxOf(origWidthPx * 1.10f, with(density) { 40.dp.toPx() })
@@ -259,27 +280,54 @@ fun TranslationOverlay(
                     maxOf(origWidthPx * horizontalExpansion, with(density) { 60.dp.toPx() })
                 }
                 val maxWidthPx = containerWidthPx * 0.92f
-                val baseWidthPx = maxOf(desiredWidthPx * globalBubbleScale, minRequiredWidthPx)
-                    .coerceAtMost(maxWidthPx)
-                    .coerceAtLeast(minRequiredWidthPx.coerceAtMost(maxWidthPx))
+                val baseWidthPx = if (exact) {
+                    // The model measured the text area, so the width is the
+                    // measurement itself; only a word that would be cut can
+                    // widen it, and then symmetrically.
+                    origWidthPx.coerceIn(minRequiredWidthPx.coerceAtMost(maxWidthPx), maxWidthPx)
+                } else {
+                    maxOf(desiredWidthPx * globalBubbleScale, minRequiredWidthPx)
+                        .coerceAtMost(maxWidthPx)
+                        .coerceAtLeast(minRequiredWidthPx.coerceAtMost(maxWidthPx))
+                }
 
                 // Height: keep covering the original balloon. When "fit inside"
                 // is enabled, shrink the font until the translation fits instead
                 // of growing the box into the neighbouring balloons.
-                val coverHeightPx = origHeightPx * (if (fitTextInsideBubble) 1.0f else 1.05f) * globalBubbleScale
+                val coverHeightPx = if (exact) {
+                    origHeightPx
+                } else {
+                    origHeightPx * (if (fitTextInsideBubble) 1.0f else 1.05f) * globalBubbleScale
+                }
                 val heightLimitPx = maxOf(24f, containerHeightPx * 0.92f)
                 val maxHeightPx = (coverHeightPx * maxHeightExpansion).coerceIn(24f, heightLimitPx)
 
                 // The text is laid out inside the horizontal padding, so the
                 // measured width must exclude it or the real rendered height is
                 // underestimated and the last lines get clipped.
-                val contentWidthPx = (baseWidthPx - hPaddingPx).coerceAtLeast(1f)
-                var measuredTextHeightPx = measureTextHeight(finalFontSizeSp, contentWidthPx) + vPaddingPx
+                val contentWidthPx = (baseWidthPx - bubbleHPaddingPx).coerceAtLeast(1f)
+                var measuredTextHeightPx = measureTextHeight(finalFontSizeSp, contentWidthPx) + bubbleVPaddingPx
                 if (fitTextInsideBubble && bubble.customFontSizeSp == null) {
                     var guard = 0
                     while (guard < 80 && finalFontSizeSp > effectiveMinFontSp && measuredTextHeightPx > coverHeightPx) {
                         finalFontSizeSp = (finalFontSizeSp - 0.25f).coerceAtLeast(effectiveMinFontSp)
-                        measuredTextHeightPx = measureTextHeight(finalFontSizeSp, contentWidthPx) + vPaddingPx
+                        measuredTextHeightPx = measureTextHeight(finalFontSizeSp, contentWidthPx) + bubbleVPaddingPx
+                        guard++
+                    }
+                }
+                if (exact && bubble.customFontSizeSp == null) {
+                    // The rectangle is the text area itself: fill it, growing the
+                    // font while the lines still fit, instead of leaving the
+                    // translation small in the middle of the balloon.
+                    var guard = 0
+                    while (guard < 60) {
+                        val next = finalFontSizeSp + 0.5f
+                        if (next > effectiveMaxFontSp) break
+                        if (measureWordWidth(next) + bubbleHPaddingPx > contentWidthPx) break
+                        val height = measureTextHeight(next, contentWidthPx) + bubbleVPaddingPx
+                        if (height > coverHeightPx) break
+                        finalFontSizeSp = next
+                        measuredTextHeightPx = height
                         guard++
                     }
                 }
@@ -309,7 +357,9 @@ fun TranslationOverlay(
                     baseCenterY = bubbleCenterY,
                     fontSizeSp = finalFontSizeSp,
                     isVertical = isVertical,
-                    isManuallyPositioned = isManual,
+                    // Exact boxes stay anchored: the collision solver must not
+                    // drag them away from the text the model measured.
+                    isManuallyPositioned = isManual || exact,
                 )
             }
 
@@ -341,6 +391,7 @@ fun TranslationOverlay(
                     bubbleShape = bubbleShape,
                     bubbleStyle = bubbleStyle,
                     bubblePadding = bubblePadding,
+                    exactPlacement = exactPlacement,
                     uppercaseScanlation = uppercaseScanlation,
                     borderThickness = borderThickness,
                     outlineWidth = outlineWidth,
@@ -364,6 +415,7 @@ private fun DynamicBubbleView(
     bubbleShape: String,
     bubbleStyle: String,
     bubblePadding: String,
+    exactPlacement: Boolean,
     uppercaseScanlation: Boolean,
     borderThickness: Float,
     outlineWidth: Float,
@@ -555,11 +607,14 @@ private fun DynamicBubbleView(
         Modifier
     }
 
-    val (hPadDp, vPadDp) = when (bubblePadding) {
+    val (rawHPadDp, rawVPadDp) = when (bubblePadding) {
         TranslatorSettings.PADDING_COMPACT -> Pair(6.dp, 3.dp)
         TranslatorSettings.PADDING_SPACIOUS -> Pair(14.dp, 8.dp)
         else -> Pair(9.dp, 5.dp)
     }
+    val exact = exactPlacement && bubble.exactBox
+    val hPadDp = if (exact) minOf(rawHPadDp, 4.dp) else rawHPadDp
+    val vPadDp = if (exact) minOf(rawVPadDp, 2.dp) else rawVPadDp
 
     val contentFontSp = if (bubble.isSfx) {
         (targetWidthDp.value * 0.20f).coerceIn(8f, 15f)
