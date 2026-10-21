@@ -793,7 +793,7 @@ object PageTranslator {
             }
             if (clipped.width() < 4 || clipped.height() < 4) continue
             // A guessed extra box that lands on an existing balloon is a duplicate.
-            if (entry.ids.isEmpty() && accepted.any { it.overlaps(clipped) }) continue
+            if (entry.ids.isEmpty() && accepted.any { Rect.intersects(it, clipped) }) continue
 
             entry.ids.forEach { id -> if (id in 1..blocks.size) used += id }
             if (entry.ids.size > 1) mergedBoxes++
