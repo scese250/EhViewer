@@ -1,7 +1,9 @@
 package com.hippo.ehviewer.translator.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,7 +32,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -53,6 +54,18 @@ import com.hippo.ehviewer.translator.TranslationStatus
 import com.hippo.ehviewer.translator.TranslatorSettings
 import kotlinx.coroutines.launch
 
+private const val SECTION_LANGUAGES = "languages"
+private const val SECTION_AI = "ai"
+private const val SECTION_STYLE = "style"
+private const val SECTION_FIT = "fit"
+private const val SECTION_DETECTION = "detection"
+private const val SECTION_PRELOAD = "preload"
+
+/**
+ * Compact translator dialog: the log, the two translate actions and the engine
+ * are always on screen; everything else lives in one category that opens at a
+ * time, so the sheet does not become a wall of sliders.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TranslatorSettingsDialog(
@@ -74,7 +87,13 @@ fun TranslatorSettingsDialog(
     var isTestSuccess by remember { mutableStateOf(false) }
     var isSourceExpanded by remember { mutableStateOf(false) }
     var isTargetExpanded by remember { mutableStateOf(false) }
+    var openSection by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val keys = settings.getGeminiApiKeys()
+    val sourceName = TranslatorSettings.SOURCE_LANGUAGES.find { it.first == settings.sourceLang }?.second
+        ?: settings.sourceLang
+    val targetName = TranslatorSettings.TARGET_LANGUAGES.find { it.first == settings.targetLang }?.second
+        ?: settings.targetLang
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -90,907 +109,721 @@ fun TranslatorSettingsDialog(
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
             ) {
-                // Section 0: state of the current page translation
+                // Log de la traducción de esta página.
                 TranslationStatusCard(status = status, translation = translation)
+
                 Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(
-                    onClick = onTranslateCurrent,
-                    enabled = !status.isBusy,
+
+                Row(
                     modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    if (status.isBusy) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(status.busyLabel())
-                    } else {
+                    OutlinedButton(
+                        onClick = onTranslateCurrent,
+                        enabled = !status.isBusy,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        if (status.isBusy) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text(
+                                text = when (status) {
+                                    is TranslationStatus.Failed -> "Reintentar"
+                                    TranslationStatus.Done -> "Traducir de nuevo"
+                                    else -> "Traducir"
+                                },
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = { onRetranslateNext(retranslateCount) },
+                        enabled = !status.isBusy,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Siguientes $retranslateCount", maxLines = 1)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Motor: la única elección que cambia todo lo demás.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Motor",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (settings.engine == TranslatorSettings.ENGINE_GEMINI) {
                         Text(
-                            when (status) {
-                                is TranslationStatus.Failed -> "Reintentar traducción"
-                                TranslationStatus.Done -> "Traducir de nuevo esta página"
-                                else -> "Traducir esta página"
+                            text = if (keys.isEmpty()) "sin claves" else "${keys.size} claves",
+                            fontSize = 11.sp,
+                            color = if (keys.isEmpty()) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
                             },
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(4.dp))
 
-                OutlinedButton(
-                    onClick = { onRetranslateNext(retranslateCount) },
-                    enabled = !status.isBusy,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Retraducir las siguientes $retranslateCount páginas")
-                }
-                Text(
-                    text = "Borra la copia guardada de esas páginas y las vuelve a leer con la configuración actual, " +
-                        "sin salir de la galería. Útil para probar un prompt nuevo.",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-                HorizontalDivider()
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Section 0: Idiomas de Entrada y Salida (Sin autodetección)
-                Text(
-                    text = "Idiomas de Traducción",
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Text(
-                    text = "Aplica tanto para Google Translate como para Gemini IA. Idioma de entrada por defecto: Japonés.",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Source Language
-                ExposedDropdownMenuBox(
-                    expanded = isSourceExpanded,
-                    onExpandedChange = { isSourceExpanded = it },
-                ) {
-                    val currentSrc = TranslatorSettings.SOURCE_LANGUAGES.find { it.first == settings.sourceLang }?.second
-                        ?: settings.sourceLang
-                    OutlinedTextField(
-                        value = currentSrc,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Idioma de entrada (Manga)") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isSourceExpanded) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(
+                        selected = settings.engine == TranslatorSettings.ENGINE_GOOGLE,
+                        onClick = { settings.engine = TranslatorSettings.ENGINE_GOOGLE },
+                        label = { Text("Google", fontSize = 11.sp) },
                     )
-                    ExposedDropdownMenu(
-                        expanded = isSourceExpanded,
-                        onDismissRequest = { isSourceExpanded = false },
-                    ) {
-                        TranslatorSettings.SOURCE_LANGUAGES.forEach { (code, name) ->
-                            DropdownMenuItem(
-                                text = { Text(name) },
-                                onClick = {
-                                    settings.sourceLang = code
-                                    isSourceExpanded = false
-                                },
-                            )
+                    FilterChip(
+                        selected = settings.engine == TranslatorSettings.ENGINE_GEMINI,
+                        onClick = { settings.engine = TranslatorSettings.ENGINE_GEMINI },
+                        label = { Text("Gemini IA", fontSize = 11.sp) },
+                    )
+                }
+
+                if (settings.engine == TranslatorSettings.ENGINE_GEMINI && keys.isEmpty()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Sin claves se traduce con Google.",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { openSection = SECTION_AI }) {
+                            Text("Añadir", fontSize = 11.sp)
                         }
                     }
                 }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = "$sourceName → $targetName",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Target Language
-                ExposedDropdownMenuBox(
-                    expanded = isTargetExpanded,
-                    onExpandedChange = { isTargetExpanded = it },
+                // Categorías: solo una abierta a la vez.
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    val currentTgt = TranslatorSettings.TARGET_LANGUAGES.find { it.first == settings.targetLang }?.second
-                        ?: settings.targetLang
-                    OutlinedTextField(
-                        value = currentTgt,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Idioma de salida (Traducción)") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isTargetExpanded) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
-                    )
-                    ExposedDropdownMenu(
-                        expanded = isTargetExpanded,
-                        onDismissRequest = { isTargetExpanded = false },
-                    ) {
-                        TranslatorSettings.TARGET_LANGUAGES.forEach { (code, name) ->
-                            DropdownMenuItem(
-                                text = { Text(name) },
-                                onClick = {
-                                    settings.targetLang = code
-                                    isTargetExpanded = false
-                                },
-                            )
-                        }
+                    CategoryChip("Idiomas", openSection == SECTION_LANGUAGES) {
+                        openSection = nextSection(openSection, SECTION_LANGUAGES)
+                    }
+                    CategoryChip("IA", openSection == SECTION_AI) {
+                        openSection = nextSection(openSection, SECTION_AI)
+                    }
+                    CategoryChip("Estilo", openSection == SECTION_STYLE) {
+                        openSection = nextSection(openSection, SECTION_STYLE)
+                    }
+                    CategoryChip("Ajuste", openSection == SECTION_FIT) {
+                        openSection = nextSection(openSection, SECTION_FIT)
+                    }
+                    CategoryChip("Detección", openSection == SECTION_DETECTION) {
+                        openSection = nextSection(openSection, SECTION_DETECTION)
+                    }
+                    CategoryChip("Lote", openSection == SECTION_PRELOAD) {
+                        openSection = nextSection(openSection, SECTION_PRELOAD)
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
-                HorizontalDivider()
-                Spacer(modifier = Modifier.height(16.dp))
+                AnimatedVisibility(visible = openSection == SECTION_LANGUAGES) {
+                    Column {
+                        SectionTitle("Idiomas de traducción")
 
-                // Section 1: Engine Selection
-                Text(
-                    text = "Motor de Traducción",
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    RadioButton(
-                        selected = settings.engine == TranslatorSettings.ENGINE_GOOGLE,
-                        onClick = { settings.engine = TranslatorSettings.ENGINE_GOOGLE },
-                    )
-                    Text(
-                        text = "Google Translate (Gratuito / Rápido)",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(start = 8.dp),
-                    )
-                }
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    RadioButton(
-                        selected = settings.engine == TranslatorSettings.ENGINE_GEMINI,
-                        onClick = { settings.engine = TranslatorSettings.ENGINE_GEMINI },
-                    )
-                    Text(
-                        text = "Gemini IA (${settings.geminiModel})",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(start = 8.dp),
-                    )
-                }
-
-                if (settings.engine == TranslatorSettings.ENGINE_GEMINI) {
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            val keys = settings.getGeminiApiKeys()
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    text = "Claves de API Gemini:",
-                                    fontWeight = FontWeight.SemiBold,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                                Text(
-                                    text = "${keys.size} detectadas",
-                                    fontWeight = FontWeight.Bold,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = if (keys.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(6.dp))
-
+                        ExposedDropdownMenuBox(
+                            expanded = isSourceExpanded,
+                            onExpandedChange = { isSourceExpanded = it },
+                        ) {
                             OutlinedTextField(
-                                value = settings.geminiApiKeysRaw,
-                                onValueChange = {
-                                    settings.geminiApiKeysRaw = it
-                                    testResult = null
-                                },
-                                label = { Text("Pega tus claves (una por línea)") },
-                                placeholder = { Text("AIzaSy...\nAIzaSy...") },
-                                modifier = Modifier.fillMaxWidth(),
-                                minLines = 2,
-                                maxLines = 4,
+                                value = sourceName,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Idioma de entrada (Manga)") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isSourceExpanded) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
                             )
-
-                            Spacer(modifier = Modifier.height(4.dp))
-
-                            Text(
-                                text = "💡 Puedes ingresar varias claves. Rotarán automáticamente si una alcanza la cuota (429).",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            Text(
-                                text = "Modelo Gemini:",
-                                fontWeight = FontWeight.SemiBold,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-
-                            OutlinedTextField(
-                                value = settings.geminiModel,
-                                onValueChange = { settings.geminiModel = it.trim() },
-                                label = { Text("ID del Modelo") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true,
-                            )
-
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier = Modifier.fillMaxWidth(),
+                            ExposedDropdownMenu(
+                                expanded = isSourceExpanded,
+                                onDismissRequest = { isSourceExpanded = false },
                             ) {
-                                FilterChip(
-                                    selected = settings.geminiModel == "gemini-flash-lite-latest",
-                                    onClick = { settings.geminiModel = "gemini-flash-lite-latest" },
-                                    label = { Text("flash-lite-latest", fontSize = 11.sp) },
-                                )
-                                FilterChip(
-                                    selected = settings.geminiModel == "gemini-3.5-flash-lite",
-                                    onClick = { settings.geminiModel = "gemini-3.5-flash-lite" },
-                                    label = { Text("3.5-flash-lite", fontSize = 11.sp) },
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    text = "Plantilla de Prompt IA:",
-                                    fontWeight = FontWeight.SemiBold,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                                TextButton(
-                                    onClick = { settings.geminiPromptTemplate = TranslatorSettings.DEFAULT_PROMPT_TEMPLATE },
-                                ) {
-                                    Text("Restablecer", fontSize = 11.sp)
+                                TranslatorSettings.SOURCE_LANGUAGES.forEach { (code, name) ->
+                                    DropdownMenuItem(
+                                        text = { Text(name) },
+                                        onClick = {
+                                            settings.sourceLang = code
+                                            isSourceExpanded = false
+                                        },
+                                    )
                                 }
                             }
+                        }
 
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        ExposedDropdownMenuBox(
+                            expanded = isTargetExpanded,
+                            onExpandedChange = { isTargetExpanded = it },
+                        ) {
                             OutlinedTextField(
-                                value = settings.geminiPromptTemplate,
-                                onValueChange = { settings.geminiPromptTemplate = it },
-                                label = { Text("Prompt con comodines") },
-                                modifier = Modifier.fillMaxWidth(),
-                                minLines = 2,
-                                maxLines = 4,
+                                value = targetName,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Idioma de salida (Traducción)") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isTargetExpanded) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
                             )
-
-                            Spacer(modifier = Modifier.height(4.dp))
-
-                            Text(
-                                text = "💡 Comodines: {lang input} y {lang output}. Se sustituyen automáticamente por los idiomas seleccionados.",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
+                            ExposedDropdownMenu(
+                                expanded = isTargetExpanded,
+                                onDismissRequest = { isTargetExpanded = false },
                             ) {
-                                Text(
-                                    text = "Instrucciones del sistema:",
-                                    fontWeight = FontWeight.SemiBold,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                                TextButton(
-                                    onClick = { settings.geminiSystemPrompt = TranslatorSettings.DEFAULT_SYSTEM_PROMPT },
-                                ) {
-                                    Text("Restablecer", fontSize = 11.sp)
+                                TranslatorSettings.TARGET_LANGUAGES.forEach { (code, name) ->
+                                    DropdownMenuItem(
+                                        text = { Text(name) },
+                                        onClick = {
+                                            settings.targetLang = code
+                                            isTargetExpanded = false
+                                        },
+                                    )
                                 }
                             }
+                        }
 
-                            OutlinedTextField(
-                                value = settings.geminiSystemPrompt,
-                                onValueChange = { settings.geminiSystemPrompt = it },
-                                label = { Text("Reglas del traductor (system prompt)") },
-                                modifier = Modifier.fillMaxWidth(),
-                                minLines = 5,
-                                maxLines = 14,
-                            )
+                        Text(
+                            text = "Aplica tanto a Google Translate como a Gemini IA. Idioma de entrada por defecto: Japonés.",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
 
-                            Text(
-                                text = "💡 Estas reglas se envían como system prompt; la imagen de la página y la tarea de " +
-                                    "maquetación van como turno del usuario. Puedes cambiarlas: pronombres y género según el " +
-                                    "panel, futanari siempre femenino, términos H (\"Ya voy\" → \"Me vengo\"), no traducir " +
-                                    "carteles ni texto decorativo, y REJECT cuando el globo no tiene diálogo.",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                AnimatedVisibility(visible = openSection == SECTION_AI) {
+                    Column {
+                        SectionTitle("Gemini IA")
 
-                            Spacer(modifier = Modifier.height(10.dp))
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = "Claves de API:",
+                                        fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                    Text(
+                                        text = "${keys.size} detectadas",
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (keys.isNotEmpty()) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.error
+                                        },
+                                    )
+                                }
 
-                            HorizontalDivider()
-                            Spacer(modifier = Modifier.height(10.dp))
+                                Spacer(modifier = Modifier.height(6.dp))
 
-                            SettingSwitch(
-                                title = "Lectura visual de la página",
-                                subtitle = "Gemini recibe la página con una cuadrícula y los cuadros numerados: lee el " +
-                                    "texto real, ajusta cada globo al texto, une globos partidos en dos, dibuja las " +
-                                    "onomatopeyas de lado y descarta los cuadros falsos.",
-                                checked = settings.geminiVision,
-                                onCheckedChange = {
-                                    settings.geminiVision = it
-                                    // Sin lectura visual no hay nada que sustituya al OCR.
-                                    if (!it) settings.skipOcr = false
-                                },
-                            )
+                                OutlinedTextField(
+                                    value = settings.geminiApiKeysRaw,
+                                    onValueChange = {
+                                        settings.geminiApiKeysRaw = it
+                                        testResult = null
+                                    },
+                                    label = { Text("Pega tus claves (una por línea)") },
+                                    placeholder = { Text("AIzaSy...\nAIzaSy...") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    minLines = 2,
+                                    maxLines = 4,
+                                )
 
-                            if (settings.geminiVision) {
                                 Text(
-                                    text = "💡 La IA puede responder \"REJECT\" a un cuadro que no tiene texto legible; " +
-                                        "ese cuadro se descarta en lugar de dibujarse mal.",
+                                    text = "💡 Varias claves rotan solas cuando una alcanza la cuota (429).",
                                     fontSize = 11.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                            }
 
-                            Spacer(modifier = Modifier.height(10.dp))
+                                Spacer(modifier = Modifier.height(10.dp))
 
-                            SettingSwitch(
-                                title = "Omitir el OCR (solo IA)",
-                                subtitle = "No se ejecuta ML Kit: la página se envía con la cuadrícula y la IA " +
-                                    "encuentra y coloca todas las burbujas. Ahorra el OCR y esquiva sus fallos, " +
-                                    "pero no hay cuadros de respaldo si la IA se equivoca; si la llamada falla, " +
-                                    "se hace el OCR y se usa el modo texto.",
-                                checked = settings.skipOcr,
-                                onCheckedChange = {
-                                    settings.skipOcr = it
-                                    // El modo sin OCR necesita la lectura visual.
-                                    if (it) settings.geminiVision = true
-                                },
-                            )
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            OutlinedButton(
-                                onClick = {
-                                    scope.launch {
-                                        isTestingKey = true
-                                        testResult = null
-                                        val res = PageTranslator.testGeminiConnection(
-                                            apiKeys = settings.getGeminiApiKeys(),
-                                            model = settings.geminiModel,
-                                        )
-                                        isTestingKey = false
-                                        res.onSuccess {
-                                            isTestSuccess = true
-                                            testResult = it
-                                        }.onFailure {
-                                            isTestSuccess = false
-                                            testResult = it.message
-                                        }
-                                    }
-                                },
-                                enabled = !isTestingKey && keys.isNotEmpty(),
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                if (isTestingKey) {
-                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Probando conexión...")
-                                } else {
-                                    Icon(imageVector = Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Probar Claves de API")
-                                }
-                            }
-
-                            testResult?.let { msg ->
-                                Spacer(modifier = Modifier.height(6.dp))
                                 Text(
-                                    text = msg,
-                                    fontSize = 11.sp,
-                                    color = if (isTestSuccess) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                    text = "Modelo Gemini:",
+                                    fontWeight = FontWeight.SemiBold,
+                                    style = MaterialTheme.typography.bodySmall,
                                 )
+
+                                OutlinedTextField(
+                                    value = settings.geminiModel,
+                                    onValueChange = { settings.geminiModel = it.trim() },
+                                    label = { Text("ID del Modelo") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true,
+                                )
+
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    FilterChip(
+                                        selected = settings.geminiModel == "gemini-flash-lite-latest",
+                                        onClick = { settings.geminiModel = "gemini-flash-lite-latest" },
+                                        label = { Text("flash-lite-latest", fontSize = 11.sp) },
+                                    )
+                                    FilterChip(
+                                        selected = settings.geminiModel == "gemini-3.5-flash-lite",
+                                        onClick = { settings.geminiModel = "gemini-3.5-flash-lite" },
+                                        label = { Text("3.5-flash-lite", fontSize = 11.sp) },
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = "Plantilla de Prompt IA:",
+                                        fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                    TextButton(
+                                        onClick = { settings.geminiPromptTemplate = TranslatorSettings.DEFAULT_PROMPT_TEMPLATE },
+                                    ) {
+                                        Text("Restablecer", fontSize = 11.sp)
+                                    }
+                                }
+
+                                OutlinedTextField(
+                                    value = settings.geminiPromptTemplate,
+                                    onValueChange = { settings.geminiPromptTemplate = it },
+                                    label = { Text("Prompt con comodines") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    minLines = 2,
+                                    maxLines = 4,
+                                )
+
+                                Text(
+                                    text = "💡 Comodines: {lang input} y {lang output}.",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = "Instrucciones del sistema:",
+                                        fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                    TextButton(
+                                        onClick = { settings.geminiSystemPrompt = TranslatorSettings.DEFAULT_SYSTEM_PROMPT },
+                                    ) {
+                                        Text("Restablecer", fontSize = 11.sp)
+                                    }
+                                }
+
+                                OutlinedTextField(
+                                    value = settings.geminiSystemPrompt,
+                                    onValueChange = { settings.geminiSystemPrompt = it },
+                                    label = { Text("Reglas del traductor (system prompt)") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    minLines = 5,
+                                    maxLines = 14,
+                                )
+
+                                Text(
+                                    text = "💡 Se envían como system prompt; la imagen va como turno del usuario. " +
+                                        "Aquí viven los pronombres y el género según el panel, futanari femenino, " +
+                                        "los términos H (\"Ya voy\" → \"Me vengo\"), no traducir carteles y el REJECT.",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+
+                                Spacer(modifier = Modifier.height(10.dp))
+                                HorizontalDivider()
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                SettingSwitch(
+                                    title = "Lectura visual de la página",
+                                    subtitle = "La IA lee el texto real dentro de la cuadrícula, ajusta cada globo al " +
+                                        "texto, une globos partidos y dibuja las onomatopeyas de lado.",
+                                    checked = settings.geminiVision,
+                                    onCheckedChange = {
+                                        settings.geminiVision = it
+                                        if (!it) settings.skipOcr = false
+                                    },
+                                )
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                SettingSwitch(
+                                    title = "Omitir el OCR (solo IA)",
+                                    subtitle = "No se ejecuta ML Kit: la IA encuentra y coloca todas las burbujas. " +
+                                        "Ahorra el OCR y esquiva sus fallos, pero sin cuadros de respaldo; si la " +
+                                        "llamada falla, se hace el OCR y se usa el modo texto.",
+                                    checked = settings.skipOcr,
+                                    onCheckedChange = {
+                                        settings.skipOcr = it
+                                        if (it) settings.geminiVision = true
+                                    },
+                                )
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                OutlinedButton(
+                                    onClick = {
+                                        scope.launch {
+                                            isTestingKey = true
+                                            testResult = null
+                                            val res = PageTranslator.testGeminiConnection(
+                                                apiKeys = settings.getGeminiApiKeys(),
+                                                model = settings.geminiModel,
+                                            )
+                                            isTestingKey = false
+                                            res.onSuccess {
+                                                isTestSuccess = true
+                                                testResult = it
+                                            }.onFailure {
+                                                isTestSuccess = false
+                                                testResult = it.message
+                                            }
+                                        }
+                                    },
+                                    enabled = !isTestingKey && keys.isNotEmpty(),
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    if (isTestingKey) {
+                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Probando conexión...")
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Probar Claves de API")
+                                    }
+                                }
+
+                                testResult?.let { msg ->
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = msg,
+                                        fontSize = 11.sp,
+                                        color = if (isTestSuccess) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.error
+                                        },
+                                    )
+                                }
                             }
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
-                HorizontalDivider()
-                Spacer(modifier = Modifier.height(16.dp))
+                AnimatedVisibility(visible = openSection == SECTION_STYLE) {
+                    Column {
+                        SectionTitle("Estilo de los globos")
 
-                // Section 2: Estilo de Manga y Globos
-                Text(
-                    text = "🎨 Estilo de Manga y Globos",
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+                        SettingChips(
+                            label = "Orientación",
+                            options = listOf(
+                                "Vertical" to TranslatorSettings.ORIENTATION_VERTICAL,
+                                "Horizontal" to TranslatorSettings.ORIENTATION_HORIZONTAL,
+                                "Auto" to TranslatorSettings.ORIENTATION_AUTO,
+                            ),
+                            selected = settings.bubbleOrientation,
+                            onSelect = { settings.bubbleOrientation = it },
+                        )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                        SettingChips(
+                            label = "Forma",
+                            options = listOf(
+                                "Óvalo" to TranslatorSettings.SHAPE_OVAL,
+                                "Rectángulo" to TranslatorSettings.SHAPE_ROUNDED,
+                                "Sin borde" to TranslatorSettings.SHAPE_BORDERLESS,
+                            ),
+                            selected = settings.bubbleShape,
+                            onSelect = { settings.bubbleShape = it },
+                        )
 
-                // Orientación de globos
-                Text(
-                    text = "Orientación de los globos:",
-                    fontWeight = FontWeight.SemiBold,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    FilterChip(
-                        selected = settings.bubbleOrientation == TranslatorSettings.ORIENTATION_VERTICAL,
-                        onClick = { settings.bubbleOrientation = TranslatorSettings.ORIENTATION_VERTICAL },
-                        label = { Text("Vertical (Manga)", fontSize = 11.sp) },
-                    )
-                    FilterChip(
-                        selected = settings.bubbleOrientation == TranslatorSettings.ORIENTATION_HORIZONTAL,
-                        onClick = { settings.bubbleOrientation = TranslatorSettings.ORIENTATION_HORIZONTAL },
-                        label = { Text("Horizontal", fontSize = 11.sp) },
-                    )
-                    FilterChip(
-                        selected = settings.bubbleOrientation == TranslatorSettings.ORIENTATION_AUTO,
-                        onClick = { settings.bubbleOrientation = TranslatorSettings.ORIENTATION_AUTO },
-                        label = { Text("Auto", fontSize = 11.sp) },
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Forma del globo
-                Text(
-                    text = "Forma del bocadillo:",
-                    fontWeight = FontWeight.SemiBold,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    FilterChip(
-                        selected = settings.bubbleShape == TranslatorSettings.SHAPE_OVAL,
-                        onClick = { settings.bubbleShape = TranslatorSettings.SHAPE_OVAL },
-                        label = { Text("Óvalo Manga", fontSize = 11.sp) },
-                    )
-                    FilterChip(
-                        selected = settings.bubbleShape == TranslatorSettings.SHAPE_ROUNDED,
-                        onClick = { settings.bubbleShape = TranslatorSettings.SHAPE_ROUNDED },
-                        label = { Text("Rectángulo Suave", fontSize = 11.sp) },
-                    )
-                    FilterChip(
-                        selected = settings.bubbleShape == TranslatorSettings.SHAPE_BORDERLESS,
-                        onClick = { settings.bubbleShape = TranslatorSettings.SHAPE_BORDERLESS },
-                        label = { Text("Sin Borde", fontSize = 11.sp) },
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Fondo del bocadillo: relleno blanco o solo contorno de las letras
-                Text(
-                    text = "Fondo del texto:",
-                    fontWeight = FontWeight.SemiBold,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    FilterChip(
-                        selected = settings.bubbleStyle == TranslatorSettings.STYLE_FILL,
-                        onClick = { settings.bubbleStyle = TranslatorSettings.STYLE_FILL },
-                        label = { Text("Burbuja blanca", fontSize = 11.sp) },
-                    )
-                    FilterChip(
-                        selected = settings.bubbleStyle == TranslatorSettings.STYLE_OUTLINE,
-                        onClick = { settings.bubbleStyle = TranslatorSettings.STYLE_OUTLINE },
-                        label = { Text("Solo contorno grueso", fontSize = 11.sp) },
-                    )
-                }
-                Text(
-                    text = if (settings.bubbleStyle == TranslatorSettings.STYLE_OUTLINE) {
-                        "Sin burbuja: las letras se dibujan con un borde blanco muy grueso, para no tapar el dibujo."
-                    } else {
-                        "Bocadillo blanco clásico con el texto negro encima."
-                    },
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                if (settings.bubbleStyle == TranslatorSettings.STYLE_OUTLINE) {
-                    SettingSlider(
-                        label = "Grosor del contorno: ${"%.1f".format(settings.outlineWidth)}dp",
-                        value = settings.outlineWidth,
-                        valueRange = 1f..8f,
-                        onValueChange = { settings.outlineWidth = it },
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Margen de relleno
-                Text(
-                    text = "Margen de relleno del globo:",
-                    fontWeight = FontWeight.SemiBold,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    FilterChip(
-                        selected = settings.bubblePadding == TranslatorSettings.PADDING_COMPACT,
-                        onClick = { settings.bubblePadding = TranslatorSettings.PADDING_COMPACT },
-                        label = { Text("Compacto (Manga)", fontSize = 11.sp) },
-                    )
-                    FilterChip(
-                        selected = settings.bubblePadding == TranslatorSettings.PADDING_NORMAL,
-                        onClick = { settings.bubblePadding = TranslatorSettings.PADDING_NORMAL },
-                        label = { Text("Normal", fontSize = 11.sp) },
-                    )
-                    FilterChip(
-                        selected = settings.bubblePadding == TranslatorSettings.PADDING_SPACIOUS,
-                        onClick = { settings.bubblePadding = TranslatorSettings.PADDING_SPACIOUS },
-                        label = { Text("Espacioso", fontSize = 11.sp) },
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Scanlation Uppercase
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Mayúsculas Manga (Scanlation)",
-                            fontWeight = FontWeight.SemiBold,
-                            style = MaterialTheme.typography.bodyMedium,
+                        SettingChips(
+                            label = "Fondo del texto",
+                            options = listOf(
+                                "Burbuja blanca" to TranslatorSettings.STYLE_FILL,
+                                "Solo contorno" to TranslatorSettings.STYLE_OUTLINE,
+                            ),
+                            selected = settings.bubbleStyle,
+                            onSelect = { settings.bubbleStyle = it },
                         )
                         Text(
-                            text = "Muestra el texto en MAYÚSCULAS como en las publicaciones oficiales",
+                            text = if (settings.bubbleStyle == TranslatorSettings.STYLE_OUTLINE) {
+                                "Sin burbuja: letras negras con un borde blanco grueso."
+                            } else {
+                                "Bocadillo blanco clásico con el texto negro encima."
+                            },
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+
+                        if (settings.bubbleStyle == TranslatorSettings.STYLE_OUTLINE) {
+                            SettingSlider(
+                                label = "Contorno: ${"%.1f".format(settings.outlineWidth)}dp",
+                                value = settings.outlineWidth,
+                                valueRange = 1f..8f,
+                                onValueChange = { settings.outlineWidth = it },
+                            )
+                        }
+
+                        SettingChips(
+                            label = "Margen",
+                            options = listOf(
+                                "Compacto" to TranslatorSettings.PADDING_COMPACT,
+                                "Normal" to TranslatorSettings.PADDING_NORMAL,
+                                "Espacioso" to TranslatorSettings.PADDING_SPACIOUS,
+                            ),
+                            selected = settings.bubblePadding,
+                            onSelect = { settings.bubblePadding = it },
+                        )
+
+                        SettingSwitch(
+                            title = "Mayúsculas Manga",
+                            subtitle = "Texto en MAYÚSCULAS como en las publicaciones oficiales",
+                            checked = settings.uppercaseScanlation,
+                            onCheckedChange = { settings.uppercaseScanlation = it },
+                        )
+
+                        val borderLabel = if (settings.borderThickness <= 0.05f) {
+                            "Sin borde"
+                        } else {
+                            "${"%.1f".format(settings.borderThickness)}dp"
+                        }
+                        SettingSlider(
+                            label = "Borde: $borderLabel",
+                            value = settings.borderThickness,
+                            valueRange = 0f..3.0f,
+                            onValueChange = { settings.borderThickness = it },
+                        )
+                        SettingSlider(
+                            label = "Globo: ${"%.2f".format(settings.globalBubbleScale)}x",
+                            value = settings.globalBubbleScale,
+                            valueRange = 0.7f..1.8f,
+                            onValueChange = { settings.globalBubbleScale = it },
+                        )
+                        SettingSlider(
+                            label = "Fuente: ${"%.2f".format(settings.globalFontScale)}x",
+                            value = settings.globalFontScale,
+                            valueRange = 0.6f..1.5f,
+                            onValueChange = { settings.globalFontScale = it },
+                        )
+                        SettingSlider(
+                            label = "Opacidad: ${(settings.bubbleOpacity * 100).toInt()}%",
+                            value = settings.bubbleOpacity,
+                            valueRange = 0.5f..1.0f,
+                            onValueChange = { settings.bubbleOpacity = it },
+                        )
                     }
-                    Switch(
-                        checked = settings.uppercaseScanlation,
-                        onCheckedChange = { settings.uppercaseScanlation = it },
-                    )
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                AnimatedVisibility(visible = openSection == SECTION_FIT) {
+                    Column {
+                        SectionTitle("Ajuste del texto")
 
-                // Anti-Collision
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Detector Anti-Choque de Burbujas",
-                            fontWeight = FontWeight.SemiBold,
-                            style = MaterialTheme.typography.bodyMedium,
+                        SettingSwitch(
+                            title = "Burbuja dinámica",
+                            subtitle = "Crece arriba y abajo para que entre todo el texto sin cortarse",
+                            checked = settings.dynamicBubbleSize,
+                            onCheckedChange = { settings.dynamicBubbleSize = it },
                         )
+                        SettingSwitch(
+                            title = "Ajustar texto dentro del globo",
+                            subtitle = "Reduce la fuente en vez de invadir los globos vecinos",
+                            checked = settings.fitTextInsideBubble,
+                            onCheckedChange = { settings.fitTextInsideBubble = it },
+                        )
+                        SettingSwitch(
+                            title = "Modo manipulación táctil",
+                            subtitle = "Mover con 1 dedo, pellizcar con 2 para cambiar el tamaño",
+                            checked = settings.isManipulationMode,
+                            onCheckedChange = { settings.isManipulationMode = it },
+                        )
+
+                        SettingSlider(
+                            label = "Fuente mínima: ${"%.1f".format(settings.minFontSizeSp)} sp",
+                            value = settings.minFontSizeSp,
+                            valueRange = 5f..12f,
+                            onValueChange = { settings.minFontSizeSp = it.coerceAtMost(settings.maxFontSizeSp - 1f) },
+                        )
+                        SettingSlider(
+                            label = "Fuente máxima: ${"%.1f".format(settings.maxFontSizeSp)} sp",
+                            value = settings.maxFontSizeSp,
+                            valueRange = 8f..24f,
+                            onValueChange = { settings.maxFontSizeSp = it.coerceAtLeast(settings.minFontSizeSp + 1f) },
+                        )
+                        SettingSlider(
+                            label = "Crecimiento de alto: ${"%.1f".format(settings.maxHeightExpansion)}x",
+                            value = settings.maxHeightExpansion,
+                            valueRange = 1f..3f,
+                            onValueChange = { settings.maxHeightExpansion = it },
+                        )
+                        SettingSlider(
+                            label = "Expansión horizontal: ${"%.2f".format(settings.horizontalExpansion)}x",
+                            value = settings.horizontalExpansion,
+                            valueRange = 1f..2f,
+                            onValueChange = { settings.horizontalExpansion = it },
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        SettingSwitch(
+                            title = "Anti-choque de burbujas",
+                            subtitle = "Separa globos adyacentes para que no se solapen",
+                            checked = settings.preventCollisions,
+                            onCheckedChange = { settings.preventCollisions = it },
+                        )
+                        if (settings.preventCollisions) {
+                            SettingSlider(
+                                label = "Separación: ${settings.collisionGap.toInt()}dp",
+                                value = settings.collisionGap,
+                                valueRange = 2f..40f,
+                                onValueChange = { settings.collisionGap = it },
+                            )
+                            SettingSlider(
+                                label = "Iteraciones: ${settings.collisionIterations}",
+                                value = settings.collisionIterations.toFloat(),
+                                valueRange = 10f..80f,
+                                onValueChange = { settings.collisionIterations = it.toInt() },
+                            )
+                            SettingSlider(
+                                label = "Desplazamiento: ${(settings.maxCollisionShiftRatio * 100).toInt()}%",
+                                value = settings.maxCollisionShiftRatio,
+                                valueRange = 0.10f..0.60f,
+                                onValueChange = { settings.maxCollisionShiftRatio = it },
+                            )
+                        }
+                    }
+                }
+
+                AnimatedVisibility(visible = openSection == SECTION_DETECTION) {
+                    Column {
+                        SectionTitle("Detección de globos (OCR)")
+
                         Text(
-                            text = "Rueda y separa automáticamente globos adyacentes para que no se solapen",
+                            text = "ML Kit devuelve una columna por bloque; estos valores deciden cómo se vuelven a " +
+                                "unir las columnas del mismo bocadillo. Al cambiarlos se descarta la caché.",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                    }
-                    Switch(
-                        checked = settings.preventCollisions,
-                        onCheckedChange = { settings.preventCollisions = it },
-                    )
-                }
 
-                if (settings.preventCollisions) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    SettingSlider(
-                        label = "Margen de separación: ${settings.collisionGap.toInt()}dp",
-                        value = settings.collisionGap,
-                        valueRange = 2f..40f,
-                        onValueChange = { settings.collisionGap = it },
-                    )
-                    SettingSlider(
-                        label = "Iteraciones anti-choque: ${settings.collisionIterations}",
-                        value = settings.collisionIterations.toFloat(),
-                        valueRange = 10f..80f,
-                        onValueChange = { settings.collisionIterations = it.toInt() },
-                    )
-                    SettingSlider(
-                        label = "Desplazamiento máx.: ${(settings.maxCollisionShiftRatio * 100).toInt()}%",
-                        value = settings.maxCollisionShiftRatio,
-                        valueRange = 0.10f..0.60f,
-                        onValueChange = { settings.maxCollisionShiftRatio = it },
-                    )
-                }
+                        Spacer(modifier = Modifier.height(6.dp))
 
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // On-screen touch manipulation
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Modo Manipulación Táctil",
-                            fontWeight = FontWeight.SemiBold,
-                            style = MaterialTheme.typography.bodyMedium,
+                        SettingSwitch(
+                            title = "Unir columnas del mismo globo",
+                            subtitle = "Evita que un bocadillo vertical salga como dos burbujas superpuestas",
+                            checked = settings.mergeBubbleColumns,
+                            onCheckedChange = { settings.mergeBubbleColumns = it },
                         )
+                        if (settings.mergeBubbleColumns) {
+                            SettingSlider(
+                                label = "Separación columnas: ${(settings.maxColumnGapRatio * 100).toInt()}%",
+                                value = settings.maxColumnGapRatio,
+                                valueRange = 0.10f..0.80f,
+                                onValueChange = { settings.maxColumnGapRatio = it },
+                            )
+                            SettingSlider(
+                                label = "Solape vertical: ${(settings.minColumnOverlap * 100).toInt()}%",
+                                value = settings.minColumnOverlap,
+                                valueRange = 0.30f..0.90f,
+                                onValueChange = { settings.minColumnOverlap = it },
+                            )
+                            SettingSlider(
+                                label = "Borde oscuro: ${(settings.borderDarkRatio * 100).toInt()}%",
+                                value = settings.borderDarkRatio,
+                                valueRange = 0.20f..0.70f,
+                                onValueChange = { settings.borderDarkRatio = it },
+                            )
+                        }
+
+                        TextButton(
+                            onClick = { settings.resetDetectionDefaults() },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Restablecer valores de detección", fontSize = 12.sp)
+                        }
+                    }
+                }
+
+                AnimatedVisibility(visible = openSection == SECTION_PRELOAD) {
+                    Column {
+                        SectionTitle("Pre-traducción")
+
+                        SettingSwitch(
+                            title = "Traducir automáticamente al leer",
+                            subtitle = "La página actual se traduce al abrirla y se preparan las siguientes, hasta el " +
+                                "límite del preload de EhViewer: $batchLimit página(s).",
+                            checked = settings.autoTranslate,
+                            onCheckedChange = { settings.autoTranslate = it },
+                        )
+
+                        if (settings.autoTranslate && batchLimit > 1) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "Lote: ${settings.batchSize}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.width(90.dp),
+                                )
+                                Slider(
+                                    value = settings.batchSize.coerceAtMost(batchLimit).toFloat(),
+                                    onValueChange = { settings.batchSize = it.toInt().coerceIn(1, batchLimit) },
+                                    valueRange = 1f..batchLimit.toFloat(),
+                                    steps = (batchLimit - 2).coerceAtLeast(0),
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
                         Text(
-                            text = "Mover globos con 1 dedo o pellizcar con 2 dedos para cambiar tamaño",
+                            text = "\"Siguientes $retranslateCount\" borra la copia guardada de esas páginas y las " +
+                                "vuelve a leer con la configuración actual, sin salir de la galería.",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(
-                        checked = settings.isManipulationMode,
-                        onCheckedChange = { settings.isManipulationMode = it },
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Burbuja Dinámica Automática",
-                            fontWeight = FontWeight.SemiBold,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        Text(
-                            text = "Ajusta la altura para que entre todo el texto sin cortarse",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(
-                        checked = settings.dynamicBubbleSize,
-                        onCheckedChange = { settings.dynamicBubbleSize = it },
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Border thickness slider
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    val borderLabel = if (settings.borderThickness <= 0.05f) "Sin borde" else "${"%.1f".format(settings.borderThickness)}dp"
-                    Text(
-                        text = "Borde: $borderLabel",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.width(115.dp),
-                    )
-                    Slider(
-                        value = settings.borderThickness,
-                        onValueChange = { settings.borderThickness = it },
-                        valueRange = 0f..3.0f,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "Tamaño globo: ${"%.2f".format(settings.globalBubbleScale)}x",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.width(115.dp),
-                    )
-                    Slider(
-                        value = settings.globalBubbleScale,
-                        onValueChange = { settings.globalBubbleScale = it },
-                        valueRange = 0.7f..1.8f,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "Tamaño fuente: ${"%.2f".format(settings.globalFontScale)}x",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.width(115.dp),
-                    )
-                    Slider(
-                        value = settings.globalFontScale,
-                        onValueChange = { settings.globalFontScale = it },
-                        valueRange = 0.6f..1.5f,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "Opacidad: ${(settings.bubbleOpacity * 100).toInt()}%",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.width(110.dp),
-                    )
-                    Slider(
-                        value = settings.bubbleOpacity,
-                        onValueChange = { settings.bubbleOpacity = it },
-                        valueRange = 0.5f..1.0f,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-                HorizontalDivider()
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Section 3: Detección de globos (agrupado de columnas OCR)
-                Text(
-                    text = "🔍 Detección de Globos (OCR)",
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-
-                Text(
-                    text = "ML Kit devuelve una columna de texto por bloque. Estos valores controlan cómo se vuelven a unir las columnas de un mismo bocadillo y cómo se ajusta el texto dentro de él. Al cerrar el diálogo se borra la caché y se vuelve a traducir la página actual si la traducción automática está activada.",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                SettingSwitch(
-                    title = "Unir columnas del mismo globo",
-                    subtitle = "Evita que un bocadillo vertical se detecte como dos burbujas superpuestas",
-                    checked = settings.mergeBubbleColumns,
-                    onCheckedChange = { settings.mergeBubbleColumns = it },
-                )
-
-                if (settings.mergeBubbleColumns) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    SettingSlider(
-                        label = "Separación máx. columnas: ${(settings.maxColumnGapRatio * 100).toInt()}%",
-                        value = settings.maxColumnGapRatio,
-                        valueRange = 0.10f..0.80f,
-                        onValueChange = { settings.maxColumnGapRatio = it },
-                    )
-                    SettingSlider(
-                        label = "Solapamiento mín. vertical: ${(settings.minColumnOverlap * 100).toInt()}%",
-                        value = settings.minColumnOverlap,
-                        valueRange = 0.30f..0.90f,
-                        onValueChange = { settings.minColumnOverlap = it },
-                    )
-                    SettingSlider(
-                        label = "Umbral de borde oscuro: ${(settings.borderDarkRatio * 100).toInt()}%",
-                        value = settings.borderDarkRatio,
-                        valueRange = 0.20f..0.70f,
-                        onValueChange = { settings.borderDarkRatio = it },
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                SettingSwitch(
-                    title = "Ajustar texto dentro del globo",
-                    subtitle = "Reduce la fuente para que la traducción quepa en el bocadillo original en vez de invadir los vecinos",
-                    checked = settings.fitTextInsideBubble,
-                    onCheckedChange = { settings.fitTextInsideBubble = it },
-                )
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                SettingSlider(
-                    label = "Fuente mínima: ${"%.1f".format(settings.minFontSizeSp)} sp",
-                    value = settings.minFontSizeSp,
-                    valueRange = 5f..12f,
-                    onValueChange = { settings.minFontSizeSp = it.coerceAtMost(settings.maxFontSizeSp - 1f) },
-                )
-                SettingSlider(
-                    label = "Fuente máxima: ${"%.1f".format(settings.maxFontSizeSp)} sp",
-                    value = settings.maxFontSizeSp,
-                    valueRange = 8f..24f,
-                    onValueChange = { settings.maxFontSizeSp = it.coerceAtLeast(settings.minFontSizeSp + 1f) },
-                )
-                SettingSlider(
-                    label = "Expansión máx. de alto: ${"%.1f".format(settings.maxHeightExpansion)}x",
-                    value = settings.maxHeightExpansion,
-                    valueRange = 1f..3f,
-                    onValueChange = { settings.maxHeightExpansion = it },
-                )
-                SettingSlider(
-                    label = "Expansión horizontal: ${"%.2f".format(settings.horizontalExpansion)}x",
-                    value = settings.horizontalExpansion,
-                    valueRange = 1f..2f,
-                    onValueChange = { settings.horizontalExpansion = it },
-                )
-
-                TextButton(
-                    onClick = { settings.resetDetectionDefaults() },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Restablecer valores de detección", fontSize = 12.sp)
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-                HorizontalDivider()
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Section 4: Pre-traducción en segundo plano
-                Text(
-                    text = "Pre-traducción en Segundo Plano",
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "Traducir automáticamente al leer",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Switch(
-                        checked = settings.autoTranslate,
-                        onCheckedChange = { settings.autoTranslate = it },
-                    )
-                }
-
-                Text(
-                    text = "La página actual se traduce al abrirla (o al pulsar el botón de arriba) y se preparan las siguientes. El lote nunca supera el preload de EhViewer: $batchLimit página(s).",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                if (settings.autoTranslate && batchLimit > 1) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "Lote: ${settings.batchSize} páginas",
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.width(110.dp),
-                        )
-                        Slider(
-                            value = settings.batchSize.coerceAtMost(batchLimit).toFloat(),
-                            onValueChange = { settings.batchSize = it.toInt().coerceIn(1, batchLimit) },
-                            valueRange = 1f..batchLimit.toFloat(),
-                            steps = (batchLimit - 2).coerceAtLeast(0),
-                            modifier = Modifier.weight(1f),
                         )
                     }
                 }
@@ -1004,6 +837,58 @@ fun TranslatorSettingsDialog(
             }
         },
     )
+}
+
+private fun nextSection(current: String?, section: String): String? = if (current == section) null else section
+
+@Composable
+private fun CategoryChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) = FilterChip(
+    selected = selected,
+    onClick = onClick,
+    label = { Text(label, fontSize = 12.sp) },
+)
+
+@Composable
+private fun SectionTitle(title: String) {
+    Spacer(modifier = Modifier.height(10.dp))
+    HorizontalDivider()
+    Spacer(modifier = Modifier.height(10.dp))
+    Text(
+        text = title,
+        fontWeight = FontWeight.Bold,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+    )
+    Spacer(modifier = Modifier.height(6.dp))
+}
+
+@Composable
+private fun SettingChips(
+    label: String,
+    options: List<Pair<String, String>>,
+    selected: String,
+    onSelect: (String) -> Unit,
+) {
+    Text(
+        text = "$label:",
+        fontWeight = FontWeight.SemiBold,
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Spacer(modifier = Modifier.height(4.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        options.forEach { (text, value) ->
+            FilterChip(
+                selected = selected == value,
+                onClick = { onSelect(value) },
+                label = { Text(text, fontSize = 11.sp) },
+            )
+        }
+    }
+    Spacer(modifier = Modifier.height(8.dp))
 }
 
 private fun TranslationStatus.busyLabel(): String = when (this) {
