@@ -683,10 +683,12 @@ object PageTranslator {
         )
         drawVisionGrid(canvas, width, height)
 
-        val stroke = max(2f, width / 520f)
+        val stroke = max(2f, width / 600f)
         val halo = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = stroke * 2.4f
+            // Thin halo: the boxes hug the glyphs, so a fat outline would eat
+            // the strokes the model has to read.
+            strokeWidth = stroke * 1.8f
             color = Color.WHITE
         }
         val frame = Paint(Paint.ANTI_ALIAS_FLAG).apply {
