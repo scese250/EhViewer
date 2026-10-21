@@ -799,8 +799,10 @@ fun TranslatorSettingsDialog(
 
                         SettingSwitch(
                             title = "Traducir automáticamente al leer",
-                            subtitle = "La página actual se traduce al abrirla y se preparan las siguientes, hasta el " +
-                                "límite del preload de EhViewer: $batchLimit página(s).",
+                            subtitle = "Mantiene lista la página actual y las " +
+                                "${settings.batchSize.coerceAtMost(batchLimit)} siguientes, y el lote avanza contigo " +
+                                "al cambiar de página sin cancelar lo que ya está en curso. " +
+                                "Tope del preload de EhViewer: $batchLimit.",
                             checked = settings.autoTranslate,
                             onCheckedChange = { settings.autoTranslate = it },
                         )

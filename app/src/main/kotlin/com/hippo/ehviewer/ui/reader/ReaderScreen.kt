@@ -101,8 +101,6 @@ import eu.kanade.tachiyomi.ui.reader.setting.ReadingModeType
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.sample
@@ -110,8 +108,6 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.Serializable
 import moe.tarsin.string
 import okio.Path.Companion.toPath
-
-private const val AUTO_TRANSLATE_DEBOUNCE_MS = 300L
 
 @Serializable
 sealed interface ReaderScreenArgs {
@@ -263,17 +259,13 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
         translationRestart,
     ) {
         if (!translatorSettings.autoTranslate) return@LaunchedEffect
-        translatorState.onRevisionChanged()
-        // Never OCR pages that EhViewer has not downloaded yet: the batch is
+        // Never OCR pages that EhViewer has not downloaded yet: the window is
         // capped to the configured preload count.
         val maxAhead = minOf(translatorSettings.batchSize, preloadLimit).coerceAtLeast(0)
-        currentPageIndexFlow.collectLatest { index ->
-            // Debounce page flings: collectLatest cancels this delay as soon as
-            // another page becomes current, so OCR never starts for pages the
-            // user is only scrolling past.
-            delay(AUTO_TRANSLATE_DEBOUNCE_MS)
-            translatorState.translateAround(index, maxAhead)
-        }
+        // The scheduler collects the page flow itself and slides its window;
+        // restarting it on every swipe would cancel the translation in flight
+        // and leave the pages after the next batch untranslated.
+        translatorState.autoTranslate(currentPageIndexFlow, maxAhead)
     }
     LaunchedEffect(manualTranslateRequest) {
         if (manualTranslateRequest == 0) return@LaunchedEffect

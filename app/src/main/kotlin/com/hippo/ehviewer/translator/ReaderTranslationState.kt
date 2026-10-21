@@ -13,7 +13,13 @@ import com.hippo.ehviewer.gallery.PageLoader
 import com.hippo.ehviewer.gallery.PageStatus
 import com.hippo.ehviewer.image.Image
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -304,22 +310,65 @@ class ReaderTranslationState(
     }
 
     /**
-     * Translates the current page and up to [maxAhead] following pages.
-     * [maxAhead] must already be capped to the configured preload count.
+     * Keeps the pages around the reader translated while the user reads.
+     *
+     * The window slides with the current page instead of being restarted on
+     * every swipe: the translation in flight is allowed to finish and the next
+     * candidate is always the nearest untranslated page inside
+     * [current, current + maxAhead]. Turning from page 1 to page 2 therefore
+     * ends up translating page 5 once 3 and 4 are done, instead of throwing the
+     * batch away and never catching up.
+     *
+     * [currentPages] is collected for the whole life of the reader; the current
+     * page is only read from it, never used to cancel work.
      */
-    suspend fun translateAround(index: Int, maxAhead: Int) {
+    suspend fun autoTranslate(currentPages: Flow<Int>, maxAhead: Int) {
         onRevisionChanged()
-        translatePage(index)
-        if (maxAhead <= 0) return
-        for (offset in 1..maxAhead) {
-            val next = index + offset
-            if (next >= pageLoader.size) return
-            if (translations.containsKey(next)) continue
-            // A page that already failed (blocked, missing, unreadable) is not
-            // retried on every scroll: that would hammer the OCR/API for nothing.
-            if (statuses[next] is TranslationStatus.Failed) continue
-            translatePage(next, AHEAD_PAGE_TIMEOUT_MS)
+        val target = MutableStateFlow<Int?>(null)
+        coroutineScope {
+            launch { currentPages.collect { target.value = it } }
+            var lastPage = -1
+            var currentFailed = false
+            while (isActive) {
+                val current = target.value
+                if (current == null) {
+                    delay(50)
+                    continue
+                }
+                if (current != lastPage) {
+                    lastPage = current
+                    // Arriving at a page is the moment to retry it, even if it
+                    // failed before; the pages ahead stay skipped.
+                    currentFailed = false
+                }
+                val next = nextPageToTranslate(current, maxAhead, skipCurrent = currentFailed)
+                if (next == null) {
+                    // Everything in the window is done; poll slowly so a page
+                    // invalidated by a setting change is picked up again.
+                    delay(400)
+                    continue
+                }
+                if (next == current) {
+                    translatePage(current)
+                    currentFailed = statuses[current] is TranslationStatus.Failed
+                } else {
+                    translatePage(next, AHEAD_PAGE_TIMEOUT_MS)
+                }
+            }
         }
+    }
+
+    private fun nextPageToTranslate(current: Int, maxAhead: Int, skipCurrent: Boolean): Int? {
+        val last = (current + maxAhead).coerceAtMost(pageLoader.size - 1)
+        for (index in current..last) {
+            if (index == current && skipCurrent) continue
+            if (translations.containsKey(index)) continue
+            // A page that already failed (blocked, missing, unreadable) is not
+            // retried on every pass: that would hammer the OCR/API for nothing.
+            if (index != current && statuses[index] is TranslationStatus.Failed) continue
+            return index
+        }
+        return null
     }
 }
 
