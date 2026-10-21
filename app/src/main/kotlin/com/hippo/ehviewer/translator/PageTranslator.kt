@@ -54,6 +54,7 @@ object PageTranslator {
     private const val GEMINI_READ_TIMEOUT_MS = 15_000
     private const val GEMINI_VISION_READ_TIMEOUT_MS = 60_000
     private const val MAX_EXTRA_BUBBLES = 4
+    private const val GRID_CELLS = 10
     private val markerColor = 0xFFFF0033.toInt()
 
     suspend fun translatePage(
@@ -625,11 +626,14 @@ object PageTranslator {
     ): String = buildString {
         appendLine(instruction)
         appendLine()
-        appendLine("You are ALSO the OCR engine for this manga page: the attached image is the complete page.")
+        appendLine("You are ALSO the OCR engine and the bubble layout engine for this manga page: the attached")
+        appendLine("image is the complete page.")
         appendLine("A weak OCR has drawn numbered red boxes over the places where it thinks text may be.")
-        appendLine("Those boxes are only hints; their text is not given to you and their position may be off.")
-        appendLine("Look at the page yourself and, for every numbered box, read the text that is really inside")
-        appendLine("that part of the artwork, then translate it.")
+        appendLine("Those boxes are only hints; their text is not given to you and both their position and their")
+        appendLine("size may be wrong. Look at the page yourself, read the text that is really inside each place,")
+        appendLine("translate it, and measure the area the translated text must cover.")
+        appendLine("A blue grid is drawn over the page: 10 x 10 cells, each cell 100 units wide, with the")
+        appendLine("normalised coordinate (0-1000) printed along the top and left edges. Use it as a ruler.")
         if (boxCount == 0) {
             appendLine("This page has no numbered boxes: recover every speech balloon you can see with \"extra\".")
         }
@@ -644,18 +648,22 @@ object PageTranslator {
         appendLine("   duplicate fragment of another box), do not translate it: answer exactly \"REJECT\" in its")
         appendLine("   text. Do not invent text for it.")
         appendLine("4. If a sentence continues from one box into another box of the same balloon, join both ids in one entry.")
-        appendLine("5. Ignore text outside balloons (credits, watermarks, page numbers, store logos, meta commentary).")
-        appendLine("6. Use the whole page as context: short fragments are usually parts of the same line.")
-        appendLine("7. Do not add notes, romanisation or explanations.")
+        appendLine("5. Every entry must also carry \"box\": [ymin, xmin, ymax, xmax], the normalised rectangle")
+        appendLine("   (0-1000) of the balloon itself. It must cover the balloon's text area only: not the whole")
+        appendLine("   panel, not the character's face, not the neighbouring balloon. The translated text is drawn")
+        appendLine("   exactly there, so follow the balloon outline and leave the balloon padding out.")
+        appendLine("6. Ignore text outside balloons (credits, watermarks, page numbers, store logos, meta commentary).")
+        appendLine("7. Use the whole page as context: short fragments are usually parts of the same line.")
+        appendLine("8. Do not add notes, romanisation or explanations.")
         appendLine()
         appendLine("Reply with JSON only, without prose or code fences:")
-        append("{\"bubbles\":[{\"ids\":[1],\"source\":\"text as printed\",\"text\":\"")
+        append("{\"bubbles\":[{\"ids\":[1],\"box\":[ymin,xmin,ymax,xmax],\"source\":\"text as printed\",")
+        append("\"text\":\"")
         append(TranslatorSettings.getLanguageName(targetLang))
         append(" translation\"}],\"extra\":[{\"box\":[ymin,xmin,ymax,xmax],\"source\":\"...\",\"text\":\"...\"}]}")
         appendLine()
         appendLine("\"source\" is the text exactly as printed on the page. \"extra\" is optional and only for")
-        appendLine("balloons that have no numbered box at all: coordinates are normalised to 0-1000 and given as")
-        appendLine("ymin, xmin, ymax, xmax. Use at most $MAX_EXTRA_BUBBLES extra entries.")
+        appendLine("balloons that have no numbered box at all. Use at most $MAX_EXTRA_BUBBLES extra entries.")
     }
 
     private fun annotateForVision(bitmap: Bitmap, blocks: List<RawBlock>): Bitmap {
@@ -673,6 +681,7 @@ object PageTranslator {
             },
             Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG),
         )
+        drawVisionGrid(canvas, width, height)
 
         val stroke = max(2f, width / 520f)
         val halo = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -720,6 +729,58 @@ object PageTranslator {
             )
         }
         return output
+    }
+
+    /**
+     * Ruler grid (0-1000 on both axes) so the model can report the balloon
+     * rectangles itself: the OCR boxes are as imprecise as their text.
+     */
+    private fun drawVisionGrid(canvas: Canvas, width: Int, height: Int) {
+        val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = max(1f, width / 900f)
+            color = 0x402962FF.toInt()
+        }
+        for (step in 1 until GRID_CELLS) {
+            val x = width * step.toFloat() / GRID_CELLS
+            val y = height * step.toFloat() / GRID_CELLS
+            canvas.drawLine(x, 0f, x, height.toFloat(), line)
+            canvas.drawLine(0f, y, width.toFloat(), y, line)
+        }
+
+        val backing = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xD9FFFFFF.toInt() }
+        val label = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF101010.toInt()
+            textSize = max(10f, width / 80f)
+            isFakeBoldText = true
+        }
+        val pad = label.textSize * 0.25f
+        val boxHeight = label.textSize + pad * 2
+        for (value in 0..1000 step 250) {
+            val text = value.toString()
+            val boxWidth = label.measureText(text) + pad * 2
+            // Along the top edge...
+            val x = (width * value / 1000f - boxWidth / 2f).coerceIn(0f, (width - boxWidth).coerceAtLeast(0f))
+            drawGridLabel(canvas, backing, label, text, x, 0f, boxWidth, boxHeight)
+            // ...and down the left edge.
+            val y = (height * value / 1000f - boxHeight / 2f).coerceIn(0f, (height - boxHeight).coerceAtLeast(0f))
+            drawGridLabel(canvas, backing, label, text, 0f, y, boxWidth, boxHeight)
+        }
+    }
+
+    private fun drawGridLabel(
+        canvas: Canvas,
+        backing: Paint,
+        labelPaint: Paint,
+        text: String,
+        left: Float,
+        top: Float,
+        boxWidth: Float,
+        boxHeight: Float,
+    ) {
+        canvas.drawRect(left, top, left + boxWidth, top + boxHeight, backing)
+        val baseline = top + boxHeight / 2f - (labelPaint.ascent() + labelPaint.descent()) / 2f
+        canvas.drawText(text, left + (boxWidth - labelPaint.measureText(text)) / 2f, baseline, labelPaint)
     }
 
     private fun parseVisionResult(
@@ -784,7 +845,16 @@ object PageTranslator {
                         bottom = max(bottom, rect.bottom)
                     }
                 }
-            val rect = union ?: entry.rect ?: continue
+            val guess = entry.rect?.takeIf { it.isPlausibleBubble(width, height) }
+            val rect = when {
+                // The model's own rectangle wins: it follows the balloon outline,
+                // not the OCR text. Accept it only when it sits near the hint
+                // boxes, so a hallucinated rectangle cannot land on the artwork.
+                guess != null && (union == null || Rect.intersects(guess, union.expanded(width, height))) -> guess
+                union != null -> union
+                guess != null -> guess
+                else -> continue
+            }
             val clipped = Rect(rect.left, rect.top, rect.right, rect.bottom).apply {
                 left = left.coerceIn(0, width)
                 top = top.coerceIn(0, height)
@@ -821,6 +891,19 @@ object PageTranslator {
             mergedBoxes = mergedBoxes,
             discardedBoxes = blocks.indices.count { (it + 1) !in used },
         )
+    }
+
+    private fun Rect.isPlausibleBubble(pageWidth: Int, pageHeight: Int): Boolean {
+        if (width() < pageWidth * 0.008f || height() < pageHeight * 0.008f) return false
+        if (width().toFloat() * height() > pageWidth.toFloat() * pageHeight * 0.75f) return false
+        val aspect = width().toFloat() / height()
+        return aspect in 0.08f..12f
+    }
+
+    private fun Rect.expanded(pageWidth: Int, pageHeight: Int): Rect {
+        val dx = max(pageWidth / 40, 4)
+        val dy = max(pageHeight / 40, 4)
+        return Rect(left - dx, top - dy, right + dx, bottom + dy)
     }
 
     private fun findVisionArray(root: JSONObject): JSONArray? {

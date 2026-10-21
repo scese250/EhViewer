@@ -371,8 +371,9 @@ fun TranslatorSettingsDialog(
 
                             SettingSwitch(
                                 title = "Lectura visual de la página",
-                                subtitle = "Gemini recibe la página con los cuadros numerados y lee el texto real: " +
-                                    "corrige el OCR, une globos partidos en dos y descarta cuadros falsos.",
+                                subtitle = "Gemini recibe la página con una cuadrícula y los cuadros numerados: lee el " +
+                                    "texto real, ajusta cada globo al texto, une globos partidos en dos y descarta " +
+                                    "los cuadros falsos.",
                                 checked = settings.geminiVision,
                                 onCheckedChange = { settings.geminiVision = it },
                             )
