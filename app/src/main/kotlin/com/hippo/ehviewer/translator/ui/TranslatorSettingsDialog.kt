@@ -39,6 +39,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -50,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hippo.ehviewer.translator.PageTranslation
 import com.hippo.ehviewer.translator.PageTranslator
+import com.hippo.ehviewer.translator.TranslationCache
 import com.hippo.ehviewer.translator.TranslationStatus
 import com.hippo.ehviewer.translator.TranslatorSettings
 import kotlinx.coroutines.launch
@@ -60,6 +62,7 @@ private const val SECTION_STYLE = "style"
 private const val SECTION_FIT = "fit"
 private const val SECTION_DETECTION = "detection"
 private const val SECTION_PRELOAD = "preload"
+private const val SECTION_CACHE = "cache"
 
 /**
  * Compact translator dialog: the log, the two translate actions and the engine
@@ -88,6 +91,8 @@ fun TranslatorSettingsDialog(
     var isSourceExpanded by remember { mutableStateOf(false) }
     var isTargetExpanded by remember { mutableStateOf(false) }
     var openSection by remember { mutableStateOf<String?>(null) }
+    var cacheStamp by remember { mutableIntStateOf(0) }
+    var confirmClearCache by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val keys = settings.getGeminiApiKeys()
     val sourceName = TranslatorSettings.SOURCE_LANGUAGES.find { it.first == settings.sourceLang }?.second
@@ -233,6 +238,12 @@ fun TranslatorSettingsDialog(
                     }
                     CategoryChip("Lote", openSection == SECTION_PRELOAD) {
                         openSection = nextSection(openSection, SECTION_PRELOAD)
+                    }
+                    CategoryChip("Caché", openSection == SECTION_CACHE) {
+                        openSection = nextSection(openSection, SECTION_CACHE)
+                        confirmClearCache = false
+                        // Re-read the size every time the group is opened.
+                        cacheStamp++
                     }
                 }
 
@@ -793,6 +804,76 @@ fun TranslatorSettingsDialog(
                     }
                 }
 
+                AnimatedVisibility(visible = openSection == SECTION_CACHE) {
+                    Column {
+                        SectionTitle("Caché de traducciones")
+
+                        val stats = remember(cacheStamp) { TranslationCache.stats() }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "${stats.pages} páginas guardadas",
+                                fontWeight = FontWeight.SemiBold,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Text(
+                                text = formatBytes(stats.bytes),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+
+                        Text(
+                            text = "Se guarda en el almacenamiento de la app y sobrevive al reinicio, así que volver " +
+                                "a una galería no vuelve a traducir sus páginas. Se vacía solo cuando cambias el " +
+                                "motor, el modelo o los prompts.",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        if (confirmClearCache) {
+                            Text(
+                                text = "Se borrarán las ${stats.pages} páginas guardadas; habrá que traducirlas otra vez.",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        TranslationCache.clearAll()
+                                        confirmClearCache = false
+                                        cacheStamp++
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text("Confirmar")
+                                }
+                                OutlinedButton(
+                                    onClick = { confirmClearCache = false },
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text("Cancelar")
+                                }
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = { confirmClearCache = true },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("Borrar caché")
+                            }
+                        }
+                    }
+                }
+
                 AnimatedVisibility(visible = openSection == SECTION_PRELOAD) {
                     Column {
                         SectionTitle("Pre-traducción")
@@ -850,6 +931,12 @@ fun TranslatorSettingsDialog(
 }
 
 private fun nextSection(current: String?, section: String): String? = if (current == section) null else section
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1024 * 1024 -> "%.1f MB".format(bytes / 1024f / 1024f)
+    bytes >= 1024 -> "%.0f KB".format(bytes / 1024f)
+    else -> "$bytes B"
+}
 
 @Composable
 private fun CategoryChip(

@@ -66,6 +66,7 @@ import com.hippo.ehviewer.ktor.Cronet
 import com.hippo.ehviewer.ktor.configureClient
 import com.hippo.ehviewer.ktor.configureCommon
 import com.hippo.ehviewer.ktor.isCronetAvailable
+import com.hippo.ehviewer.translator.TranslationCache
 import com.hippo.ehviewer.ui.keepNoMediaFileStatus
 import com.hippo.ehviewer.ui.screen.detailCache
 import com.hippo.ehviewer.ui.tools.dataStateFlow
@@ -110,6 +111,9 @@ class EhApplication : Application(), SingletonImageLoader.Factory {
         }
         CrashHandler.install()
         super.onCreate()
+        // Loaded from disk here so re-opening a gallery (or the app) shows the
+        // pages translated last time without any request.
+        TranslationCache.initialize(this@EhApplication)
         System.loadLibrary("ehviewer")
         launch {
             FavouriteStatusRouter.collect { info ->
