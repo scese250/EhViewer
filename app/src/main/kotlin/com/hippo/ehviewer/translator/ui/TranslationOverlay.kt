@@ -28,7 +28,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -424,6 +423,7 @@ private fun DynamicBubbleView(
     onBubbleUpdated: (TranslatedBubble) -> Unit,
 ) {
     val density = LocalDensity.current
+    val textMeasurer = rememberTextMeasurer()
     val currentBubble by rememberUpdatedState(bubble)
     val currentOnBubbleUpdated by rememberUpdatedState(onBubbleUpdated)
     val currentOnBubbleClick by rememberUpdatedState(onBubbleClick)
@@ -468,17 +468,36 @@ private fun DynamicBubbleView(
     val currentCenterX = layout.centerX + with(density) { liveOffsetX.dp.toPx() }
     val currentCenterY = layout.centerY + with(density) { liveOffsetY.dp.toPx() }
 
-    // Onomatopoeia is not a balloon: a small square is enough, so a page full
-    // of sound effects is not buried under white boxes.
+    // Onomatopoeia is not a balloon: it gets no background, and it is always
+    // lettered horizontally so it can be read, even when the original SFX ran
+    // vertically down the page. The box is then sized to the longest word
+    // instead of to the (often tall and narrow) box the model returned.
+    val strokePx = with(density) { outlineWidth.dp.toPx() }.coerceAtLeast(1f)
+    val sfxFontSp = (with(density) { sqrt(liveWidthPx * liveHeightPx).toDp().value } * 0.20f)
+        .coerceIn(9f, 15f)
+    val sfxMinWidthPx = with(density) { 22.dp.toPx() }
     val boxWidthPx = if (bubble.isSfx) {
-        minOf(liveWidthPx, liveHeightPx).coerceIn(
-            with(density) { 22.dp.toPx() },
-            with(density) { 110.dp.toPx() },
-        )
+        // Measured, not estimated: a word is never broken in half, which would
+        // make a short sound effect impossible to read.
+        val sfxTextStyle = TextStyle(fontSize = sfxFontSp.sp, fontWeight = FontWeight.Bold)
+        val longestWordPx = displayText.split(' ')
+            .filter { it.isNotBlank() }
+            .maxOfOrNull { word ->
+                textMeasurer.measure(AnnotatedString(word), sfxTextStyle).size.width.toFloat()
+            }
+            ?.plus(strokePx * 2f) ?: 0f
+        val maxWidthPx = minOf(containerWidthPx * 0.6f, with(density) { 200.dp.toPx() })
+            .coerceAtLeast(sfxMinWidthPx)
+        longestWordPx.coerceIn(sfxMinWidthPx, maxWidthPx)
     } else {
         liveWidthPx
     }
-    val boxHeightPx = if (bubble.isSfx) boxWidthPx else liveHeightPx
+    // Room for up to three horizontal lines; the box itself stays transparent.
+    val boxHeightPx = if (bubble.isSfx) {
+        with(density) { (sfxFontSp * 1.16f * 3f).sp.toPx() }
+    } else {
+        liveHeightPx
+    }
 
     val boxLeft = (currentCenterX - boxWidthPx / 2f).coerceIn(0f, (containerWidthPx - boxWidthPx).coerceAtLeast(0f))
     val boxTop = (currentCenterY - boxHeightPx / 2f).coerceIn(0f, (containerHeightPx - boxHeightPx).coerceAtLeast(0f))
@@ -616,11 +635,7 @@ private fun DynamicBubbleView(
     val hPadDp = if (exact) minOf(rawHPadDp, 4.dp) else rawHPadDp
     val vPadDp = if (exact) minOf(rawVPadDp, 2.dp) else rawVPadDp
 
-    val contentFontSp = if (bubble.isSfx) {
-        (targetWidthDp.value * 0.20f).coerceIn(8f, 15f)
-    } else {
-        layout.fontSizeSp
-    }
+    val contentFontSp = if (bubble.isSfx) sfxFontSp else layout.fontSizeSp
     val textStyle = TextStyle(
         fontSize = contentFontSp.sp,
         lineHeight = (contentFontSp * 1.16f).sp,
@@ -629,10 +644,9 @@ private fun DynamicBubbleView(
         lineBreak = LineBreak.Heading,
         hyphens = Hyphens.None,
     )
-    val strokePx = with(density) { outlineWidth.dp.toPx() }.coerceAtLeast(1f)
     val maxLines = when {
-        // A sound word is short: more lines would overflow the small square.
-        bubble.isSfx -> 2
+        // A sound word is short: more lines would overflow the small box.
+        bubble.isSfx -> 3
         dynamicBubbleSize -> Int.MAX_VALUE
         else -> 14
     }
@@ -675,11 +689,7 @@ private fun DynamicBubbleView(
         if (outlineMode || bubble.isSfx) {
             // The letters are drawn twice, a thick stroke first and the fill on
             // top, so the translation stays readable over the artwork.
-            Box(
-                // Onomatopoeia is lettered sideways, as in the original page.
-                modifier = if (bubble.isSfx) Modifier.graphicsLayer { rotationZ = 90f } else Modifier,
-                contentAlignment = Alignment.Center,
-            ) {
+            Box(contentAlignment = Alignment.Center) {
                 Text(
                     text = displayText,
                     color = if (bubble.isSfx) Color.Black else Color.White,
