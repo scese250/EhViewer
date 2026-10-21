@@ -756,7 +756,7 @@ object PageTranslator {
         }
         val pad = label.textSize * 0.25f
         val boxHeight = label.textSize + pad * 2
-        for (value in 0..1000 step 250) {
+        for (value in 0..1000 step 200) {
             val text = value.toString()
             val boxWidth = label.measureText(text) + pad * 2
             // Along the top edge...
@@ -895,7 +895,7 @@ object PageTranslator {
 
     private fun Rect.isPlausibleBubble(pageWidth: Int, pageHeight: Int): Boolean {
         if (width() < pageWidth * 0.008f || height() < pageHeight * 0.008f) return false
-        if (width().toFloat() * height() > pageWidth.toFloat() * pageHeight * 0.75f) return false
+        if (width().toFloat() * height() > pageWidth.toFloat() * pageHeight * 0.35f) return false
         val aspect = width().toFloat() / height()
         return aspect in 0.08f..12f
     }
