@@ -1,18 +1,29 @@
 package com.hippo.ehviewer.translator
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Matrix
+import android.graphics.Paint
 import android.graphics.Rect
+import android.graphics.RectF
+import android.util.Base64
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
+import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URLEncoder
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.system.measureTimeMillis
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -35,7 +46,15 @@ object PageTranslator {
     private var currentKeyIndex = 0
 
     /** Reported before each expensive step so the UI can show what is running. */
-    enum class Phase { OCR, TRANSLATE }
+    enum class Phase { OCR, VISION, TRANSLATE }
+
+    /** Largest side sent to the model: enough to read balloons, small enough to stay fast. */
+    private const val VISION_MAX_EDGE = 1600
+    private const val VISION_JPEG_QUALITY = 88
+    private const val GEMINI_READ_TIMEOUT_MS = 15_000
+    private const val GEMINI_VISION_READ_TIMEOUT_MS = 60_000
+    private const val MAX_EXTRA_BUBBLES = 4
+    private val markerColor = 0xFFFF0033.toInt()
 
     suspend fun translatePage(
         pageIndex: Int,
@@ -47,6 +66,7 @@ object PageTranslator {
         geminiApiKeys: List<String> = emptyList(),
         geminiModel: String = TranslatorSettings.DEFAULT_GEMINI_MODEL,
         grouping: BubbleGroupingConfig = BubbleGroupingConfig(),
+        visionMode: Boolean = true,
         onPhase: (Phase) -> Unit = {},
     ): PageTranslation = withContext(Dispatchers.Default) {
         onPhase(Phase.OCR)
@@ -75,38 +95,71 @@ object PageTranslator {
 
         var bubbles: List<TranslatedBubble> = emptyList()
         var engineUsed = "Google"
+        var mergedBoxes = 0
+        var discardedBoxes = 0
 
-        onPhase(Phase.TRANSLATE)
+        if (engine == TranslatorSettings.ENGINE_GEMINI && geminiApiKeys.isEmpty()) {
+            engineUsed = "Google (sin claves de Gemini)"
+        }
+
         val transTime = measureTimeMillis {
-            val texts = mergedBlocks.map { it.text }
             if (engine == TranslatorSettings.ENGINE_GEMINI && geminiApiKeys.isNotEmpty()) {
-                engineUsed = "Gemini (${geminiModel.removePrefix("gemini-")})"
-                try {
-                    val translatedTexts = translateWithGemini(
-                        texts = texts,
-                        sourceLang = sourceLang,
-                        targetLang = targetLang,
-                        promptTemplate = promptTemplate,
-                        apiKeys = geminiApiKeys,
-                        model = geminiModel,
-                    )
-                    bubbles = mergedBlocks.mapIndexed { idx, block ->
-                        TranslatedBubble(
-                            id = idx,
-                            originalText = block.text,
-                            translatedText = translatedTexts.getOrElse(idx) { block.text },
-                            boundingBox = block.rect,
+                var translated = false
+                var visionFailure: Exception? = null
+
+                if (visionMode) {
+                    onPhase(Phase.VISION)
+                    try {
+                        val result = translateWithGeminiVision(
+                            bitmap = bitmap,
+                            blocks = mergedBlocks,
+                            sourceLang = sourceLang,
+                            targetLang = targetLang,
+                            promptTemplate = promptTemplate,
+                            apiKeys = geminiApiKeys,
+                            model = geminiModel,
                         )
+                        bubbles = result.bubbles
+                        mergedBoxes = result.mergedBoxes
+                        discardedBoxes = result.discardedBoxes
+                        engineUsed = "Gemini visión (${geminiModel.removePrefix("gemini-")})"
+                        translated = true
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        visionFailure = e
                     }
-                } catch (e: Exception) {
-                    // Fallback to Google if Gemini fails
-                    engineUsed = "Google (Fallback: ${e.message?.take(20)})"
+                }
+
+                if (!translated) {
+                    onPhase(Phase.TRANSLATE)
+                    try {
+                        bubbles = translateWithGeminiText(
+                            blocks = mergedBlocks,
+                            sourceLang = sourceLang,
+                            targetLang = targetLang,
+                            promptTemplate = promptTemplate,
+                            apiKeys = geminiApiKeys,
+                            model = geminiModel,
+                        )
+                        engineUsed = if (visionFailure != null) {
+                            "Gemini texto (visión: ${visionFailure.message?.take(40)})"
+                        } else {
+                            "Gemini (${geminiModel.removePrefix("gemini-")})"
+                        }
+                        translated = true
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        engineUsed = "Google (Fallback: ${(visionFailure ?: e).message?.take(24)})"
+                    }
+                }
+
+                if (!translated) {
                     bubbles = translateWithGoogleBatch(mergedBlocks, sourceLang, targetLang)
                 }
             } else {
-                if (engine == TranslatorSettings.ENGINE_GEMINI) {
-                    engineUsed = "Google (sin claves de Gemini)"
-                }
+                onPhase(Phase.TRANSLATE)
                 bubbles = translateWithGoogleBatch(mergedBlocks, sourceLang, targetLang)
             }
         }
@@ -118,7 +171,39 @@ object PageTranslator {
             translateDurationMs = transTime,
             totalDurationMs = ocrTime + transTime,
             engineName = engineUsed,
+            mergedBoxes = mergedBoxes,
+            discardedBoxes = discardedBoxes,
         )
+    }
+
+    private suspend fun translateWithGeminiText(
+        blocks: List<RawBlock>,
+        sourceLang: String,
+        targetLang: String,
+        promptTemplate: String,
+        apiKeys: List<String>,
+        model: String,
+    ): List<TranslatedBubble> {
+        val translated = translateWithGemini(
+            texts = blocks.map { it.text },
+            sourceLang = sourceLang,
+            targetLang = targetLang,
+            promptTemplate = promptTemplate,
+            apiKeys = apiKeys,
+            model = model,
+        )
+        val bubbles = mutableListOf<TranslatedBubble>()
+        blocks.forEachIndexed { idx, block ->
+            // Null means the model rejected the line as unreadable or garbled.
+            val text = translated.getOrNull(idx) ?: return@forEachIndexed
+            bubbles += TranslatedBubble(
+                id = bubbles.size,
+                originalText = block.text,
+                translatedText = text,
+                boundingBox = block.rect,
+            )
+        }
+        return bubbles
     }
 
     private suspend fun translateWithGoogleBatch(
@@ -220,7 +305,7 @@ object PageTranslator {
         promptTemplate: String,
         apiKeys: List<String>,
         model: String,
-    ): List<String> = withContext(Dispatchers.IO) {
+    ): List<String?> = withContext(Dispatchers.IO) {
         if (texts.isEmpty()) return@withContext emptyList()
         if (apiKeys.isEmpty()) error("No hay claves de API disponibles")
 
@@ -242,9 +327,18 @@ object PageTranslator {
 
         val prompt = """
             $formattedInstruction
+
+            The OCR behind this text is unreliable: lines can be truncated,
+            misspelled or contain fragments of a neighbouring balloon. Read each
+            line as a whole and translate what it is meant to say.
+
+            If a line is not readable dialogue (illegible garbage, logo, watermark,
+            page number, sound effect), do not translate it: answer exactly
+            "REJECT" for that id.
+
             Return ONLY a valid JSON array of objects with "id" and "translated".
             Example format:
-            [{"id": 0, "translated": "text"}]
+            [{"id": 0, "translated": "text"}, {"id": 1, "translated": "REJECT"}]
 
             Input dialogue:
             $inputItems
@@ -273,90 +367,550 @@ object PageTranslator {
             )
         }
 
+        val root = postGemini(apiKeys, model, requestJson, GEMINI_READ_TIMEOUT_MS)
+        val parsedArray = extractJsonArray(candidateText(root))
+        val results = arrayOfNulls<String>(texts.size)
+        val rejected = BooleanArray(texts.size)
+
+        for (i in 0 until parsedArray.length()) {
+            val item = parsedArray.opt(i)
+            var transText = ""
+            var targetId = i
+
+            if (item is JSONObject) {
+                targetId = item.optInt("id", -1).takeIf { it != -1 }
+                    ?: item.optString("id").toIntOrNull()
+                    ?: i
+                transText = item.optString("translated").takeIf { it.isNotBlank() }
+                    ?: item.optString("translation").takeIf { it.isNotBlank() }
+                    ?: item.optString("text").takeIf { it.isNotBlank() }
+                    ?: item.optString(targetLang).takeIf { it.isNotBlank() }
+                    ?: ""
+            } else if (item is String) {
+                transText = item
+            }
+
+            if (targetId !in results.indices || transText.isBlank()) continue
+            if (isReject(transText)) {
+                rejected[targetId] = true
+                continue
+            }
+            val clean = cleanMangaText(transText)
+            if (clean.isNotBlank() && (sourceLang != "ja" || !containsJapanese(clean))) {
+                results[targetId] = clean
+            }
+        }
+
+        // Anything the model skipped is recovered with the free endpoint, in
+        // parallel, so one malformed reply never leaves a balloon empty.
+        val missing = texts.indices.filter { results[it] == null && !rejected[it] }
+        val recovered = coroutineScope {
+            missing.map { idx ->
+                async(Dispatchers.IO) {
+                    idx to googleSemaphore.withPermit {
+                        translateTextGoogle(texts[idx], sourceLang, targetLang)
+                    }
+                }
+            }.awaitAll().toMap()
+        }
+
+        texts.indices.map { idx ->
+            when {
+                rejected[idx] -> null
+                results[idx] != null -> results[idx]
+                else -> recovered[idx]?.takeIf { it.isNotBlank() }
+            }
+        }
+    }
+
+    /**
+     * The model is told to answer "REJECT" for a balloon it cannot read. Such
+     * balloons are dropped instead of being drawn with the OCR garbage.
+     */
+    private fun isReject(text: String): Boolean {
+        val normalized = text.trim().trim('"', '\'', '[', ']', '.', '!', ':', ' ')
+        if (normalized.equals("REJECT", ignoreCase = true)) return true
+        // Tolerate "REJECT: reason" and similar qualifiers.
+        return normalized.startsWith("REJECT", ignoreCase = true) &&
+            normalized.length > 6 &&
+            !normalized[6].isLetterOrDigit()
+    }
+
+    private fun postGemini(
+        apiKeys: List<String>,
+        model: String,
+        request: JSONObject,
+        readTimeoutMs: Int,
+    ): JSONObject {
+        if (apiKeys.isEmpty()) error("No hay claves de API disponibles")
+
         var lastError: Exception? = null
         val totalKeys = apiKeys.size
+        val generationConfig = request.optJSONObject("generationConfig")
+        // Older models reject thinkingConfig as an unknown field. Retry the
+        // same key once without it instead of failing the whole page.
+        var retriedWithoutThinking = generationConfig?.has("thinkingConfig") != true
 
-        for (attempt in 0 until totalKeys) {
+        var attempt = 0
+        while (attempt < totalKeys) {
             val keyIndex = (currentKeyIndex + attempt) % totalKeys
-            val apiKey = apiKeys[keyIndex]
+            val urlString = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=${apiKeys[keyIndex]}"
+            val conn = (URI.create(urlString).toURL().openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                setRequestProperty("Content-Type", "application/json")
+                connectTimeout = 15_000
+                readTimeout = readTimeoutMs
+                doOutput = true
+            }
 
             try {
-                val urlString = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
-                val url = URI.create(urlString).toURL()
-                val conn = (url.openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    setRequestProperty("Content-Type", "application/json")
-                    connectTimeout = 12000
-                    readTimeout = 12000
-                    doOutput = true
-                }
-
                 conn.outputStream.use { os ->
-                    os.write(requestJson.toString().toByteArray(Charsets.UTF_8))
+                    os.write(request.toString().toByteArray(Charsets.UTF_8))
                 }
 
                 val responseCode = conn.responseCode
                 if (responseCode == 200) {
                     currentKeyIndex = keyIndex
-                    val responseBody = conn.inputStream.bufferedReader().use { it.readText() }
-                    val root = JSONObject(responseBody)
-                    val candidates = root.getJSONArray("candidates")
-                    val content = candidates.getJSONObject(0).getJSONObject("content")
-                    val part = content.getJSONArray("parts").getJSONObject(0)
-                    val rawJson = part.getString("text").trim()
-
-                    val parsedArray = extractJsonArray(rawJson)
-                    val results = arrayOfNulls<String>(texts.size)
-
-                    for (i in 0 until parsedArray.length()) {
-                        val item = parsedArray.get(i)
-                        var transText = ""
-                        var targetId = i
-
-                        if (item is JSONObject) {
-                            targetId = item.optInt("id", -1).takeIf { it != -1 }
-                                ?: item.optString("id").toIntOrNull()
-                                ?: i
-                            transText = item.optString("translated").takeIf { it.isNotBlank() }
-                                ?: item.optString("translation").takeIf { it.isNotBlank() }
-                                ?: item.optString("text").takeIf { it.isNotBlank() }
-                                ?: item.optString(targetLang).takeIf { it.isNotBlank() }
-                                ?: ""
-                        } else if (item is String) {
-                            transText = item
-                        }
-
-                        if (targetId in results.indices && transText.isNotBlank()) {
-                            results[targetId] = cleanMangaText(transText)
-                        }
-                    }
-
-                    // Fallback to Google Translate for any missing or untranslated items
-                    val finalTexts = mutableListOf<String>()
-                    for (idx in texts.indices) {
-                        val gText = results[idx]
-                        if (gText != null && gText.isNotBlank() && (sourceLang != "ja" || !containsJapanese(gText))) {
-                            finalTexts.add(gText)
-                        } else {
-                            val googleFallback = translateTextGoogle(texts[idx], sourceLang, targetLang)
-                            finalTexts.add(googleFallback)
-                        }
-                    }
-
-                    return@withContext finalTexts
-                } else {
-                    val errorText = conn.errorStream?.bufferedReader()?.use { it.readText() }
-                    lastError = IllegalStateException("Gemini API ($responseCode): $errorText")
-                    // A malformed request or an unknown model fails the same way
-                    // with every key: don't burn the 12s timeout once per key.
-                    if (responseCode in 400..499 && responseCode != 429) break
+                    val body = conn.inputStream.bufferedReader().use { it.readText() }
+                    return JSONObject(body)
                 }
+
+                val errorText = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                lastError = IllegalStateException("Gemini API ($responseCode): ${errorText.take(200)}")
+                if (responseCode == 400 && !retriedWithoutThinking &&
+                    errorText.contains("thinking", ignoreCase = true)
+                ) {
+                    retriedWithoutThinking = true
+                    generationConfig?.remove("thinkingConfig")
+                    // Same key, same attempt, smaller request.
+                    continue
+                }
+                // A malformed request or an unknown model fails the same way
+                // with every key: don't burn the timeout once per key.
+                if (responseCode in 400..499 && responseCode != 429) break
             } catch (e: Exception) {
                 lastError = e
+            } finally {
+                conn.disconnect()
             }
+            attempt++
         }
 
         throw lastError ?: IllegalStateException("Todas las claves de API fallaron")
+    }
+
+    private fun candidateText(root: JSONObject): String {
+        val blockReason = root.optJSONObject("promptFeedback")?.optString("blockReason").orEmpty()
+        if (blockReason.isNotBlank()) {
+            error("Gemini bloqueó la imagen ($blockReason)")
+        }
+
+        val candidate = root.optJSONArray("candidates")?.optJSONObject(0)
+            ?: error("Gemini no devolvió respuesta")
+        val parts = candidate.optJSONObject("content")?.optJSONArray("parts")
+            ?: error("Gemini devolvió una respuesta vacía")
+
+        val builder = StringBuilder()
+        for (i in 0 until parts.length()) {
+            parts.optJSONObject(i)?.optString("text")?.let(builder::append)
+        }
+
+        val text = builder.toString().trim()
+        if (text.isEmpty()) {
+            val reason = candidate.optString("finishReason")
+            error("Gemini devolvió una respuesta vacía${if (reason.isNotBlank()) " ($reason)" else ""}")
+        }
+        return text
+    }
+
+    private class VisionResult(
+        val bubbles: List<TranslatedBubble>,
+        val mergedBoxes: Int,
+        val discardedBoxes: Int,
+    )
+
+    private class VisionEntry(
+        val ids: List<Int>,
+        val source: String?,
+        val translated: String,
+        val rect: Rect?,
+    )
+
+    /**
+     * Sends the whole page with the OCR boxes drawn and numbered, and lets the
+     * vision model do the actual reading: it recovers text the OCR truncated,
+     * joins boxes that belong to the same balloon and drops boxes that are
+     * duplicates or landed on artwork (answering "REJECT" for them).
+     */
+    private suspend fun translateWithGeminiVision(
+        bitmap: Bitmap,
+        blocks: List<RawBlock>,
+        sourceLang: String,
+        targetLang: String,
+        promptTemplate: String,
+        apiKeys: List<String>,
+        model: String,
+    ): VisionResult = withContext(Dispatchers.IO) {
+        val annotated = try {
+            annotateForVision(bitmap, blocks)
+        } catch (e: OutOfMemoryError) {
+            error("Memoria insuficiente para preparar la imagen")
+        }
+
+        val imageBase64 = try {
+            ByteArrayOutputStream().use { stream ->
+                if (!annotated.compress(Bitmap.CompressFormat.JPEG, VISION_JPEG_QUALITY, stream)) {
+                    error("No se pudo comprimir la imagen")
+                }
+                Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+            }
+        } finally {
+            annotated.recycle()
+        }
+
+        val instruction = TranslatorSettings.formatGeminiPrompt(
+            template = promptTemplate,
+            sourceLang = sourceLang,
+            targetLang = targetLang,
+        )
+        val prompt = buildVisionPrompt(instruction, targetLang, blocks.size)
+
+        val requestJson = JSONObject().apply {
+            val parts = JSONArray().apply {
+                put(JSONObject().apply { put("text", prompt) })
+                put(
+                    JSONObject().apply {
+                        put(
+                            "inline_data",
+                            JSONObject().apply {
+                                put("mime_type", "image/jpeg")
+                                put("data", imageBase64)
+                            },
+                        )
+                    },
+                )
+            }
+            put(
+                "contents",
+                JSONArray().apply {
+                    put(JSONObject().apply { put("parts", parts) })
+                },
+            )
+            put(
+                "generationConfig",
+                JSONObject().apply {
+                    put("temperature", 0.1)
+                    put("responseMimeType", "application/json")
+                    put("maxOutputTokens", 4096)
+                    put(
+                        "thinkingConfig",
+                        JSONObject().apply {
+                            // Same setting the text path already uses, so a model
+                            // that rejected another level can't break vision mode.
+                            put("thinkingLevel", "MINIMAL")
+                        },
+                    )
+                },
+            )
+        }
+
+        val root = postGemini(apiKeys, model, requestJson, GEMINI_VISION_READ_TIMEOUT_MS)
+        parseVisionResult(candidateText(root), blocks, bitmap.width, bitmap.height)
+    }
+
+    private fun buildVisionPrompt(
+        instruction: String,
+        targetLang: String,
+        boxCount: Int,
+    ): String = buildString {
+        appendLine(instruction)
+        appendLine()
+        appendLine("You are ALSO the OCR engine for this manga page: the attached image is the complete page.")
+        appendLine("A weak OCR has drawn numbered red boxes over the places where it thinks text may be.")
+        appendLine("Those boxes are only hints; their text is not given to you and their position may be off.")
+        appendLine("Look at the page yourself and, for every numbered box, read the text that is really inside")
+        appendLine("that part of the artwork, then translate it.")
+        if (boxCount == 0) {
+            appendLine("This page has no numbered boxes: recover every speech balloon you can see with \"extra\".")
+        }
+        appendLine()
+        appendLine("Rules:")
+        appendLine("1. Return one entry per speech balloon of the finished page, in reading order")
+        appendLine("   (Japanese manga: right to left, top to bottom).")
+        appendLine("2. \"ids\" lists every numbered box that belongs to that balloon. If one balloon was split into")
+        appendLine("   two boxes (for example 1 and 2), return a SINGLE entry with \"ids\": [1, 2] and the whole")
+        appendLine("   text of the balloon. Never return two entries for the same balloon.")
+        appendLine("3. If a box has no readable dialogue (it landed on artwork, on a sound effect, or it is a")
+        appendLine("   duplicate fragment of another box), do not translate it: answer exactly \"REJECT\" in its")
+        appendLine("   text. Do not invent text for it.")
+        appendLine("4. If a sentence continues from one box into another box of the same balloon, join both ids in one entry.")
+        appendLine("5. Ignore text outside balloons (credits, watermarks, page numbers, store logos, meta commentary).")
+        appendLine("6. Use the whole page as context: short fragments are usually parts of the same line.")
+        appendLine("7. Do not add notes, romanisation or explanations.")
+        appendLine()
+        appendLine("Reply with JSON only, without prose or code fences:")
+        append("{\"bubbles\":[{\"ids\":[1],\"source\":\"text as printed\",\"text\":\"")
+        append(TranslatorSettings.getLanguageName(targetLang))
+        append(" translation\"}],\"extra\":[{\"box\":[ymin,xmin,ymax,xmax],\"source\":\"...\",\"text\":\"...\"}]}")
+        appendLine()
+        appendLine("\"source\" is the text exactly as printed on the page. \"extra\" is optional and only for")
+        appendLine("balloons that have no numbered box at all: coordinates are normalised to 0-1000 and given as")
+        appendLine("ymin, xmin, ymax, xmax. Use at most $MAX_EXTRA_BUBBLES extra entries.")
+    }
+
+    private fun annotateForVision(bitmap: Bitmap, blocks: List<RawBlock>): Bitmap {
+        val scale = min(1f, VISION_MAX_EDGE.toFloat() / max(bitmap.width, bitmap.height))
+        val width = (bitmap.width * scale).roundToInt().coerceAtLeast(1)
+        val height = (bitmap.height * scale).roundToInt().coerceAtLeast(1)
+
+        // Never draw on the reader's bitmap: it is still pinned for display.
+        val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        canvas.drawBitmap(
+            bitmap,
+            Matrix().apply {
+                setScale(width / bitmap.width.toFloat(), height / bitmap.height.toFloat())
+            },
+            Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG),
+        )
+
+        val stroke = max(2f, width / 520f)
+        val halo = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = stroke * 2.4f
+            color = Color.WHITE
+        }
+        val frame = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = stroke
+            color = markerColor
+        }
+        val badge = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = markerColor }
+        val label = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = max(14f, width / 55f)
+            textAlign = Paint.Align.CENTER
+            isFakeBoldText = true
+        }
+
+        blocks.forEachIndexed { index, block ->
+            val rect = Rect(
+                (block.rect.left * scale).roundToInt(),
+                (block.rect.top * scale).roundToInt(),
+                (block.rect.right * scale).roundToInt(),
+                (block.rect.bottom * scale).roundToInt(),
+            )
+            canvas.drawRect(rect, halo)
+            canvas.drawRect(rect, frame)
+
+            val text = (index + 1).toString()
+            val boxWidth = max(label.measureText(text) * 1.6f, label.textSize * 1.5f)
+            val boxHeight = label.textSize * 1.7f
+            val left = rect.left.toFloat().coerceIn(0f, (width - boxWidth).coerceAtLeast(0f))
+            // Prefer the badge just above the box so the number never covers
+            // the dialogue the model has to read.
+            val top = (rect.top - boxHeight).coerceAtLeast(0f)
+            val badgeRect = RectF(left, top, left + boxWidth, top + boxHeight)
+            canvas.drawRect(badgeRect, badge)
+            canvas.drawText(
+                text,
+                badgeRect.centerX(),
+                badgeRect.centerY() - (label.ascent() + label.descent()) / 2f,
+                label,
+            )
+        }
+        return output
+    }
+
+    private fun parseVisionResult(
+        raw: String,
+        blocks: List<RawBlock>,
+        width: Int,
+        height: Int,
+    ): VisionResult {
+        val root = runCatching { extractJsonObject(raw) }.getOrElse {
+            JSONObject().put("bubbles", extractJsonArray(raw))
+        }
+        val entries = mutableListOf<VisionEntry>()
+
+        val extras = root.optJSONArray("extra") ?: root.optJSONArray("extras") ?: JSONArray()
+        val bubbleArray = findVisionArray(root)
+            ?: if (extras.length() == 0) error("La IA no devolvió ninguna viñeta") else JSONArray()
+        for (i in 0 until bubbleArray.length()) {
+            val item = bubbleArray.optJSONObject(i) ?: continue
+            val ids = readIds(item)
+            val translated = readText(item)
+            if (translated.isBlank()) continue
+            if (isReject(translated)) {
+                // Explicit rejection: this box is never drawn.
+                entries += VisionEntry(ids, null, "", null)
+                continue
+            }
+            entries += VisionEntry(ids, readSource(item), translated, readNormalizedRect(item, width, height))
+        }
+
+        var extraCount = 0
+        for (i in 0 until extras.length()) {
+            if (extraCount >= MAX_EXTRA_BUBBLES) break
+            val item = extras.optJSONObject(i) ?: continue
+            val translated = readText(item)
+            if (translated.isBlank() || isReject(translated)) continue
+            val rect = readNormalizedRect(item, width, height) ?: continue
+            entries += VisionEntry(emptyList(), readSource(item), translated, rect)
+            extraCount++
+        }
+
+        val used = mutableSetOf<Int>()
+        val accepted = mutableListOf<Rect>()
+        val bubbles = mutableListOf<TranslatedBubble>()
+        var mergedBoxes = 0
+
+        for (entry in entries) {
+            // Rejected and empty entries are deliberately not drawn, so their
+            // ids stay unused and are reported as discarded boxes.
+            if (entry.translated.isBlank()) continue
+            // A box already claimed by another balloon must not be drawn twice.
+            if (entry.ids.any { it in used }) continue
+
+            val sources = entry.ids.mapNotNull { id -> blocks.getOrNull(id - 1) }
+            val union = sources
+                .map { it.rect }
+                .filter { it.width() > 0 && it.height() > 0 }
+                .reduceOrNull { acc, rect ->
+                    Rect(acc).apply {
+                        left = min(left, rect.left)
+                        top = min(top, rect.top)
+                        right = max(right, rect.right)
+                        bottom = max(bottom, rect.bottom)
+                    }
+                }
+            val rect = union ?: entry.rect ?: continue
+            val clipped = Rect(rect.left, rect.top, rect.right, rect.bottom).apply {
+                left = left.coerceIn(0, width)
+                top = top.coerceIn(0, height)
+                right = right.coerceIn(0, width)
+                bottom = bottom.coerceIn(0, height)
+            }
+            if (clipped.width() < 4 || clipped.height() < 4) continue
+            // A guessed extra box that lands on an existing balloon is a duplicate.
+            if (entry.ids.isEmpty() && accepted.any { it.overlaps(clipped) }) continue
+
+            entry.ids.forEach { id -> if (id in 1..blocks.size) used += id }
+            if (entry.ids.size > 1) mergedBoxes++
+            accepted += clipped
+
+            val original = entry.source?.takeIf { it.isNotBlank() }
+                ?: sources.joinToString(" ") { it.text }
+            bubbles += TranslatedBubble(
+                id = bubbles.size,
+                originalText = original,
+                translatedText = cleanMangaText(entry.translated),
+                boundingBox = clipped,
+            )
+        }
+
+        if (bubbles.isEmpty()) {
+            // Every box was rejected: that is a valid answer for a page with no
+            // readable dialogue. No answer at all is a failure worth retrying.
+            if (entries.isEmpty()) error("La IA no reconoció texto en esta página")
+            return VisionResult(emptyList(), 0, blocks.size)
+        }
+
+        return VisionResult(
+            bubbles = bubbles,
+            mergedBoxes = mergedBoxes,
+            discardedBoxes = blocks.indices.count { (it + 1) !in used },
+        )
+    }
+
+    private fun findVisionArray(root: JSONObject): JSONArray? {
+        val preferred = listOf("bubbles", "panels", "boxes", "results", "translations", "items")
+        preferred.firstNotNullOfOrNull { root.optJSONArray(it) }?.let { return it }
+        val keys = root.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            // "extra" is not a list of numbered balloons.
+            if (key.equals("extra", ignoreCase = true) || key.equals("extras", ignoreCase = true)) continue
+            val value = root.opt(key)
+            if (value is JSONArray) return value
+        }
+        // A single balloon returned without the wrapper object.
+        if (root.has("ids") || root.has("id")) return JSONArray().put(root)
+        return null
+    }
+
+    private fun readIds(item: JSONObject): List<Int> {
+        val rawIds = item.opt("ids") ?: item.opt("box_ids") ?: item.opt("boxes")
+        if (rawIds is String) {
+            return rawIds.split(',', ' ', '[', ']', ';').mapNotNull { it.trim().toIntOrNull() }
+        }
+        val array = rawIds as? JSONArray
+        if (array != null) {
+            val ids = mutableListOf<Int>()
+            for (i in 0 until array.length()) {
+                val id = array.optInt(i, -1).takeIf { it > 0 }
+                    ?: array.optString(i).toIntOrNull()
+                    ?: continue
+                ids += id
+            }
+            return ids
+        }
+        val single = item.optInt("id", -1).takeIf { it > 0 }
+            ?: item.optString("id").toIntOrNull()
+        return listOfNotNull(single)
+    }
+
+    private fun readText(item: JSONObject): String = listOf("text", "translated", "translation", "es")
+        .firstNotNullOfOrNull { key -> item.optString(key).takeIf { it.isNotBlank() } }
+        ?: ""
+
+    private fun readSource(item: JSONObject): String? = listOf("source", "original", "原文")
+        .firstNotNullOfOrNull { key -> item.optString(key).takeIf { it.isNotBlank() } }
+
+    private fun readNormalizedRect(item: JSONObject, width: Int, height: Int): Rect? {
+        val array = item.optJSONArray("box") ?: item.optJSONArray("bbox")
+        if (array != null) return readNormalizedRect(array, width, height)
+        val box = item.optJSONObject("box") ?: item.optJSONObject("bbox") ?: return null
+        return readNormalizedRect(
+            JSONArray().apply {
+                put(box.optDouble("ymin", Double.NaN))
+                put(box.optDouble("xmin", Double.NaN))
+                put(box.optDouble("ymax", Double.NaN))
+                put(box.optDouble("xmax", Double.NaN))
+            },
+            width,
+            height,
+        )
+    }
+
+    /** Reads the normalised [ymin, xmin, ymax, xmax] rectangle a model returns. */
+    private fun readNormalizedRect(array: JSONArray?, width: Int, height: Int): Rect? {
+        if (array == null || array.length() < 4) return null
+        val values = DoubleArray(4) { i -> array.optDouble(i, Double.NaN) }
+        if (values.any { it.isNaN() }) return null
+
+        fun px(value: Double, size: Int): Int = (value / 1000.0 * size).roundToInt().coerceIn(0, size)
+
+        val top = px(min(values[0], values[2]), height)
+        val bottom = px(max(values[0], values[2]), height)
+        val left = px(min(values[1], values[3]), width)
+        val right = px(max(values[1], values[3]), width)
+        if (right - left < width * 0.01f || bottom - top < height * 0.01f) return null
+        if (right - left > width * 0.95f && bottom - top > height * 0.95f) return null
+        return Rect(left, top, right, bottom)
+    }
+
+    private fun extractJsonObject(raw: String): JSONObject {
+        var text = raw.trim()
+        if (text.startsWith("```")) {
+            text = text.substringAfter('\n', text).substringBeforeLast("```").trim()
+        }
+        val start = text.indexOf('{')
+        val end = text.lastIndexOf('}')
+        if (start == -1 || end <= start) {
+            error("Respuesta de la IA no válida: ${raw.take(120)}")
+        }
+        return JSONObject(text.substring(start, end + 1))
     }
 
     private fun extractJsonArray(raw: String): JSONArray {

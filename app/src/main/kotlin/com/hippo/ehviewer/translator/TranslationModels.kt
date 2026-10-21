@@ -24,4 +24,8 @@ data class PageTranslation(
     val engineName: String = "Google",
     /** Signature of the settings used to produce this translation. */
     val settingsSignature: String = "",
+    /** Number of OCR boxes the model collapsed into one balloon. */
+    val mergedBoxes: Int = 0,
+    /** Number of OCR boxes the model discarded as empty or duplicated. */
+    val discardedBoxes: Int = 0,
 )

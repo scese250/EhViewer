@@ -35,6 +35,12 @@ class TranslatorSettings(context: Context) {
     var geminiPromptTemplate by mutableStateOf(
         prefs.getString("gemini_prompt_template", DEFAULT_PROMPT_TEMPLATE) ?: DEFAULT_PROMPT_TEMPLATE,
     )
+
+    /**
+     * Send the page with the OCR boxes drawn so Gemini reads the real text
+     * instead of trusting the OCR transcription.
+     */
+    var geminiVision by mutableStateOf(prefs.getBoolean("gemini_vision", true))
     var bubbleOrientation by mutableStateOf(
         prefs.getString("bubble_orientation", ORIENTATION_VERTICAL) ?: ORIENTATION_VERTICAL,
     )
@@ -88,6 +94,7 @@ class TranslatorSettings(context: Context) {
         append('|').append(geminiModel)
         append('|').append(geminiPromptTemplate.hashCode())
         append('|').append(geminiApiKeysRaw.hashCode())
+        append('|').append(if (geminiVision) 1 else 0)
         append('|').append(if (mergeBubbleColumns) 1 else 0)
         append('|').append((maxColumnGapRatio * 1000).toInt())
         append('|').append((minColumnOverlap * 1000).toInt())
@@ -125,6 +132,7 @@ class TranslatorSettings(context: Context) {
             .putString("source_lang", sourceLang)
             .putString("target_lang", targetLang)
             .putString("gemini_prompt_template", geminiPromptTemplate)
+            .putBoolean("gemini_vision", geminiVision)
             .putString("bubble_orientation", bubbleOrientation)
             .putString("bubble_shape", bubbleShape)
             .putString("bubble_padding", bubblePadding)

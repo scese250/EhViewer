@@ -29,12 +29,14 @@ sealed interface TranslationStatus {
     data object Idle : TranslationStatus
     data object WaitingForPage : TranslationStatus
     data object RecognizingText : TranslationStatus
+    data object ReadingPage : TranslationStatus
     data object TranslatingText : TranslationStatus
     data object Done : TranslationStatus
     data class Failed(val message: String) : TranslationStatus
 
     val isBusy: Boolean
-        get() = this is WaitingForPage || this is RecognizingText || this is TranslatingText
+        get() = this is WaitingForPage || this is RecognizingText ||
+            this is ReadingPage || this is TranslatingText
 }
 
 /**
@@ -167,9 +169,11 @@ class ReaderTranslationState(
                     geminiApiKeys = settings.getGeminiApiKeys(),
                     geminiModel = settings.geminiModel,
                     grouping = settings.groupingConfig(),
+                    visionMode = settings.geminiVision,
                     onPhase = { phase ->
                         statuses[index] = when (phase) {
                             PageTranslator.Phase.OCR -> TranslationStatus.RecognizingText
+                            PageTranslator.Phase.VISION -> TranslationStatus.ReadingPage
                             PageTranslator.Phase.TRANSLATE -> TranslationStatus.TranslatingText
                         }
                     },
@@ -253,6 +257,9 @@ class ReaderTranslationState(
             val next = index + offset
             if (next >= pageLoader.size) return
             if (translations.containsKey(next)) continue
+            // A page that already failed (blocked, missing, unreadable) is not
+            // retried on every scroll: that would hammer the OCR/API for nothing.
+            if (statuses[next] is TranslationStatus.Failed) continue
             translatePage(next, AHEAD_PAGE_TIMEOUT_MS)
         }
     }

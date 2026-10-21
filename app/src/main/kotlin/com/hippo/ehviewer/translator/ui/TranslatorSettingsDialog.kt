@@ -366,6 +366,28 @@ fun TranslatorSettingsDialog(
 
                             Spacer(modifier = Modifier.height(10.dp))
 
+                            HorizontalDivider()
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            SettingSwitch(
+                                title = "Lectura visual de la página",
+                                subtitle = "Gemini recibe la página con los cuadros numerados y lee el texto real: " +
+                                    "corrige el OCR, une globos partidos en dos y descarta cuadros falsos.",
+                                checked = settings.geminiVision,
+                                onCheckedChange = { settings.geminiVision = it },
+                            )
+
+                            if (settings.geminiVision) {
+                                Text(
+                                    text = "💡 La IA puede responder \"REJECT\" a un cuadro que no tiene texto legible; " +
+                                        "ese cuadro se descarta en lugar de dibujarse mal.",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
                             OutlinedButton(
                                 onClick = {
                                     scope.launch {
@@ -868,6 +890,7 @@ fun TranslatorSettingsDialog(
 private fun TranslationStatus.busyLabel(): String = when (this) {
     TranslationStatus.WaitingForPage -> "Esperando la imagen…"
     TranslationStatus.RecognizingText -> "Reconociendo texto (OCR)…"
+    TranslationStatus.ReadingPage -> "La IA está leyendo la página…"
     TranslationStatus.TranslatingText -> "Traduciendo texto…"
     else -> "Traduciendo…"
 }
@@ -888,6 +911,7 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
         TranslationStatus.Idle -> "Sin traducir"
         TranslationStatus.WaitingForPage -> "Preparando la página"
         TranslationStatus.RecognizingText -> "Reconociendo texto (OCR)"
+        TranslationStatus.ReadingPage -> "Leyendo la página con IA"
         TranslationStatus.TranslatingText -> "Traduciendo"
         TranslationStatus.Done -> "Traducción lista"
         is TranslationStatus.Failed -> "Error al traducir"
@@ -896,12 +920,18 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
         TranslationStatus.Idle -> "Esta página todavía no se ha traducido."
         TranslationStatus.WaitingForPage -> "Esperando a que la imagen se descargue y decodifique."
         TranslationStatus.RecognizingText -> "ML Kit está localizando los globos de la página."
+        TranslationStatus.ReadingPage -> "Gemini está leyendo el texto real dentro de los cuadros numerados."
         TranslationStatus.TranslatingText -> "Enviando los textos al motor de traducción."
-        TranslationStatus.Done -> translation?.let {
-            if (it.bubbles.isEmpty()) {
+        TranslationStatus.Done -> translation?.let { page ->
+            if (page.bubbles.isEmpty()) {
                 "No se detectó texto en esta página. Prueba otra página o revisa la detección."
             } else {
-                "${it.bubbles.size} viñetas · ${it.engineName}\nOCR ${it.ocrDurationMs} ms · Traducción ${it.translateDurationMs} ms"
+                buildString {
+                    append("${page.bubbles.size} viñetas · ${page.engineName}")
+                    if (page.mergedBoxes > 0) append(" · ${page.mergedBoxes} fusionadas")
+                    if (page.discardedBoxes > 0) append(" · ${page.discardedBoxes} descartadas")
+                    append("\nOCR ${page.ocrDurationMs} ms · Traducción ${page.translateDurationMs} ms")
+                }
             }
         } ?: "Página traducida."
         is TranslationStatus.Failed -> status.message
@@ -921,6 +951,7 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
             when (status) {
                 TranslationStatus.WaitingForPage,
                 TranslationStatus.RecognizingText,
+                TranslationStatus.ReadingPage,
                 TranslationStatus.TranslatingText,
                 -> CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
