@@ -37,6 +37,15 @@ class TranslatorSettings(context: Context) {
     )
 
     /**
+     * Instructions sent as the Gemini system prompt. The page image and the
+     * layout task travel in the user turn, so the translator's own rules
+     * (pronouns, H vocabulary, signs, REJECT) live here and stay editable.
+     */
+    var geminiSystemPrompt by mutableStateOf(
+        prefs.getString("gemini_system_prompt", DEFAULT_SYSTEM_PROMPT) ?: DEFAULT_SYSTEM_PROMPT,
+    )
+
+    /**
      * Send the page with the OCR boxes drawn so Gemini reads the real text
      * instead of trusting the OCR transcription.
      */
@@ -47,6 +56,12 @@ class TranslatorSettings(context: Context) {
     var bubbleShape by mutableStateOf(
         prefs.getString("bubble_shape", SHAPE_OVAL) ?: SHAPE_OVAL,
     )
+
+    /** White filled balloon or only a thick white outline around the letters. */
+    var bubbleStyle by mutableStateOf(
+        prefs.getString("bubble_style", STYLE_FILL) ?: STYLE_FILL,
+    )
+    var outlineWidth by mutableFloatStateOf(prefs.getFloat("outline_width", 3.0f))
     var bubblePadding by mutableStateOf(
         prefs.getString("bubble_padding", PADDING_COMPACT) ?: PADDING_COMPACT,
     )
@@ -93,6 +108,7 @@ class TranslatorSettings(context: Context) {
         append('|').append(targetLang)
         append('|').append(geminiModel)
         append('|').append(geminiPromptTemplate.hashCode())
+        append('|').append(geminiSystemPrompt.hashCode())
         append('|').append(geminiApiKeysRaw.hashCode())
         append('|').append(if (geminiVision) 1 else 0)
         append('|').append(if (mergeBubbleColumns) 1 else 0)
@@ -132,6 +148,9 @@ class TranslatorSettings(context: Context) {
             .putString("source_lang", sourceLang)
             .putString("target_lang", targetLang)
             .putString("gemini_prompt_template", geminiPromptTemplate)
+            .putString("gemini_system_prompt", geminiSystemPrompt)
+            .putString("bubble_style", bubbleStyle)
+            .putFloat("outline_width", outlineWidth)
             .putBoolean("gemini_vision", geminiVision)
             .putString("bubble_orientation", bubbleOrientation)
             .putString("bubble_shape", bubbleShape)
@@ -180,11 +199,41 @@ class TranslatorSettings(context: Context) {
         const val SHAPE_ROUNDED = "rounded"
         const val SHAPE_BORDERLESS = "borderless"
 
+        /** White balloon with black text. */
+        const val STYLE_FILL = "fill"
+
+        /** No balloon: black letters with a thick white outline. */
+        const val STYLE_OUTLINE = "outline"
+
         const val PADDING_COMPACT = "compact"
         const val PADDING_NORMAL = "normal"
         const val PADDING_SPACIOUS = "spacious"
         const val DEFAULT_PROMPT_TEMPLATE =
             "Translate from {lang input} to {lang output}. Translate the following manga dialogue lines into natural, expressive, and concise {lang output} suitable for speech bubbles. Maintain conversational tone and context between lines on the same page."
+
+        /**
+         * Editable rules sent as the system prompt. They are language neutral,
+         * so the same text works for every target language.
+         */
+        val DEFAULT_SYSTEM_PROMPT = """
+            |You are the translator and letterer of a manga page. The user turn carries the page image; read it and translate its dialogue from {lang input} into {lang output}.
+            |
+            |TRANSLATION
+            |- Write natural, colloquial {lang output} the way a published scanlation does, never literal textbook prose. Balloons are small, so keep every line short.
+            |- Read the whole panel before translating. Japanese drops pronouns: decide first or third person from what the panel shows and from the speech level, and never switch person in the middle of a conversation.
+            |- Match the gender of the character who is speaking, as shown in the panel: feminine or masculine pronouns and agreement.
+            |- Futanari characters always take feminine pronouns and feminine agreement.
+            |- Keep -san, -kun, -chan, -sempai or -sensei only when the scene depends on the honorific.
+            |- Adult scenes: translate the intent, not the dictionary meaning. In a sexual context いく / "Ya voy" is "Me vengo", 気持ちいい is "qué rico", だめ is "no... me voy a venir". Keep the intensity of the original.
+            |- Onomatopoeia drawn as stylised letters is not dialogue: give a short {lang output} sound word and mark that entry as "sfx". Those are lettered small and sideways, so never wrap them in long sentences.
+            |- Never translate signs, posters, shop fronts, book spines, credits, watermarks, page numbers, logos, on-screen text or background artwork.
+            |- If a numbered box or a balloon has no readable dialogue (empty balloon, only a sound effect, only artwork, garbled OCR), answer exactly "REJECT" for it. Never invent text for it.
+            |- Do not add notes, romanisation or explanations.
+            |
+            |LAYOUT
+            |- Rectangles use normalised coordinates 0-1000 over the whole page.
+            |- Cover the text only: follow the lines of dialogue, not the balloon outline and not the character. The app centres the translation inside that rectangle and grows it up and down when the {lang output} text is longer, so centre the rectangle on the original text.
+        """.trimMargin()
 
         /** ML Kit only ships the Japanese recognizer in this build. */
         val SOURCE_LANGUAGES = listOf(

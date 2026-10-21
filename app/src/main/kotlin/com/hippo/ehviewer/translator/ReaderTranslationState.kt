@@ -20,6 +20,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 private const val CURRENT_PAGE_TIMEOUT_MS = 30_000L
 private const val AHEAD_PAGE_TIMEOUT_MS = 15_000L
+private const val MAX_RETRANSLATE_PAGES = 30
 
 /**
  * State of the translation of a single page, shown in the translator dialog.
@@ -61,6 +62,23 @@ class ReaderTranslationState(
     private var lastRevision = settings.revision
     private var generation = 0
 
+    /**
+     * Identity of this gallery inside [TranslationCache]. The reader state is
+     * recreated on every visit, so the cache lives outside it.
+     */
+    private val galleryKey: String = pageLoader.info
+        ?.let { "gallery:${it.gid}:${pageLoader.size}" }
+        ?: "archive:${pageLoader.title}:${pageLoader.size}"
+
+    init {
+        // Re-entering a gallery shows the pages translated last time instantly.
+        TranslationCache.snapshot(galleryKey, settings.translationSignature())
+            .forEach { (index, translation) ->
+                translations[index] = translation
+                statuses[index] = TranslationStatus.Done
+            }
+    }
+
     fun status(index: Int): TranslationStatus = statuses[index]
         ?: if (translations.containsKey(index)) TranslationStatus.Done else TranslationStatus.Idle
 
@@ -84,6 +102,9 @@ class ReaderTranslationState(
                 translations.remove(it)
                 statuses.remove(it)
             }
+        // The cache is keyed by signature too, but a settings change must also
+        // free the old pages instead of keeping them until the LRU evicts them.
+        TranslationCache.removeAll(galleryKey)
     }
 
     fun clear() {
@@ -91,19 +112,24 @@ class ReaderTranslationState(
         translations.clear()
         statuses.clear()
         editingBubble = null
+        TranslationCache.removeAll(galleryKey)
     }
 
     /** Forgets a page so the next call re-runs OCR instead of using the cache. */
     fun resetPage(index: Int) {
         translations.remove(index)
         statuses.remove(index)
+        TranslationCache.remove(galleryKey, index)
     }
 
     fun updateBubble(pageIndex: Int, bubble: TranslatedBubble) {
         val current = translations[pageIndex] ?: return
-        translations[pageIndex] = current.copy(
+        val updated = current.copy(
             bubbles = current.bubbles.map { if (it.id == bubble.id) bubble else it },
         )
+        translations[pageIndex] = updated
+        // Keep the edited bubble when the user comes back to the gallery.
+        TranslationCache.put(galleryKey, pageIndex, updated)
     }
 
     /**
@@ -116,6 +142,7 @@ class ReaderTranslationState(
         timeoutMs: Long = CURRENT_PAGE_TIMEOUT_MS,
     ): PageTranslation? {
         translations[index]?.let { return it }
+        cached(index)?.let { return it }
 
         // Show progress while queued behind another page's OCR too.
         statuses[index] = TranslationStatus.WaitingForPage
@@ -125,6 +152,9 @@ class ReaderTranslationState(
                     statuses[index] = TranslationStatus.Done
                     return@withLock it
                 }
+                // Another page's translation may have filled the cache while
+                // this one waited for the lock.
+                cached(index)?.let { return@withLock it }
                 translateLocked(index, timeoutMs)
             }
         } catch (e: CancellationException) {
@@ -165,6 +195,7 @@ class ReaderTranslationState(
                     sourceLang = settings.sourceLang,
                     targetLang = settings.targetLang,
                     promptTemplate = settings.geminiPromptTemplate,
+                    systemPrompt = settings.geminiSystemPrompt,
                     engine = settings.engine,
                     geminiApiKeys = settings.getGeminiApiKeys(),
                     geminiModel = settings.geminiModel,
@@ -179,7 +210,9 @@ class ReaderTranslationState(
                     },
                 )
                 if (requestGeneration == generation && signature == settings.translationSignature()) {
-                    translations[index] = result.copy(settingsSignature = signature)
+                    val stored = result.copy(settingsSignature = signature)
+                    translations[index] = stored
+                    TranslationCache.put(galleryKey, index, stored)
                     statuses[index] = TranslationStatus.Done
                 } else {
                     // Settings changed while translating: drop the result so the
@@ -240,9 +273,33 @@ class ReaderTranslationState(
         return copy
     }
 
+    /** Cached page for this reader, if it was translated with the same settings. */
+    private fun cached(index: Int): PageTranslation? = TranslationCache
+        .get(galleryKey, index, settings.translationSignature())
+        ?.also {
+            translations[index] = it
+            statuses[index] = TranslationStatus.Done
+        }
+
     private fun fail(index: Int, message: String): PageTranslation? {
         statuses[index] = TranslationStatus.Failed(message)
         return null
+    }
+
+    /**
+     * Forgets and re-translates the [count] pages after [index], so the next
+     * pages the user reads carry a fresh translation (new prompt, new bubbles).
+     */
+    suspend fun retranslateFollowing(index: Int, count: Int) {
+        onRevisionChanged()
+        var pending = count.coerceIn(1, MAX_RETRANSLATE_PAGES)
+        var next = index + 1
+        while (pending > 0 && next < pageLoader.size) {
+            resetPage(next)
+            translatePage(next)
+            next++
+            pending--
+        }
     }
 
     /**

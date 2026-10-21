@@ -63,6 +63,7 @@ object PageTranslator {
         sourceLang: String = "ja",
         targetLang: String = "es",
         promptTemplate: String = TranslatorSettings.DEFAULT_PROMPT_TEMPLATE,
+        systemPrompt: String = TranslatorSettings.DEFAULT_SYSTEM_PROMPT,
         engine: String = TranslatorSettings.ENGINE_GOOGLE,
         geminiApiKeys: List<String> = emptyList(),
         geminiModel: String = TranslatorSettings.DEFAULT_GEMINI_MODEL,
@@ -117,6 +118,7 @@ object PageTranslator {
                             sourceLang = sourceLang,
                             targetLang = targetLang,
                             promptTemplate = promptTemplate,
+                            systemPrompt = systemPrompt,
                             apiKeys = geminiApiKeys,
                             model = geminiModel,
                         )
@@ -140,6 +142,7 @@ object PageTranslator {
                             sourceLang = sourceLang,
                             targetLang = targetLang,
                             promptTemplate = promptTemplate,
+                            systemPrompt = systemPrompt,
                             apiKeys = geminiApiKeys,
                             model = geminiModel,
                         )
@@ -182,6 +185,7 @@ object PageTranslator {
         sourceLang: String,
         targetLang: String,
         promptTemplate: String,
+        systemPrompt: String,
         apiKeys: List<String>,
         model: String,
     ): List<TranslatedBubble> {
@@ -190,6 +194,7 @@ object PageTranslator {
             sourceLang = sourceLang,
             targetLang = targetLang,
             promptTemplate = promptTemplate,
+            systemPrompt = systemPrompt,
             apiKeys = apiKeys,
             model = model,
         )
@@ -304,6 +309,7 @@ object PageTranslator {
         sourceLang: String,
         targetLang: String,
         promptTemplate: String,
+        systemPrompt: String,
         apiKeys: List<String>,
         model: String,
     ): List<String?> = withContext(Dispatchers.IO) {
@@ -350,9 +356,17 @@ object PageTranslator {
                 put(JSONObject().apply { put("text", prompt) })
             }
             val contents = JSONArray().apply {
-                put(JSONObject().apply { put("parts", parts) })
+                put(
+                    JSONObject().apply {
+                        put("role", "user")
+                        put("parts", parts)
+                    },
+                )
             }
             put("contents", contents)
+            // The translator's rules travel as the system prompt; the dialogue
+            // and, in vision mode, the page image are the user turn.
+            put("systemInstruction", systemInstruction(systemPrompt, sourceLang, targetLang))
             put(
                 "generationConfig",
                 JSONObject().apply {
@@ -500,6 +514,21 @@ object PageTranslator {
         throw lastError ?: IllegalStateException("Todas las claves de API fallaron")
     }
 
+    /** The translator's rules travel outside the conversation, as the system prompt. */
+    private fun systemInstruction(
+        systemPrompt: String,
+        sourceLang: String,
+        targetLang: String,
+    ): JSONObject = JSONObject().apply {
+        val text = TranslatorSettings.formatGeminiPrompt(systemPrompt, sourceLang, targetLang)
+        put(
+            "parts",
+            JSONArray().apply {
+                put(JSONObject().apply { put("text", text) })
+            },
+        )
+    }
+
     private fun candidateText(root: JSONObject): String {
         val blockReason = root.optJSONObject("promptFeedback")?.optString("blockReason").orEmpty()
         if (blockReason.isNotBlank()) {
@@ -535,6 +564,7 @@ object PageTranslator {
         val source: String?,
         val translated: String,
         val rect: Rect?,
+        val isSfx: Boolean = false,
     )
 
     /**
@@ -549,6 +579,7 @@ object PageTranslator {
         sourceLang: String,
         targetLang: String,
         promptTemplate: String,
+        systemPrompt: String,
         apiKeys: List<String>,
         model: String,
     ): VisionResult = withContext(Dispatchers.IO) {
@@ -578,7 +609,7 @@ object PageTranslator {
 
         val requestJson = JSONObject().apply {
             val parts = JSONArray().apply {
-                put(JSONObject().apply { put("text", prompt) })
+                // The page is the user turn: image first, then the task.
                 put(
                     JSONObject().apply {
                         put(
@@ -590,13 +621,20 @@ object PageTranslator {
                         )
                     },
                 )
+                put(JSONObject().apply { put("text", prompt) })
             }
             put(
                 "contents",
                 JSONArray().apply {
-                    put(JSONObject().apply { put("parts", parts) })
+                    put(
+                        JSONObject().apply {
+                            put("role", "user")
+                            put("parts", parts)
+                        },
+                    )
                 },
             )
+            put("systemInstruction", systemInstruction(systemPrompt, sourceLang, targetLang))
             put(
                 "generationConfig",
                 JSONObject().apply {
@@ -649,21 +687,32 @@ object PageTranslator {
         appendLine("   text. Do not invent text for it.")
         appendLine("4. If a sentence continues from one box into another box of the same balloon, join both ids in one entry.")
         appendLine("5. Every entry must also carry \"box\": [ymin, xmin, ymax, xmax], the normalised rectangle")
-        appendLine("   (0-1000) of the balloon itself. It must cover the balloon's text area only: not the whole")
-        appendLine("   panel, not the character's face, not the neighbouring balloon. The translated text is drawn")
-        appendLine("   exactly there, so follow the balloon outline and leave the balloon padding out.")
-        appendLine("6. Ignore text outside balloons (credits, watermarks, page numbers, store logos, meta commentary).")
-        appendLine("7. Use the whole page as context: short fragments are usually parts of the same line.")
-        appendLine("8. Do not add notes, romanisation or explanations.")
+        appendLine("   (0-1000) of the TEXT ITSELF, not of the balloon. Follow the lines of dialogue and leave out")
+        appendLine("   the balloon padding, the balloon tail, the character's face and the neighbouring balloon.")
+        appendLine("   The translation is centred inside that rectangle and, when the translated text is longer")
+        appendLine("   than the original, it grows upwards and downwards around the centre on its own, so keep")
+        appendLine("   the rectangle centred on the original text and cover only the text.")
+        appendLine("6. A balloon that only holds a sound effect, or that has no text at all, gets no entry:")
+        appendLine("   answer exactly \"REJECT\" for it.")
+        appendLine("7. Ignore text outside balloons: credits, watermarks, page numbers, store logos, meta")
+        appendLine("   commentary, shop signs, posters, book spines and text painted on the artwork.")
+        appendLine("8. Onomatopoeia painted on the artwork is not a balloon: return it as an \"extra\" entry with")
+        appendLine("   \"kind\": \"sfx\" and a short sound word (\"¡BAM!\", \"¡DOON!\"). It is lettered small and")
+        appendLine("   sideways, so never wrap it in a sentence.")
+        appendLine("9. Use the panel around each balloon to decide who is speaking: first or third person, and the")
+        appendLine("   gender of the speaker. Keep the same person and gender for every line of the conversation.")
+        appendLine("10. Do not add notes, romanisation or explanations.")
         appendLine()
         appendLine("Reply with JSON only, without prose or code fences:")
         append("{\"bubbles\":[{\"ids\":[1],\"box\":[ymin,xmin,ymax,xmax],\"source\":\"text as printed\",")
         append("\"text\":\"")
         append(TranslatorSettings.getLanguageName(targetLang))
-        append(" translation\"}],\"extra\":[{\"box\":[ymin,xmin,ymax,xmax],\"source\":\"...\",\"text\":\"...\"}]}")
+        append(" translation\",\"kind\":\"dialogue\"}],")
+        append("\"extra\":[{\"box\":[ymin,xmin,ymax,xmax],\"source\":\"...\",\"text\":\"...\",\"kind\":\"sfx\"}]}")
         appendLine()
-        appendLine("\"source\" is the text exactly as printed on the page. \"extra\" is optional and only for")
-        appendLine("balloons that have no numbered box at all. Use at most $MAX_EXTRA_BUBBLES extra entries.")
+        appendLine("\"source\" is the text exactly as printed on the page. \"kind\" is \"dialogue\" for speech and")
+        appendLine("\"sfx\" for onomatopoeia. \"extra\" is for balloons with no numbered box and for sound")
+        appendLine("effects painted on the artwork. Use at most $MAX_EXTRA_BUBBLES extra entries.")
     }
 
     private fun annotateForVision(bitmap: Bitmap, blocks: List<RawBlock>): Bitmap {
@@ -809,7 +858,13 @@ object PageTranslator {
                 entries += VisionEntry(ids, null, "", null)
                 continue
             }
-            entries += VisionEntry(ids, readSource(item), translated, readNormalizedRect(item, width, height))
+            entries += VisionEntry(
+                ids = ids,
+                source = readSource(item),
+                translated = translated,
+                rect = readNormalizedRect(item, width, height),
+                isSfx = readSfx(item),
+            )
         }
 
         var extraCount = 0
@@ -819,7 +874,13 @@ object PageTranslator {
             val translated = readText(item)
             if (translated.isBlank() || isReject(translated)) continue
             val rect = readNormalizedRect(item, width, height) ?: continue
-            entries += VisionEntry(emptyList(), readSource(item), translated, rect)
+            entries += VisionEntry(
+                ids = emptyList(),
+                source = readSource(item),
+                translated = translated,
+                rect = rect,
+                isSfx = readSfx(item),
+            )
             extraCount++
         }
 
@@ -878,6 +939,7 @@ object PageTranslator {
                 originalText = original,
                 translatedText = cleanMangaText(entry.translated),
                 boundingBox = clipped,
+                isSfx = entry.isSfx,
             )
         }
 
@@ -951,6 +1013,16 @@ object PageTranslator {
 
     private fun readSource(item: JSONObject): String? = listOf("source", "original", "原文")
         .firstNotNullOfOrNull { key -> item.optString(key).takeIf { it.isNotBlank() } }
+
+    /** Onomatopoeia is lettered differently: small and sideways, with no balloon. */
+    private fun readSfx(item: JSONObject): Boolean {
+        val kind = item.optString("kind")
+            .ifBlank { item.optString("type") }
+            .trim()
+            .lowercase()
+        return kind == "sfx" || kind == "onomatopoeia" || kind == "sound" ||
+            item.optBoolean("sfx", false)
+    }
 
     private fun readNormalizedRect(item: JSONObject, width: Int, height: Int): Rect? {
         val array = item.optJSONArray("box") ?: item.optJSONArray("bbox")

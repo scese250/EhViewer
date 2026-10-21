@@ -25,6 +25,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -72,6 +76,7 @@ fun TranslationOverlay(
     dynamicBubbleSize: Boolean = true,
     bubbleOrientation: String = TranslatorSettings.ORIENTATION_VERTICAL,
     bubbleShape: String = TranslatorSettings.SHAPE_OVAL,
+    bubbleStyle: String = TranslatorSettings.STYLE_FILL,
     bubblePadding: String = TranslatorSettings.PADDING_COMPACT,
     uppercaseScanlation: Boolean = true,
     preventCollisions: Boolean = true,
@@ -79,6 +84,7 @@ fun TranslationOverlay(
     collisionIterations: Int = 40,
     maxCollisionShift: Float = 0.30f,
     borderThickness: Float = 1.2f,
+    outlineWidth: Float = 3f,
     fitMode: OverlayFitMode = OverlayFitMode.INSIDE,
     isManipulationEnabled: Boolean = false,
     onBubbleClick: (TranslatedBubble) -> Unit,
@@ -333,9 +339,11 @@ fun TranslationOverlay(
                     bubbleOpacity = bubbleOpacity,
                     dynamicBubbleSize = dynamicBubbleSize,
                     bubbleShape = bubbleShape,
+                    bubbleStyle = bubbleStyle,
                     bubblePadding = bubblePadding,
                     uppercaseScanlation = uppercaseScanlation,
                     borderThickness = borderThickness,
+                    outlineWidth = outlineWidth,
                     isManipulationEnabled = isManipulationEnabled,
                     onBubbleClick = onBubbleClick,
                     onBubbleUpdated = onBubbleUpdated,
@@ -354,9 +362,11 @@ private fun DynamicBubbleView(
     bubbleOpacity: Float,
     dynamicBubbleSize: Boolean,
     bubbleShape: String,
+    bubbleStyle: String,
     bubblePadding: String,
     uppercaseScanlation: Boolean,
     borderThickness: Float,
+    outlineWidth: Float,
     isManipulationEnabled: Boolean,
     onBubbleClick: (TranslatedBubble) -> Unit,
     onBubbleUpdated: (TranslatedBubble) -> Unit,
@@ -406,11 +416,23 @@ private fun DynamicBubbleView(
     val currentCenterX = layout.centerX + with(density) { liveOffsetX.dp.toPx() }
     val currentCenterY = layout.centerY + with(density) { liveOffsetY.dp.toPx() }
 
-    val boxLeft = (currentCenterX - liveWidthPx / 2f).coerceIn(0f, (containerWidthPx - liveWidthPx).coerceAtLeast(0f))
-    val boxTop = (currentCenterY - liveHeightPx / 2f).coerceIn(0f, (containerHeightPx - liveHeightPx).coerceAtLeast(0f))
+    // Onomatopoeia is not a balloon: a small square is enough, so a page full
+    // of sound effects is not buried under white boxes.
+    val boxWidthPx = if (bubble.isSfx) {
+        minOf(liveWidthPx, liveHeightPx).coerceIn(
+            with(density) { 22.dp.toPx() },
+            with(density) { 110.dp.toPx() },
+        )
+    } else {
+        liveWidthPx
+    }
+    val boxHeightPx = if (bubble.isSfx) boxWidthPx else liveHeightPx
 
-    val targetWidthDp = with(density) { liveWidthPx.toDp() }
-    val targetHeightDp = with(density) { liveHeightPx.toDp() }
+    val boxLeft = (currentCenterX - boxWidthPx / 2f).coerceIn(0f, (containerWidthPx - boxWidthPx).coerceAtLeast(0f))
+    val boxTop = (currentCenterY - boxHeightPx / 2f).coerceIn(0f, (containerHeightPx - boxHeightPx).coerceAtLeast(0f))
+
+    val targetWidthDp = with(density) { boxWidthPx.toDp() }
+    val targetHeightDp = with(density) { boxHeightPx.toDp() }
 
     val bubbleShapeDrawable = when (bubbleShape) {
         TranslatorSettings.SHAPE_OVAL -> RoundedCornerShape(percent = 45)
@@ -419,9 +441,16 @@ private fun DynamicBubbleView(
         else -> RoundedCornerShape(percent = 45)
     }
 
+    val outlineMode = bubbleStyle == TranslatorSettings.STYLE_OUTLINE
+
     val borderModifier = when {
         isManipulationEnabled -> {
             Modifier.border(2.dp, MaterialTheme.colorScheme.primary, bubbleShapeDrawable)
+        }
+        // No balloon at all: neither for onomatopoeia nor for the thick white
+        // text outline mode.
+        bubble.isSfx || outlineMode -> {
+            Modifier
         }
         bubbleShape == TranslatorSettings.SHAPE_BORDERLESS || borderThickness <= 0.05f -> {
             Modifier
@@ -532,44 +561,100 @@ private fun DynamicBubbleView(
         else -> Pair(9.dp, 5.dp)
     }
 
+    val contentFontSp = if (bubble.isSfx) {
+        (targetWidthDp.value * 0.20f).coerceIn(8f, 15f)
+    } else {
+        layout.fontSizeSp
+    }
+    val textStyle = TextStyle(
+        fontSize = contentFontSp.sp,
+        lineHeight = (contentFontSp * 1.16f).sp,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Center,
+        lineBreak = LineBreak.Heading,
+        hyphens = Hyphens.None,
+    )
+    val strokePx = with(density) { outlineWidth.dp.toPx() }.coerceAtLeast(1f)
+    val maxLines = when {
+        // A sound word is short: more lines would overflow the small square.
+        bubble.isSfx -> 2
+        dynamicBubbleSize -> Int.MAX_VALUE
+        else -> 14
+    }
+
     Box(
         modifier = Modifier
             .offset { IntOffset(boxLeft.roundToInt(), boxTop.roundToInt()) }
             .width(targetWidthDp)
             .then(
-                if (dynamicBubbleSize) {
+                if (dynamicBubbleSize && !bubble.isSfx) {
                     // At least the measured height (so the original balloon is
                     // covered), but allowed to grow if the text needs more room.
+                    // The box stays centred on the balloon while it grows, so it
+                    // expands upwards and downwards at the same time.
                     Modifier.heightIn(min = targetHeightDp)
                 } else {
                     Modifier.height(targetHeightDp)
                 },
             )
             .onSizeChanged { size ->
-                if (size.height > 0) {
+                if (!bubble.isSfx && size.height > 0) {
                     measuredHeightPx = size.height.toFloat()
                 }
             }
-            .background(Color.White.copy(alpha = bubbleOpacity), bubbleShapeDrawable)
+            .then(
+                if (bubble.isSfx || outlineMode) {
+                    Modifier
+                } else {
+                    Modifier.background(Color.White.copy(alpha = bubbleOpacity), bubbleShapeDrawable)
+                },
+            )
             .then(borderModifier)
             .then(touchModifier)
-            .padding(horizontal = hPadDp, vertical = vPadDp),
+            .padding(
+                horizontal = if (bubble.isSfx) 0.dp else hPadDp,
+                vertical = if (bubble.isSfx) 0.dp else vPadDp,
+            ),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = displayText,
-            color = Color.Black,
-            style = TextStyle(
-                fontSize = layout.fontSizeSp.sp,
-                lineHeight = (layout.fontSizeSp * 1.16f).sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                lineBreak = LineBreak.Heading,
-                hyphens = Hyphens.None,
-            ),
-            softWrap = true,
-            maxLines = if (dynamicBubbleSize) Int.MAX_VALUE else 14,
-        )
+        if (outlineMode || bubble.isSfx) {
+            // The letters are drawn twice, a thick stroke first and the fill on
+            // top, so the translation stays readable over the artwork.
+            Box(
+                // Onomatopoeia is lettered sideways, as in the original page.
+                modifier = if (bubble.isSfx) Modifier.graphicsLayer { rotationZ = 90f } else Modifier,
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = displayText,
+                    color = if (bubble.isSfx) Color.Black else Color.White,
+                    style = textStyle.copy(
+                        drawStyle = Stroke(
+                            width = strokePx,
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round,
+                        ),
+                    ),
+                    softWrap = true,
+                    maxLines = maxLines,
+                )
+                Text(
+                    text = displayText,
+                    color = if (bubble.isSfx) Color.White else Color.Black,
+                    style = textStyle,
+                    softWrap = true,
+                    maxLines = maxLines,
+                )
+            }
+        } else {
+            Text(
+                text = displayText,
+                color = Color.Black,
+                style = textStyle,
+                softWrap = true,
+                maxLines = maxLines,
+            )
+        }
     }
 }
 

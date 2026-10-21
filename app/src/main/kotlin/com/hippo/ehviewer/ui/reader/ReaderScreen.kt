@@ -446,6 +446,11 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
             status = translatorState.status(currentPage),
             translation = translatorState.translations[currentPage],
             onTranslateCurrent = { manualTranslateRequest++ },
+            onRetranslateNext = { count ->
+                // Drops the cached copies of the following pages and translates
+                // them again with the current settings.
+                launch { translatorState.retranslateFollowing(currentPage, count) }
+            },
             onDismiss = {
                 translatorSettings.save()
                 showTranslationSettings = false

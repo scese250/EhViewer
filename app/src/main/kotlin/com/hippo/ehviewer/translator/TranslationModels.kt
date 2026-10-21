@@ -13,6 +13,12 @@ data class TranslatedBubble(
     val offsetX: Float = 0f,
     val offsetY: Float = 0f,
     val isVertical: Boolean? = null,
+    /**
+     * Onomatopoeia read from the artwork (not from a balloon). It is drawn
+     * small and sideways with no white bubble, so a page full of sound effects
+     * does not get covered with boxes.
+     */
+    val isSfx: Boolean = false,
 )
 
 data class PageTranslation(

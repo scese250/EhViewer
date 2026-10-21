@@ -61,9 +61,11 @@ fun TranslatorSettingsDialog(
     status: TranslationStatus,
     translation: PageTranslation?,
     onTranslateCurrent: () -> Unit,
+    onRetranslateNext: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val batchLimit = maxBatchSize.coerceAtLeast(1)
+    val retranslateCount = minOf(settings.batchSize, batchLimit).coerceAtLeast(1)
     LaunchedEffect(batchLimit) {
         if (settings.batchSize > batchLimit) settings.batchSize = batchLimit
     }
@@ -110,6 +112,22 @@ fun TranslatorSettingsDialog(
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                OutlinedButton(
+                    onClick = { onRetranslateNext(retranslateCount) },
+                    enabled = !status.isBusy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Retraducir las siguientes $retranslateCount páginas")
+                }
+                Text(
+                    text = "Borra la copia guardada de esas páginas y las vuelve a leer con la configuración actual, " +
+                        "sin salir de la galería. Útil para probar un prompt nuevo.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
 
                 Spacer(modifier = Modifier.height(12.dp))
                 HorizontalDivider()
@@ -366,14 +384,51 @@ fun TranslatorSettingsDialog(
 
                             Spacer(modifier = Modifier.height(10.dp))
 
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "Instrucciones del sistema:",
+                                    fontWeight = FontWeight.SemiBold,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                TextButton(
+                                    onClick = { settings.geminiSystemPrompt = TranslatorSettings.DEFAULT_SYSTEM_PROMPT },
+                                ) {
+                                    Text("Restablecer", fontSize = 11.sp)
+                                }
+                            }
+
+                            OutlinedTextField(
+                                value = settings.geminiSystemPrompt,
+                                onValueChange = { settings.geminiSystemPrompt = it },
+                                label = { Text("Reglas del traductor (system prompt)") },
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 5,
+                                maxLines = 14,
+                            )
+
+                            Text(
+                                text = "💡 Estas reglas se envían como system prompt; la imagen de la página y la tarea de " +
+                                    "maquetación van como turno del usuario. Puedes cambiarlas: pronombres y género según el " +
+                                    "panel, futanari siempre femenino, términos H (\"Ya voy\" → \"Me vengo\"), no traducir " +
+                                    "carteles ni texto decorativo, y REJECT cuando el globo no tiene diálogo.",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
                             HorizontalDivider()
                             Spacer(modifier = Modifier.height(10.dp))
 
                             SettingSwitch(
                                 title = "Lectura visual de la página",
                                 subtitle = "Gemini recibe la página con una cuadrícula y los cuadros numerados: lee el " +
-                                    "texto real, ajusta cada globo al texto, une globos partidos en dos y descarta " +
-                                    "los cuadros falsos.",
+                                    "texto real, ajusta cada globo al texto, une globos partidos en dos, dibuja las " +
+                                    "onomatopeyas de lado y descarta los cuadros falsos.",
                                 checked = settings.geminiVision,
                                 onCheckedChange = { settings.geminiVision = it },
                             )
@@ -503,6 +558,49 @@ fun TranslatorSettingsDialog(
                         selected = settings.bubbleShape == TranslatorSettings.SHAPE_BORDERLESS,
                         onClick = { settings.bubbleShape = TranslatorSettings.SHAPE_BORDERLESS },
                         label = { Text("Sin Borde", fontSize = 11.sp) },
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Fondo del bocadillo: relleno blanco o solo contorno de las letras
+                Text(
+                    text = "Fondo del texto:",
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    FilterChip(
+                        selected = settings.bubbleStyle == TranslatorSettings.STYLE_FILL,
+                        onClick = { settings.bubbleStyle = TranslatorSettings.STYLE_FILL },
+                        label = { Text("Burbuja blanca", fontSize = 11.sp) },
+                    )
+                    FilterChip(
+                        selected = settings.bubbleStyle == TranslatorSettings.STYLE_OUTLINE,
+                        onClick = { settings.bubbleStyle = TranslatorSettings.STYLE_OUTLINE },
+                        label = { Text("Solo contorno grueso", fontSize = 11.sp) },
+                    )
+                }
+                Text(
+                    text = if (settings.bubbleStyle == TranslatorSettings.STYLE_OUTLINE) {
+                        "Sin burbuja: las letras se dibujan con un borde blanco muy grueso, para no tapar el dibujo."
+                    } else {
+                        "Bocadillo blanco clásico con el texto negro encima."
+                    },
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                if (settings.bubbleStyle == TranslatorSettings.STYLE_OUTLINE) {
+                    SettingSlider(
+                        label = "Grosor del contorno: ${"%.1f".format(settings.outlineWidth)}dp",
+                        value = settings.outlineWidth,
+                        valueRange = 1f..8f,
+                        onValueChange = { settings.outlineWidth = it },
                     )
                 }
 
@@ -929,6 +1027,8 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
             } else {
                 buildString {
                     append("${page.bubbles.size} viñetas · ${page.engineName}")
+                    val sfxCount = page.bubbles.count { it.isSfx }
+                    if (sfxCount > 0) append(" · $sfxCount SFX")
                     if (page.mergedBoxes > 0) append(" · ${page.mergedBoxes} fusionadas")
                     if (page.discardedBoxes > 0) append(" · ${page.discardedBoxes} descartadas")
                     append("\nOCR ${page.ocrDurationMs} ms · Traducción ${page.translateDurationMs} ms")
