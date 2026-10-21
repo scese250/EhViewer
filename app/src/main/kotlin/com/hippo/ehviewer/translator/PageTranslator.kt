@@ -69,31 +69,50 @@ object PageTranslator {
         geminiModel: String = TranslatorSettings.DEFAULT_GEMINI_MODEL,
         grouping: BubbleGroupingConfig = BubbleGroupingConfig(),
         visionMode: Boolean = true,
+        skipOcr: Boolean = false,
         onPhase: (Phase) -> Unit = {},
     ): PageTranslation = withContext(Dispatchers.Default) {
-        onPhase(Phase.OCR)
-        var visionText: Text
-        val ocrTime = measureTimeMillis {
-            val inputImage = InputImage.fromBitmap(bitmap, 0)
-            visionText = recognizer.processImage(inputImage)
+        val gemini = engine == TranslatorSettings.ENGINE_GEMINI && geminiApiKeys.isNotEmpty()
+        // Without the local OCR there are neither hint boxes nor fallback text,
+        // so this mode only makes sense when the vision model can be called.
+        val ocrSkipped = skipOcr && gemini
+
+        suspend fun recognize(): Pair<List<RawBlock>, Long> {
+            var visionText: Text? = null
+            val ms = measureTimeMillis {
+                visionText = recognizer.processImage(InputImage.fromBitmap(bitmap, 0))
+            }
+            val blocks = visionText?.textBlocks.orEmpty()
+                .filter { block ->
+                    block.text.isNotBlank() &&
+                        (block.boundingBox?.width() ?: 0) > 8 &&
+                        (block.boundingBox?.height() ?: 0) > 8
+                }
+                .map { block ->
+                    RawBlock(
+                        text = block.text.replace("\n", " ").trim(),
+                        rect = block.boundingBox ?: Rect(),
+                    )
+                }
+            return blocks to ms
         }
 
-        val rawBlocks = visionText.textBlocks.filter { block ->
-            block.text.isNotBlank() && (block.boundingBox?.width() ?: 0) > 8 && (block.boundingBox?.height() ?: 0) > 8
-        }.map { block ->
-            RawBlock(
-                text = block.text.replace("\n", " ").trim(),
-                rect = block.boundingBox ?: Rect(),
-            )
+        var rawBlocks: List<RawBlock> = emptyList()
+        var ocrTime = 0L
+        var mergedBlocks: List<RawBlock> = emptyList()
+        if (!ocrSkipped) {
+            onPhase(Phase.OCR)
+            val (blocks, ms) = recognize()
+            rawBlocks = blocks
+            ocrTime = ms
+            // Stitch the per-column OCR fragments of every balloon back
+            // together. Without this a single vertical bubble is translated
+            // twice and drawn as two overlapping boxes. Keep the raw blocks if
+            // analysis fails so a detection bug can never break translation.
+            mergedBlocks = runCatching {
+                BubbleDetector.group(rawBlocks, bitmap, grouping)
+            }.getOrElse { rawBlocks }
         }
-
-        // Stitch the per-column OCR fragments of every balloon back together.
-        // Without this a single vertical bubble is translated twice and drawn
-        // as two overlapping boxes. Keep the raw blocks if analysis fails so a
-        // detection bug can never break translation completely.
-        val mergedBlocks = runCatching {
-            BubbleDetector.group(rawBlocks, bitmap, grouping)
-        }.getOrElse { rawBlocks }
 
         var bubbles: List<TranslatedBubble> = emptyList()
         var engineUsed = "Google"
@@ -105,16 +124,17 @@ object PageTranslator {
         }
 
         val transTime = measureTimeMillis {
-            if (engine == TranslatorSettings.ENGINE_GEMINI && geminiApiKeys.isNotEmpty()) {
+            if (gemini) {
                 var translated = false
                 var visionFailure: Exception? = null
 
-                if (visionMode) {
+                if (visionMode || ocrSkipped) {
                     onPhase(Phase.VISION)
                     try {
                         val result = translateWithGeminiVision(
                             bitmap = bitmap,
                             blocks = mergedBlocks,
+                            noHints = ocrSkipped,
                             sourceLang = sourceLang,
                             targetLang = targetLang,
                             promptTemplate = promptTemplate,
@@ -125,7 +145,11 @@ object PageTranslator {
                         bubbles = result.bubbles
                         mergedBoxes = result.mergedBoxes
                         discardedBoxes = result.discardedBoxes
-                        engineUsed = "Gemini visión (${geminiModel.removePrefix("gemini-")})"
+                        engineUsed = if (ocrSkipped) {
+                            "Gemini sin OCR (${geminiModel.removePrefix("gemini-")})"
+                        } else {
+                            "Gemini visión (${geminiModel.removePrefix("gemini-")})"
+                        }
                         translated = true
                     } catch (e: CancellationException) {
                         throw e
@@ -135,6 +159,17 @@ object PageTranslator {
                 }
 
                 if (!translated) {
+                    // With the OCR skipped there is no text to fall back to:
+                    // run ML Kit now so the rescue path can still translate.
+                    if (ocrSkipped && rawBlocks.isEmpty()) {
+                        onPhase(Phase.OCR)
+                        val (blocks, ms) = recognize()
+                        rawBlocks = blocks
+                        ocrTime += ms
+                        mergedBlocks = runCatching {
+                            BubbleDetector.group(rawBlocks, bitmap, grouping)
+                        }.getOrElse { rawBlocks }
+                    }
                     onPhase(Phase.TRANSLATE)
                     try {
                         bubbles = translateWithGeminiText(
@@ -576,6 +611,7 @@ object PageTranslator {
     private suspend fun translateWithGeminiVision(
         bitmap: Bitmap,
         blocks: List<RawBlock>,
+        noHints: Boolean = false,
         sourceLang: String,
         targetLang: String,
         promptTemplate: String,
@@ -605,7 +641,7 @@ object PageTranslator {
             sourceLang = sourceLang,
             targetLang = targetLang,
         )
-        val prompt = buildVisionPrompt(instruction, targetLang, blocks.size)
+        val prompt = buildVisionPrompt(instruction, targetLang, blocks.size, noHints)
 
         val requestJson = JSONObject().apply {
             val parts = JSONArray().apply {
@@ -654,34 +690,54 @@ object PageTranslator {
         }
 
         val root = postGemini(apiKeys, model, requestJson, GEMINI_VISION_READ_TIMEOUT_MS)
-        parseVisionResult(candidateText(root), blocks, bitmap.width, bitmap.height)
+        parseVisionResult(
+            raw = candidateText(root),
+            blocks = blocks,
+            width = bitmap.width,
+            height = bitmap.height,
+            maxExtras = if (noHints) MAX_EXTRA_BUBBLES * 2 else MAX_EXTRA_BUBBLES,
+        )
     }
 
     private fun buildVisionPrompt(
         instruction: String,
         targetLang: String,
         boxCount: Int,
+        noHints: Boolean = false,
     ): String = buildString {
         appendLine(instruction)
         appendLine()
-        appendLine("You are ALSO the OCR engine and the bubble layout engine for this manga page: the attached")
-        appendLine("image is the complete page.")
-        appendLine("A weak OCR has drawn numbered red boxes over the places where it thinks text may be.")
-        appendLine("Those boxes are only hints; their text is not given to you and both their position and their")
-        appendLine("size may be wrong. Look at the page yourself, read the text that is really inside each place,")
-        appendLine("translate it, and measure the area the translated text must cover.")
+        if (noHints) {
+            appendLine("You are the OCR engine and the lettering engine for this manga page: the attached image is")
+            appendLine("the complete page and it carries no machine boxes. Find every speech balloon and every")
+            appendLine("caption box yourself, read the text that is really inside it, translate it and measure the")
+            appendLine("area the translated text must cover. Nothing was detected for you, so a balloon you miss is")
+            appendLine("a balloon that stays untranslated.")
+        } else {
+            appendLine("You are ALSO the OCR engine and the bubble layout engine for this manga page: the attached")
+            appendLine("image is the complete page.")
+            appendLine("A weak OCR has drawn numbered red boxes over the places where it thinks text may be.")
+            appendLine("Those boxes are only hints; their text is not given to you and both their position and their")
+            appendLine("size may be wrong. Look at the page yourself, read the text that is really inside each place,")
+            appendLine("translate it, and measure the area the translated text must cover.")
+        }
         appendLine("A blue grid is drawn over the page: 10 x 10 cells, each cell 100 units wide, with the")
         appendLine("normalised coordinate (0-1000) printed along the top and left edges. Use it as a ruler.")
-        if (boxCount == 0) {
+        if (!noHints && boxCount == 0) {
             appendLine("This page has no numbered boxes: recover every speech balloon you can see with \"extra\".")
         }
         appendLine()
         appendLine("Rules:")
         appendLine("1. Return one entry per speech balloon of the finished page, in reading order")
         appendLine("   (Japanese manga: right to left, top to bottom).")
-        appendLine("2. \"ids\" lists every numbered box that belongs to that balloon. If one balloon was split into")
-        appendLine("   two boxes (for example 1 and 2), return a SINGLE entry with \"ids\": [1, 2] and the whole")
-        appendLine("   text of the balloon. Never return two entries for the same balloon.")
+        if (noHints) {
+            appendLine("2. There are no numbered boxes here: put every balloon in \"bubbles\" and leave \"ids\" empty")
+            appendLine("   ([]). Never return two entries for the same balloon.")
+        } else {
+            appendLine("2. \"ids\" lists every numbered box that belongs to that balloon. If one balloon was split into")
+            appendLine("   two boxes (for example 1 and 2), return a SINGLE entry with \"ids\": [1, 2] and the whole")
+            appendLine("   text of the balloon. Never return two entries for the same balloon.")
+        }
         appendLine("3. If a box has no readable dialogue (it landed on artwork, on a sound effect, or it is a")
         appendLine("   duplicate fragment of another box), do not translate it: answer exactly \"REJECT\" in its")
         appendLine("   text. Do not invent text for it.")
@@ -704,7 +760,9 @@ object PageTranslator {
         appendLine("10. Do not add notes, romanisation or explanations.")
         appendLine()
         appendLine("Reply with JSON only, without prose or code fences:")
-        append("{\"bubbles\":[{\"ids\":[1],\"box\":[ymin,xmin,ymax,xmax],\"source\":\"text as printed\",")
+        append("{\"bubbles\":[{\"ids\":")
+        append(if (noHints) "[]" else "[1]")
+        append(",\"box\":[ymin,xmin,ymax,xmax],\"source\":\"text as printed\",")
         append("\"text\":\"")
         append(TranslatorSettings.getLanguageName(targetLang))
         append(" translation\",\"kind\":\"dialogue\"}],")
@@ -712,7 +770,7 @@ object PageTranslator {
         appendLine()
         appendLine("\"source\" is the text exactly as printed on the page. \"kind\" is \"dialogue\" for speech and")
         appendLine("\"sfx\" for onomatopoeia. \"extra\" is for balloons with no numbered box and for sound")
-        appendLine("effects painted on the artwork. Use at most $MAX_EXTRA_BUBBLES extra entries.")
+        appendLine("effects painted on the artwork. Use at most ${if (noHints) MAX_EXTRA_BUBBLES * 2 else MAX_EXTRA_BUBBLES} extra entries.")
     }
 
     private fun annotateForVision(bitmap: Bitmap, blocks: List<RawBlock>): Bitmap {
@@ -807,15 +865,26 @@ object PageTranslator {
         }
         val pad = label.textSize * 0.25f
         val boxHeight = label.textSize + pad * 2
-        for (value in 0..1000 step 200) {
+        // One label per grid line (every 100 units) on all four edges: four
+        // times the reference points of the old 200-step, two-edge ruler, with
+        // no extra line drawn over the artwork. Corners are shared by two
+        // rulers, so the duplicate label is skipped instead of stacking.
+        for (value in 0..1000 step 100) {
             val text = value.toString()
             val boxWidth = label.measureText(text) + pad * 2
-            // Along the top edge...
             val x = (width * value / 1000f - boxWidth / 2f).coerceIn(0f, (width - boxWidth).coerceAtLeast(0f))
-            drawGridLabel(canvas, backing, label, text, x, 0f, boxWidth, boxHeight)
-            // ...and down the left edge.
             val y = (height * value / 1000f - boxHeight / 2f).coerceIn(0f, (height - boxHeight).coerceAtLeast(0f))
-            drawGridLabel(canvas, backing, label, text, 0f, y, boxWidth, boxHeight)
+            // Top edge (x ruler) and left edge (y ruler, first corner only).
+            drawGridLabel(canvas, backing, label, text, x, 0f, boxWidth, boxHeight)
+            if (value > 0) drawGridLabel(canvas, backing, label, text, 0f, y, boxWidth, boxHeight)
+            // Bottom edge, minus the corner the left ruler already labels.
+            if (value > 0) {
+                drawGridLabel(canvas, backing, label, text, x, height - boxHeight, boxWidth, boxHeight)
+            }
+            // Right edge, minus both corners shared with the x rulers.
+            if (value in 100..900) {
+                drawGridLabel(canvas, backing, label, text, width - boxWidth, y, boxWidth, boxHeight)
+            }
         }
     }
 
@@ -839,6 +908,7 @@ object PageTranslator {
         blocks: List<RawBlock>,
         width: Int,
         height: Int,
+        maxExtras: Int = MAX_EXTRA_BUBBLES,
     ): VisionResult {
         val root = runCatching { extractJsonObject(raw) }.getOrElse {
             JSONObject().put("bubbles", extractJsonArray(raw))
@@ -869,7 +939,7 @@ object PageTranslator {
 
         var extraCount = 0
         for (i in 0 until extras.length()) {
-            if (extraCount >= MAX_EXTRA_BUBBLES) break
+            if (extraCount >= maxExtras) break
             val item = extras.optJSONObject(i) ?: continue
             val translated = readText(item)
             if (translated.isBlank() || isReject(translated)) continue
@@ -925,8 +995,10 @@ object PageTranslator {
                 bottom = bottom.coerceIn(0, height)
             }
             if (clipped.width() < 4 || clipped.height() < 4) continue
-            // A guessed extra box that lands on an existing balloon is a duplicate.
-            if (entry.ids.isEmpty() && accepted.any { Rect.intersects(it, clipped) }) continue
+            // A box without ids that sits almost exactly on an existing balloon
+            // is a duplicate. A small touch is not: neighbouring balloons of a
+            // page read without OCR often share a few pixels and are real.
+            if (entry.ids.isEmpty() && accepted.any { it.overlapsMostly(clipped) }) continue
 
             entry.ids.forEach { id -> if (id in 1..blocks.size) used += id }
             if (entry.ids.size > 1) mergedBoxes++
@@ -955,6 +1027,17 @@ object PageTranslator {
             mergedBoxes = mergedBoxes,
             discardedBoxes = blocks.indices.count { (it + 1) !in used },
         )
+    }
+
+    /** True when both rectangles cover most of the same area. */
+    private fun Rect.overlapsMostly(other: Rect): Boolean {
+        val overlapX = min(right, other.right) - max(left, other.left)
+        val overlapY = min(bottom, other.bottom) - max(top, other.top)
+        if (overlapX <= 0 || overlapY <= 0) return false
+        val overlap = overlapX.toLong() * overlapY
+        val smaller = min(width().toLong() * height(), other.width().toLong() * other.height())
+            .coerceAtLeast(1L)
+        return overlap * 10 >= smaller * 6
     }
 
     private fun Rect.isPlausibleBubble(pageWidth: Int, pageHeight: Int): Boolean {

@@ -50,6 +50,13 @@ class TranslatorSettings(context: Context) {
      * instead of trusting the OCR transcription.
      */
     var geminiVision by mutableStateOf(prefs.getBoolean("gemini_vision", true))
+
+    /**
+     * Skips ML Kit and lets the vision model find the balloons itself. Faster
+     * and immune to OCR failures, but without local boxes there is no safety
+     * net: if the model misreads the page, nothing is drawn.
+     */
+    var skipOcr by mutableStateOf(prefs.getBoolean("skip_ocr", false))
     var bubbleOrientation by mutableStateOf(
         prefs.getString("bubble_orientation", ORIENTATION_VERTICAL) ?: ORIENTATION_VERTICAL,
     )
@@ -111,6 +118,7 @@ class TranslatorSettings(context: Context) {
         append('|').append(geminiSystemPrompt.hashCode())
         append('|').append(geminiApiKeysRaw.hashCode())
         append('|').append(if (geminiVision) 1 else 0)
+        append('|').append(if (skipOcr) 1 else 0)
         append('|').append(if (mergeBubbleColumns) 1 else 0)
         append('|').append((maxColumnGapRatio * 1000).toInt())
         append('|').append((minColumnOverlap * 1000).toInt())
@@ -152,6 +160,7 @@ class TranslatorSettings(context: Context) {
             .putString("bubble_style", bubbleStyle)
             .putFloat("outline_width", outlineWidth)
             .putBoolean("gemini_vision", geminiVision)
+            .putBoolean("skip_ocr", skipOcr)
             .putString("bubble_orientation", bubbleOrientation)
             .putString("bubble_shape", bubbleShape)
             .putString("bubble_padding", bubblePadding)

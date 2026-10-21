@@ -201,6 +201,7 @@ class ReaderTranslationState(
                     geminiModel = settings.geminiModel,
                     grouping = settings.groupingConfig(),
                     visionMode = settings.geminiVision,
+                    skipOcr = settings.skipOcr,
                     onPhase = { phase ->
                         statuses[index] = when (phase) {
                             PageTranslator.Phase.OCR -> TranslationStatus.RecognizingText

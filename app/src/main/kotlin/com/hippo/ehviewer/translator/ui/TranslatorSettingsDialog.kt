@@ -430,7 +430,11 @@ fun TranslatorSettingsDialog(
                                     "texto real, ajusta cada globo al texto, une globos partidos en dos, dibuja las " +
                                     "onomatopeyas de lado y descarta los cuadros falsos.",
                                 checked = settings.geminiVision,
-                                onCheckedChange = { settings.geminiVision = it },
+                                onCheckedChange = {
+                                    settings.geminiVision = it
+                                    // Sin lectura visual no hay nada que sustituya al OCR.
+                                    if (!it) settings.skipOcr = false
+                                },
                             )
 
                             if (settings.geminiVision) {
@@ -441,6 +445,22 @@ fun TranslatorSettingsDialog(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            SettingSwitch(
+                                title = "Omitir el OCR (solo IA)",
+                                subtitle = "No se ejecuta ML Kit: la página se envía con la cuadrícula y la IA " +
+                                    "encuentra y coloca todas las burbujas. Ahorra el OCR y esquiva sus fallos, " +
+                                    "pero no hay cuadros de respaldo si la IA se equivoca; si la llamada falla, " +
+                                    "se hace el OCR y se usa el modo texto.",
+                                checked = settings.skipOcr,
+                                onCheckedChange = {
+                                    settings.skipOcr = it
+                                    // El modo sin OCR necesita la lectura visual.
+                                    if (it) settings.geminiVision = true
+                                },
+                            )
 
                             Spacer(modifier = Modifier.height(10.dp))
 
