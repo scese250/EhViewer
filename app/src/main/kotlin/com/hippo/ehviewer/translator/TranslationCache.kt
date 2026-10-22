@@ -156,10 +156,13 @@ object TranslationCache {
                                         put("b", bubble.boundingBox.bottom)
                                         put("ws", bubble.widthScale.toDouble())
                                         put("hs", bubble.heightScale.toDouble())
-                                        put("fs", bubble.customFontSizeSp?.toDouble() ?: JSONObject.NULL)
+                                        // Optional values are omitted, never stored as
+                                        // null: JSONObject.has() is true for a null
+                                        // and optDouble() turns it into NaN.
+                                        bubble.customFontSizeSp?.let { put("fs", it.toDouble()) }
                                         put("ox", bubble.offsetX.toDouble())
                                         put("oy", bubble.offsetY.toDouble())
-                                        put("iv", bubble.isVertical ?: JSONObject.NULL)
+                                        bubble.isVertical?.let { put("iv", it) }
                                         put("sfx", bubble.isSfx)
                                         put("exact", bubble.exactBox)
                                     },
@@ -210,12 +213,19 @@ object TranslationCache {
                     bubble.optInt("r"),
                     bubble.optInt("b"),
                 ),
-                widthScale = bubble.optDouble("ws", 1.0).toFloat(),
-                heightScale = bubble.optDouble("hs", 1.0).toFloat(),
-                customFontSizeSp = if (bubble.has("fs")) bubble.optDouble("fs").toFloat() else null,
-                offsetX = bubble.optDouble("ox", 0.0).toFloat(),
-                offsetY = bubble.optDouble("oy", 0.0).toFloat(),
-                isVertical = if (bubble.has("iv")) bubble.optBoolean("iv") else null,
+                // NaN/Infinity would poison every measurement in the overlay,
+                // so a corrupt value falls back to the neutral one.
+                widthScale = bubble.optDouble("ws", 1.0).toFloat()
+                    .takeIf { it.isFinite() && it > 0f } ?: 1f,
+                heightScale = bubble.optDouble("hs", 1.0).toFloat()
+                    .takeIf { it.isFinite() && it > 0f } ?: 1f,
+                // Older files stored a JSON null here, which reads back as NaN;
+                // a NaN font size used to crash the overlay while laying out.
+                customFontSizeSp = bubble.optDouble("fs").toFloat()
+                    .takeIf { bubble.has("fs") && !bubble.isNull("fs") && it.isFinite() && it > 0f },
+                offsetX = bubble.optDouble("ox", 0.0).toFloat().takeIf { it.isFinite() } ?: 0f,
+                offsetY = bubble.optDouble("oy", 0.0).toFloat().takeIf { it.isFinite() } ?: 0f,
+                isVertical = if (bubble.has("iv") && !bubble.isNull("iv")) bubble.optBoolean("iv") else null,
                 isSfx = bubble.optBoolean("sfx", false),
                 exactBox = bubble.optBoolean("exact", false),
             )

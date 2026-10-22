@@ -150,6 +150,21 @@ fun TranslatorSettingsDialog(
                     }
                 }
 
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Pausa de la traducción automática: vive fuera de las
+                // categorías porque se usa a mitad de lectura.
+                SettingSwitch(
+                    title = if (settings.autoTranslate) "Traducción automática: activa" else "Traducción automática: en pausa",
+                    subtitle = if (settings.autoTranslate) {
+                        "Traduce la página actual y las siguientes mientras lees. Toca para pausar."
+                    } else {
+                        "No se traduce nada solo; usa \"Traducir\" cuando lo quieras. Toca para reanudar."
+                    },
+                    checked = settings.autoTranslate,
+                    onCheckedChange = { settings.autoTranslate = it },
+                )
+
                 Spacer(modifier = Modifier.height(12.dp))
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(12.dp))
@@ -411,34 +426,29 @@ fun TranslatorSettingsDialog(
 
                                 Spacer(modifier = Modifier.height(10.dp))
 
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        text = "Plantilla de Prompt IA:",
-                                        fontWeight = FontWeight.SemiBold,
-                                        style = MaterialTheme.typography.bodySmall,
-                                    )
-                                    TextButton(
-                                        onClick = { settings.geminiPromptTemplate = TranslatorSettings.DEFAULT_PROMPT_TEMPLATE },
-                                    ) {
-                                        Text("Restablecer", fontSize = 11.sp)
-                                    }
-                                }
-
-                                OutlinedTextField(
-                                    value = settings.geminiPromptTemplate,
-                                    onValueChange = { settings.geminiPromptTemplate = it },
-                                    label = { Text("Prompt con comodines") },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    minLines = 2,
-                                    maxLines = 4,
+                                SettingChips(
+                                    label = "Razonamiento (thinking)",
+                                    options = TranslatorSettings.THINKING_LEVELS,
+                                    selected = settings.thinkingLevel,
+                                    onSelect = { settings.thinkingLevel = it },
                                 )
 
                                 Text(
-                                    text = "💡 Comodines: {lang input} y {lang output}.",
+                                    text = when (settings.thinkingLevel) {
+                                        TranslatorSettings.THINKING_HIGH ->
+                                            "High: razona al máximo. Mejor lectura y traducción, más lento."
+                                        TranslatorSettings.THINKING_MEDIUM ->
+                                            "Medium: punto medio entre velocidad y calidad."
+                                        TranslatorSettings.THINKING_LOW ->
+                                            "Low: poco razonamiento, respuestas más rápidas."
+                                        else ->
+                                            "Minimal: casi sin razonamiento, la opción más rápida."
+                                    },
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    text = "Si el modelo no admite este parámetro, se reintenta sin él.",
                                     fontSize = 11.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -636,6 +646,14 @@ fun TranslatorSettingsDialog(
                             onCheckedChange = { settings.uppercaseScanlation = it },
                         )
 
+                        SettingSwitch(
+                            title = "Mostrar onomatopeyas (SFX)",
+                            subtitle = "La IA las sigue devolviendo y quedan guardadas; al desactivarlo solo se " +
+                                "ocultan, sin volver a traducir la página.",
+                            checked = settings.showSfx,
+                            onCheckedChange = { settings.showSfx = it },
+                        )
+
                         val borderLabel = if (settings.borderThickness <= 0.05f) {
                             "Sin borde"
                         } else {
@@ -699,6 +717,21 @@ fun TranslatorSettingsDialog(
                             onCheckedChange = { settings.isManipulationMode = it },
                         )
 
+                        SettingSlider(
+                            label = "Fuente estándar: ${"%.1f".format(settings.standardFontSizeSp)} sp",
+                            value = settings.standardFontSizeSp,
+                            valueRange = 8f..18f,
+                            onValueChange = {
+                                settings.standardFontSizeSp = it
+                                if (settings.maxFontSizeSp < it) settings.maxFontSizeSp = it
+                            },
+                        )
+                        Text(
+                            text = "Todas las viñetas usan este tamaño (multiplicado por \"Fuente\"). La IA ya no " +
+                                "decide el tamaño: la caja que devuelve solo indica dónde va el texto.",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         SettingSlider(
                             label = "Fuente mínima: ${"%.1f".format(settings.minFontSizeSp)} sp",
                             value = settings.minFontSizeSp,
@@ -829,7 +862,7 @@ fun TranslatorSettingsDialog(
                         Text(
                             text = "Se guarda en el almacenamiento de la app y sobrevive al reinicio, así que volver " +
                                 "a una galería no vuelve a traducir sus páginas. Se vacía solo cuando cambias el " +
-                                "motor, el modelo o los prompts.",
+                                "motor, el modelo, los idiomas o las instrucciones del sistema.",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -878,17 +911,21 @@ fun TranslatorSettingsDialog(
                     Column {
                         SectionTitle("Pre-traducción")
 
-                        SettingSwitch(
-                            title = "Traducir automáticamente al leer",
-                            subtitle = "Mantiene lista la página actual y las " +
-                                "${settings.batchSize.coerceAtMost(batchLimit)} siguientes, y el lote avanza contigo " +
-                                "al cambiar de página sin cancelar lo que ya está en curso. " +
-                                "Tope del preload de EhViewer: $batchLimit.",
-                            checked = settings.autoTranslate,
-                            onCheckedChange = { settings.autoTranslate = it },
+                        Text(
+                            text = if (settings.autoTranslate) {
+                                "Activa (se pausa y se reanuda arriba). Mantiene lista la página actual y las " +
+                                    "${settings.batchSize.coerceAtMost(batchLimit)} siguientes; el lote avanza contigo " +
+                                    "al cambiar de página. Tope del preload de EhViewer: $batchLimit."
+                            } else {
+                                "En pausa (se reanuda arriba): no se traduce nada mientras lees."
+                            },
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
 
-                        if (settings.autoTranslate && batchLimit > 1) {
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        if (batchLimit > 1) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,

@@ -15,8 +15,9 @@ data class TranslatedBubble(
     val isVertical: Boolean? = null,
     /**
      * Onomatopoeia read from the artwork (not from a balloon). It is drawn
-     * small and sideways with no white bubble, so a page full of sound effects
-     * does not get covered with boxes.
+     * horizontally at the standard size with no white bubble, so a page full of
+     * sound effects does not get covered with boxes. It is only drawn when the
+     * reader has sound effects enabled.
      */
     val isSfx: Boolean = false,
     /**

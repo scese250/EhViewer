@@ -65,11 +65,11 @@ object PageTranslator {
         bitmap: Bitmap,
         sourceLang: String = "ja",
         targetLang: String = "es",
-        promptTemplate: String = TranslatorSettings.DEFAULT_PROMPT_TEMPLATE,
         systemPrompt: String = TranslatorSettings.DEFAULT_SYSTEM_PROMPT,
         engine: String = TranslatorSettings.ENGINE_GOOGLE,
         geminiApiKeys: List<String> = emptyList(),
         geminiModel: String = TranslatorSettings.DEFAULT_GEMINI_MODEL,
+        thinkingLevel: String = TranslatorSettings.THINKING_MINIMAL,
         grouping: BubbleGroupingConfig = BubbleGroupingConfig(),
         visionMode: Boolean = true,
         skipOcr: Boolean = false,
@@ -140,10 +140,10 @@ object PageTranslator {
                             noHints = ocrSkipped,
                             sourceLang = sourceLang,
                             targetLang = targetLang,
-                            promptTemplate = promptTemplate,
                             systemPrompt = systemPrompt,
                             apiKeys = geminiApiKeys,
                             model = geminiModel,
+                            thinkingLevel = thinkingLevel,
                         )
                         bubbles = result.bubbles
                         mergedBoxes = result.mergedBoxes
@@ -179,10 +179,10 @@ object PageTranslator {
                             blocks = mergedBlocks,
                             sourceLang = sourceLang,
                             targetLang = targetLang,
-                            promptTemplate = promptTemplate,
                             systemPrompt = systemPrompt,
                             apiKeys = geminiApiKeys,
                             model = geminiModel,
+                            thinkingLevel = thinkingLevel,
                         )
                         engineUsed = if (visionFailure != null) {
                             "Gemini texto (visión: ${visionFailure.message?.take(40)})"
@@ -222,19 +222,19 @@ object PageTranslator {
         blocks: List<RawBlock>,
         sourceLang: String,
         targetLang: String,
-        promptTemplate: String,
         systemPrompt: String,
         apiKeys: List<String>,
         model: String,
+        thinkingLevel: String,
     ): List<TranslatedBubble> {
         val translated = translateWithGemini(
             texts = blocks.map { it.text },
             sourceLang = sourceLang,
             targetLang = targetLang,
-            promptTemplate = promptTemplate,
             systemPrompt = systemPrompt,
             apiKeys = apiKeys,
             model = model,
+            thinkingLevel = thinkingLevel,
         )
         val bubbles = mutableListOf<TranslatedBubble>()
         blocks.forEachIndexed { idx, block ->
@@ -346,19 +346,13 @@ object PageTranslator {
         texts: List<String>,
         sourceLang: String,
         targetLang: String,
-        promptTemplate: String,
         systemPrompt: String,
         apiKeys: List<String>,
         model: String,
+        thinkingLevel: String,
     ): List<String?> = withContext(Dispatchers.IO) {
         if (texts.isEmpty()) return@withContext emptyList()
         if (apiKeys.isEmpty()) error("No hay claves de API disponibles")
-
-        val formattedInstruction = TranslatorSettings.formatGeminiPrompt(
-            template = promptTemplate,
-            sourceLang = sourceLang,
-            targetLang = targetLang,
-        )
 
         val inputItems = JSONArray()
         texts.forEachIndexed { idx, txt ->
@@ -371,8 +365,9 @@ object PageTranslator {
         }
 
         val prompt = """
-            $formattedInstruction
-
+            These are the dialogue lines of a manga page, translated from
+            ${TranslatorSettings.getLanguageName(sourceLang)} into
+            ${TranslatorSettings.getLanguageName(targetLang)}.
             The OCR behind this text is unreliable: lines can be truncated,
             misspelled or contain fragments of a neighbouring balloon. Read each
             line as a whole and translate what it is meant to say.
@@ -410,17 +405,17 @@ object PageTranslator {
                 JSONObject().apply {
                     put("temperature", 0.2)
                     put("responseMimeType", "application/json")
-                    put(
-                        "thinkingConfig",
-                        JSONObject().apply {
-                            put("thinkingLevel", "MINIMAL")
-                        },
-                    )
+                    putThinkingConfig(thinkingLevel)
                 },
             )
         }
 
-        val root = postGemini(apiKeys, model, requestJson, GEMINI_READ_TIMEOUT_MS)
+        val root = postGemini(
+            apiKeys,
+            model,
+            requestJson,
+            readTimeoutFor(thinkingLevel, GEMINI_READ_TIMEOUT_MS),
+        )
         val parsedArray = extractJsonArray(candidateText(root))
         val results = arrayOfNulls<String>(texts.size)
         val rejected = BooleanArray(texts.size)
@@ -487,6 +482,26 @@ object PageTranslator {
         return normalized.startsWith("REJECT", ignoreCase = true) &&
             normalized.length > 6 &&
             !normalized[6].isLetterOrDigit()
+    }
+
+    /** A reasoning model answers slower; the socket must wait for it. */
+    private fun readTimeoutFor(thinkingLevel: String, baseMs: Int): Int = when (thinkingLevel) {
+        TranslatorSettings.THINKING_HIGH -> maxOf(baseMs, 180_000)
+        TranslatorSettings.THINKING_MEDIUM -> maxOf(baseMs, 120_000)
+        TranslatorSettings.THINKING_LOW -> maxOf(baseMs, 90_000)
+        else -> baseMs
+    }
+
+    /**
+     * Requests the reasoning budget chosen in the settings. The REST API spells
+     * the levels in upper case; older models answer 400 to an unknown field and
+     * [postGemini] retries the same key without it.
+     */
+    private fun JSONObject.putThinkingConfig(level: String) {
+        put(
+            "thinkingConfig",
+            JSONObject().apply { put("thinkingLevel", level.uppercase()) },
+        )
     }
 
     private fun postGemini(
@@ -617,10 +632,10 @@ object PageTranslator {
         noHints: Boolean = false,
         sourceLang: String,
         targetLang: String,
-        promptTemplate: String,
         systemPrompt: String,
         apiKeys: List<String>,
         model: String,
+        thinkingLevel: String,
     ): VisionResult = withContext(Dispatchers.IO) {
         val annotated = try {
             annotateForVision(bitmap, blocks)
@@ -639,12 +654,7 @@ object PageTranslator {
             annotated.recycle()
         }
 
-        val instruction = TranslatorSettings.formatGeminiPrompt(
-            template = promptTemplate,
-            sourceLang = sourceLang,
-            targetLang = targetLang,
-        )
-        val prompt = buildVisionPrompt(instruction, targetLang, blocks.size, noHints)
+        val prompt = buildVisionPrompt(targetLang, blocks.size, noHints)
 
         val requestJson = JSONObject().apply {
             val parts = JSONArray().apply {
@@ -679,20 +689,28 @@ object PageTranslator {
                 JSONObject().apply {
                     put("temperature", 0.1)
                     put("responseMimeType", "application/json")
-                    put("maxOutputTokens", 4096)
+                    // The reasoning budget is charged to this same limit, so a
+                    // high level needs room or the JSON answer is truncated.
                     put(
-                        "thinkingConfig",
-                        JSONObject().apply {
-                            // Same setting the text path already uses, so a model
-                            // that rejected another level can't break vision mode.
-                            put("thinkingLevel", "MINIMAL")
+                        "maxOutputTokens",
+                        when (thinkingLevel) {
+                            TranslatorSettings.THINKING_HIGH -> 32768
+                            TranslatorSettings.THINKING_MEDIUM -> 16384
+                            TranslatorSettings.THINKING_LOW -> 8192
+                            else -> 4096
                         },
                     )
+                    putThinkingConfig(thinkingLevel)
                 },
             )
         }
 
-        val root = postGemini(apiKeys, model, requestJson, GEMINI_VISION_READ_TIMEOUT_MS)
+        val root = postGemini(
+            apiKeys,
+            model,
+            requestJson,
+            readTimeoutFor(thinkingLevel, GEMINI_VISION_READ_TIMEOUT_MS),
+        )
         parseVisionResult(
             raw = candidateText(root),
             blocks = blocks,
@@ -703,13 +721,10 @@ object PageTranslator {
     }
 
     private fun buildVisionPrompt(
-        instruction: String,
         targetLang: String,
         boxCount: Int,
         noHints: Boolean = false,
     ): String = buildString {
-        appendLine(instruction)
-        appendLine()
         if (noHints) {
             appendLine("You are the OCR engine and the lettering engine for this manga page: the attached image is")
             appendLine("the complete page and it carries no machine boxes. Find every speech balloon and every")
@@ -750,14 +765,15 @@ object PageTranslator {
         appendLine("   the balloon padding, the balloon tail, the character's face and the neighbouring balloon.")
         appendLine("   The translation is centred inside that rectangle and, when the translated text is longer")
         appendLine("   than the original, it grows upwards and downwards around the centre on its own, so keep")
-        appendLine("   the rectangle centred on the original text and cover only the text.")
+        appendLine("   the rectangle centred on the original text and cover only the text. The lettering size is")
+        appendLine("   fixed by the app, so the rectangle decides the area to cover, never how big the text is.")
         appendLine("6. A balloon that only holds a sound effect, or that has no text at all, gets no entry:")
         appendLine("   answer exactly \"REJECT\" for it.")
         appendLine("7. Ignore text outside balloons: credits, watermarks, page numbers, store logos, meta")
         appendLine("   commentary, shop signs, posters, book spines and text painted on the artwork.")
         appendLine("8. Onomatopoeia painted on the artwork is not a balloon: return it as an \"extra\" entry with")
-        appendLine("   \"kind\": \"sfx\" and a short sound word (\"¡BAM!\", \"¡DOON!\"). It is lettered small and")
-        appendLine("   sideways, so never wrap it in a sentence.")
+        appendLine("   \"kind\": \"sfx\" and a short sound word (\"¡BAM!\", \"¡DOON!\"). It is lettered on a")
+        appendLine("   single horizontal line, so never wrap it in a sentence.")
         appendLine("9. Use the panel around each balloon to decide who is speaking: first or third person, and the")
         appendLine("   gender of the speaker. Keep the same person and gender for every line of the conversation.")
         appendLine("10. Do not add notes, romanisation or explanations.")

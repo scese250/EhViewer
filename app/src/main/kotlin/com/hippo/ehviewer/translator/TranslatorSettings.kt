@@ -32,8 +32,13 @@ class TranslatorSettings(context: Context) {
     var dynamicBubbleSize by mutableStateOf(prefs.getBoolean("dynamic_bubble_size", true))
     var autoTranslate by mutableStateOf(prefs.getBoolean("auto_translate", false))
     var batchSize by mutableIntStateOf(prefs.getInt("batch_size", 3))
-    var geminiPromptTemplate by mutableStateOf(
-        prefs.getString("gemini_prompt_template", DEFAULT_PROMPT_TEMPLATE) ?: DEFAULT_PROMPT_TEMPLATE,
+
+    /**
+     * Reasoning budget requested from Gemini ("minimal", "low", "medium" or
+     * "high"). Higher levels read the page better and cost more time.
+     */
+    var thinkingLevel by mutableStateOf(
+        prefs.getString("thinking_level", THINKING_MINIMAL) ?: THINKING_MINIMAL,
     )
 
     /**
@@ -60,6 +65,12 @@ class TranslatorSettings(context: Context) {
     var bubbleOrientation by mutableStateOf(
         prefs.getString("bubble_orientation", ORIENTATION_VERTICAL) ?: ORIENTATION_VERTICAL,
     )
+
+    /**
+     * Draw the onomatopoeia the model returns. Turning it off keeps them in the
+     * cached translation (nothing is translated again) but hides them.
+     */
+    var showSfx by mutableStateOf(prefs.getBoolean("show_sfx", true))
     var bubbleShape by mutableStateOf(
         prefs.getString("bubble_shape", SHAPE_OVAL) ?: SHAPE_OVAL,
     )
@@ -95,6 +106,13 @@ class TranslatorSettings(context: Context) {
 
     // Text fitting inside the original balloon
     var fitTextInsideBubble by mutableStateOf(prefs.getBoolean("fit_text_inside_bubble", true))
+
+    /**
+     * Font size used by every balloon. The model only measures rectangles; the
+     * size of the letters is this value, so a small bubble can never end up
+     * with huge text and the page keeps one consistent lettering size.
+     */
+    var standardFontSizeSp by mutableFloatStateOf(prefs.getFloat("standard_font_size_sp", 12f))
     var minFontSizeSp by mutableFloatStateOf(prefs.getFloat("min_font_size_sp", 6.5f))
     var maxFontSizeSp by mutableFloatStateOf(prefs.getFloat("max_font_size_sp", 16f))
     var maxHeightExpansion by mutableFloatStateOf(prefs.getFloat("max_height_expansion", 1.6f))
@@ -121,14 +139,13 @@ class TranslatorSettings(context: Context) {
         append('|').append(sourceLang)
         append('|').append(targetLang)
         append('|').append(geminiModel)
-        append('|').append(geminiPromptTemplate.hashCode())
         append('|').append(geminiSystemPrompt.hashCode())
         append('|').append(geminiApiKeysRaw.hashCode())
         append('|').append(if (geminiVision) 1 else 0)
         append('|').append(if (skipOcr) 1 else 0)
         // Bumped when the vision prompt or the way its boxes are read changes,
         // so pages cached by an older build are translated again.
-        append("|v3")
+        append("|v4")
         append('|').append(if (mergeBubbleColumns) 1 else 0)
         append('|').append((maxColumnGapRatio * 1000).toInt())
         append('|').append((minColumnOverlap * 1000).toInt())
@@ -142,6 +159,7 @@ class TranslatorSettings(context: Context) {
         borderDarkRatio = 0.40f
         fitTextInsideBubble = true
         minFontSizeSp = 6.5f
+        standardFontSizeSp = 12f
         maxFontSizeSp = 16f
         maxHeightExpansion = 1.6f
         horizontalExpansion = 1.20f
@@ -165,8 +183,8 @@ class TranslatorSettings(context: Context) {
             .putString("gemini_model", geminiModel)
             .putString("source_lang", sourceLang)
             .putString("target_lang", targetLang)
-            .putString("gemini_prompt_template", geminiPromptTemplate)
             .putString("gemini_system_prompt", geminiSystemPrompt)
+            .putString("thinking_level", thinkingLevel)
             .putString("bubble_style", bubbleStyle)
             .putFloat("outline_width", outlineWidth)
             .putBoolean("gemini_vision", geminiVision)
@@ -187,6 +205,7 @@ class TranslatorSettings(context: Context) {
             .putFloat("min_column_overlap", minColumnOverlap)
             .putFloat("border_dark_ratio", borderDarkRatio)
             .putBoolean("fit_text_inside_bubble", fitTextInsideBubble)
+            .putFloat("standard_font_size_sp", standardFontSizeSp)
             .putFloat("min_font_size_sp", minFontSizeSp)
             .putFloat("max_font_size_sp", maxFontSizeSp)
             .putFloat("max_height_expansion", maxHeightExpansion)
@@ -196,6 +215,7 @@ class TranslatorSettings(context: Context) {
             .putFloat("global_font_scale", globalFontScale)
             .putFloat("bubble_opacity", bubbleOpacity)
             .putBoolean("dynamic_bubble_size", dynamicBubbleSize)
+            .putBoolean("show_sfx", showSfx)
             .putBoolean("auto_translate", autoTranslate)
             .putInt("batch_size", batchSize)
             .apply()
@@ -210,6 +230,18 @@ class TranslatorSettings(context: Context) {
         const val ENGINE_GOOGLE = "google"
         const val ENGINE_GEMINI = "gemini"
         const val DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
+
+        const val THINKING_MINIMAL = "minimal"
+        const val THINKING_LOW = "low"
+        const val THINKING_MEDIUM = "medium"
+        const val THINKING_HIGH = "high"
+
+        val THINKING_LEVELS = listOf(
+            "Minimal" to THINKING_MINIMAL,
+            "Low" to THINKING_LOW,
+            "Medium" to THINKING_MEDIUM,
+            "High" to THINKING_HIGH,
+        )
 
         const val ORIENTATION_VERTICAL = "vertical"
         const val ORIENTATION_HORIZONTAL = "horizontal"
@@ -228,8 +260,6 @@ class TranslatorSettings(context: Context) {
         const val PADDING_COMPACT = "compact"
         const val PADDING_NORMAL = "normal"
         const val PADDING_SPACIOUS = "spacious"
-        const val DEFAULT_PROMPT_TEMPLATE =
-            "Translate from {lang input} to {lang output}. Translate the following manga dialogue lines into natural, expressive, and concise {lang output} suitable for speech bubbles. Maintain conversational tone and context between lines on the same page."
 
         /**
          * Editable rules sent as the system prompt. They are language neutral,
@@ -245,7 +275,7 @@ class TranslatorSettings(context: Context) {
             |- Futanari characters always take feminine pronouns and feminine agreement.
             |- Keep -san, -kun, -chan, -sempai or -sensei only when the scene depends on the honorific.
             |- Adult scenes: translate the intent, not the dictionary meaning. In a sexual context いく / "Ya voy" is "Me vengo", 気持ちいい is "qué rico", だめ is "no... me voy a venir". Keep the intensity of the original.
-            |- Onomatopoeia drawn as stylised letters is not dialogue: give a short {lang output} sound word and mark that entry as "sfx". Those are lettered small and sideways, so never wrap them in long sentences.
+            |- Onomatopoeia drawn as stylised letters is not dialogue: give a short {lang output} sound word and mark that entry as "sfx". Those are lettered horizontally on a single line at the standard size, so never wrap them in long sentences.
             |- Never translate signs, posters, shop fronts, book spines, credits, watermarks, page numbers, logos, on-screen text or background artwork.
             |- If a numbered box or a balloon has no readable dialogue (empty balloon, only a sound effect, only artwork, garbled OCR), answer exactly "REJECT" for it. Never invent text for it.
             |- Do not add notes, romanisation or explanations.
