@@ -14,6 +14,29 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
+ * Scales the cached bounding boxes to match the current Bitmap dimensions.
+ * If the dimensions match or the cached dimensions are invalid, returns this unchanged.
+ */
+fun List<TranslatedBubble>.rescaleIfNeeded(
+    cachedWidth: Int,
+    cachedHeight: Int,
+    currentWidth: Int,
+    currentHeight: Int,
+): List<TranslatedBubble> {
+    if (cachedWidth <= 0 || cachedHeight <= 0 || currentWidth <= 0 || currentHeight <= 0) return this
+    if (cachedWidth == currentWidth && cachedHeight == currentHeight) return this
+    val sx = currentWidth.toFloat() / cachedWidth.toFloat()
+    val sy = currentHeight.toFloat() / cachedHeight.toFloat()
+    fun Rect.scaleRect(): Rect = Rect(
+        (left * sx).toInt().coerceIn(0, currentWidth),
+        (top * sy).toInt().coerceIn(0, currentHeight),
+        (right * sx).toInt().coerceIn(0, currentWidth),
+        (bottom * sy).toInt().coerceIn(0, currentHeight),
+    )
+    return map { bubble -> bubble.copy(boundingBox = bubble.boundingBox.scaleRect()) }
+}
+
+/**
  * Process wide, disk backed cache of translated pages.
  *
  * The reader builds a fresh [ReaderTranslationState] every time the gallery is
@@ -57,10 +80,23 @@ object TranslationCache {
     }
 
     @Synchronized
-    fun get(gallery: String, pageIndex: Int, signature: String): PageTranslation? {
+    fun get(
+        gallery: String,
+        pageIndex: Int,
+        signature: String,
+        currentBitmapWidth: Int = 0,
+        currentBitmapHeight: Int = 0,
+    ): PageTranslation? {
         val cached = entries[Key(gallery, pageIndex)] ?: return null
-        // A page translated with another engine/prompt is not reusable.
-        return cached.takeIf { it.settingsSignature == signature }
+        if (cached.settingsSignature != signature) return null
+        if (currentBitmapWidth <= 0 || currentBitmapHeight <= 0) return cached
+        val rescaled = cached.bubbles.rescaleIfNeeded(
+            cachedWidth = cached.bitmapWidth,
+            cachedHeight = cached.bitmapHeight,
+            currentWidth = currentBitmapWidth,
+            currentHeight = currentBitmapHeight,
+        )
+        return if (rescaled === cached.bubbles) cached else cached.copy(bubbles = rescaled)
     }
 
     @Synchronized
@@ -134,6 +170,8 @@ object TranslationCache {
                 JSONObject().apply {
                     put("g", key.gallery)
                     put("p", key.pageIndex)
+                    put("bw", translation.bitmapWidth)
+                    put("bh", translation.bitmapHeight)
                     put("sig", translation.settingsSignature)
                     put("ocr", translation.ocrDurationMs)
                     put("tr", translation.translateDurationMs)
@@ -240,6 +278,8 @@ object TranslationCache {
             settingsSignature = item.optString("sig"),
             mergedBoxes = item.optInt("merged"),
             discardedBoxes = item.optInt("discarded"),
+            bitmapWidth = item.optInt("bw", 0),
+            bitmapHeight = item.optInt("bh", 0),
         )
     }.getOrNull()
 }

@@ -2,9 +2,12 @@ package com.hippo.ehviewer.translator
 
 import android.graphics.Bitmap
 import android.graphics.Rect
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 
 /**
  * One OCR fragment as returned by ML Kit.
@@ -409,5 +412,124 @@ object BubbleDetector {
         return darkRatio <= MAX_CORRIDOR_DARK_RATIO &&
             maxLineDarkRatio < config.borderDarkRatio &&
             meanLuma >= MIN_CORRIDOR_MEAN_LUMA
+    }
+
+    /**
+     * Finds the closed white speech bubble that contains the seed [rect] in [bitmap].
+     *
+     * Uses a flood-fill approach starting from the centre of [rect] to find the
+     * connected region of light pixels, then returns its bounding box if it looks
+     * like a plausible speech bubble.
+     *
+     * Returns null when no suitable bubble is found.
+     */
+    fun findEnclosingBubble(bitmap: Bitmap, rect: Rect): Rect? {
+        val bw = bitmap.width
+        val bh = bitmap.height
+        if (bw <= 0 || bh <= 0) return null
+
+        val cx = rect.centerX().coerceIn(0, bw - 1)
+        val cy = rect.centerY().coerceIn(0, bh - 1)
+
+        // Sample the seed pixel luma. If it is dark (text/outline), walk a few
+        // pixels outward until we land on a light pixel.
+        val searchRadius = (min(rect.width(), rect.height()) * 0.15f).toInt().coerceIn(2, 20)
+        var seedX = cx
+        var seedY = cy
+
+        fun pixelLuma(x: Int, y: Int): Int {
+            val p = bitmap.getPixel(x.coerceIn(0, bw - 1), y.coerceIn(0, bh - 1))
+            return (
+                0.299f * ((p shr 16) and 0xFF) +
+                    0.587f * ((p shr 8) and 0xFF) +
+                    0.114f * (p and 0xFF)
+                ).toInt()
+        }
+
+        if (pixelLuma(cx, cy) < 180) {
+            var found = false
+            outer@ for (r in 1..searchRadius) {
+                for (angle in 0 until 8) {
+                    val dx = (r * cos(angle * PI / 4)).toInt()
+                    val dy = (r * sin(angle * PI / 4)).toInt()
+                    val nx = (cx + dx).coerceIn(0, bw - 1)
+                    val ny = (cy + dy).coerceIn(0, bh - 1)
+                    if (pixelLuma(nx, ny) >= 180) {
+                        seedX = nx
+                        seedY = ny
+                        found = true
+                        break@outer
+                    }
+                }
+            }
+            if (!found) return null
+        }
+
+        // Flood fill: BFS over light pixels to find the connected region.
+        val maxFillArea = bw * bh / 4
+        val visited = BooleanArray(bw * bh)
+        val queue = ArrayDeque<Int>(512)
+        val startIdx = seedY * bw + seedX
+        visited[startIdx] = true
+        queue.add(startIdx)
+
+        var minX = seedX
+        var maxX = seedX
+        var minY = seedY
+        var maxY = seedY
+        var fillCount = 0
+
+        val pixels = IntArray(bw * bh)
+        bitmap.getPixels(pixels, 0, bw, 0, 0, bw, bh)
+
+        fun lumaFast(x: Int, y: Int): Int {
+            val p = pixels[y * bw + x]
+            return (
+                0.299f * ((p shr 16) and 0xFF) +
+                    0.587f * ((p shr 8) and 0xFF) +
+                    0.114f * (p and 0xFF)
+                ).toInt()
+        }
+
+        val dx4 = intArrayOf(-1, 1, 0, 0)
+        val dy4 = intArrayOf(0, 0, -1, 1)
+
+        while (queue.isNotEmpty() && fillCount < maxFillArea) {
+            val idx = queue.removeFirst()
+            val x = idx % bw
+            val y = idx / bw
+            fillCount++
+            if (x < minX) minX = x
+            if (x > maxX) maxX = x
+            if (y < minY) minY = y
+            if (y > maxY) maxY = y
+
+            for (d in 0 until 4) {
+                val nx = x + dx4[d]
+                val ny = y + dy4[d]
+                if (nx < 0 || ny < 0 || nx >= bw || ny >= bh) continue
+                val nidx = ny * bw + nx
+                if (visited[nidx]) continue
+                visited[nidx] = true
+                if (lumaFast(nx, ny) >= 160) {
+                    queue.add(nidx)
+                }
+            }
+        }
+
+        if (fillCount < 16) return null
+
+        val foundRect = Rect(minX, minY, maxX + 1, maxY + 1)
+
+        // Sanity: the detected region must contain the original seed rect's centre.
+        if (!foundRect.contains(cx, cy)) return null
+
+        // Sanity: must look like a plausible bubble (not the full page).
+        val area = foundRect.width().toLong() * foundRect.height()
+        val pageArea = bw.toLong() * bh
+        if (area > pageArea * 0.35f) return null
+        if (foundRect.width() < bw * 0.01f || foundRect.height() < bh * 0.01f) return null
+
+        return foundRect
     }
 }

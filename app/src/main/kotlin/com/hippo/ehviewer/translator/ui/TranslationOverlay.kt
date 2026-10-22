@@ -206,16 +206,8 @@ fun TranslationOverlay(
                 // Only the rectangles measured by the model itself are exact;
                 // the ones derived from OCR blocks keep the usual margins.
                 val exact = exactPlacement && bubble.exactBox
-                val bubbleHPaddingPx = if (exact) {
-                    with(density) { (minOf(hPadDp, 4.dp) * 2).toPx() }
-                } else {
-                    hPaddingPx
-                }
-                val bubbleVPaddingPx = if (exact) {
-                    with(density) { (minOf(vPadDp, 2.dp) * 2).toPx() }
-                } else {
-                    vPaddingPx
-                }
+                val bubbleHPaddingPx = if (exact) 0f else hPaddingPx
+                val bubbleVPaddingPx = if (exact) 0f else vPaddingPx
 
                 val rawText = if (uppercaseScanlation) {
                     bubble.translatedText.uppercase()
@@ -283,7 +275,7 @@ fun TranslationOverlay(
                     maxWordWidthPx = measureWordWidth(finalFontSizeSp)
                 }
 
-                val minRequiredWidthPx = maxWordWidthPx + bubbleHPaddingPx + ovalCurveMarginPx
+                val minRequiredWidthPx = maxWordWidthPx + bubbleHPaddingPx + if (exact) 0f else ovalCurveMarginPx
 
                 val desiredWidthPx = if (isVertical) {
                     maxOf(origWidthPx * 1.10f, with(density) { 40.dp.toPx() })
@@ -311,7 +303,8 @@ fun TranslationOverlay(
                     origHeightPx * (if (fitTextInsideBubble) 1.0f else 1.05f) * globalBubbleScale
                 }
                 val heightLimitPx = maxOf(24f, containerHeightPx * 0.92f)
-                val maxHeightPx = (coverHeightPx * maxHeightExpansion).coerceIn(24f, heightLimitPx)
+                val effectiveMaxHeightExpansion = if (exact) 1.0f else maxHeightExpansion
+                val maxHeightPx = (coverHeightPx * effectiveMaxHeightExpansion).coerceIn(24f, heightLimitPx)
 
                 // The text is laid out inside the horizontal padding, so the
                 // measured width must exclude it or the real rendered height is
@@ -329,7 +322,7 @@ fun TranslationOverlay(
                     }
                 }
 
-                val actualHeightPx = if (dynamicBubbleSize) {
+                val actualHeightPx = if (dynamicBubbleSize && !exact) {
                     maxOf(coverHeightPx, measuredTextHeightPx).coerceIn(24f, maxHeightPx)
                 } else {
                     coverHeightPx.coerceIn(24f, maxHeightPx)
@@ -450,12 +443,13 @@ private fun DynamicBubbleView(
         .replace(Regex("\\s+"), " ")
         .trim()
 
+    val exact = exactPlacement && bubble.exactBox
     var measuredHeightPx by remember(displayText, liveWidthScale, layout.fontSizeSp, dynamicBubbleSize) {
         mutableFloatStateOf(layout.baseHeightPx)
     }
 
     val liveWidthPx = (layout.baseWidthPx * liveWidthScale).coerceAtLeast(layout.minRequiredWidthPx)
-    val liveHeightPx = if (dynamicBubbleSize) {
+    val liveHeightPx = if (dynamicBubbleSize && !exact) {
         measuredHeightPx * liveHeightScale
     } else {
         layout.baseHeightPx * liveHeightScale
@@ -470,7 +464,10 @@ private fun DynamicBubbleView(
     // lettered horizontally so it can be read, even when the original SFX ran
     // vertically down the page. The box is then sized to the longest word
     // instead of to the (often tall and narrow) box the model returned.
-    val strokePx = with(density) { outlineWidth.dp.toPx() }.coerceAtLeast(1f)
+    val strokePx = with(density) {
+        val effectiveWidth = if (exact) outlineWidth.coerceAtLeast(5f) else outlineWidth
+        effectiveWidth.dp.toPx()
+    }.coerceAtLeast(1f)
     // Same standard size as the balloons: never derived from the box area.
     val safeFontSp = layout.fontSizeSp.takeIf { it.isFinite() && it > 0f } ?: 12f
     val sfxMinWidthPx = with(density) { 22.dp.toPx() }
@@ -518,7 +515,7 @@ private fun DynamicBubbleView(
         }
         // No balloon at all: neither for onomatopoeia nor for the thick white
         // text outline mode.
-        bubble.isSfx || outlineMode -> {
+        bubble.isSfx || outlineMode || exact -> {
             Modifier
         }
         bubbleShape == TranslatorSettings.SHAPE_BORDERLESS || borderThickness <= 0.05f -> {
@@ -629,7 +626,6 @@ private fun DynamicBubbleView(
         TranslatorSettings.PADDING_SPACIOUS -> Pair(14.dp, 8.dp)
         else -> Pair(9.dp, 5.dp)
     }
-    val exact = exactPlacement && bubble.exactBox
     val hPadDp = if (exact) minOf(rawHPadDp, 4.dp) else rawHPadDp
     val vPadDp = if (exact) minOf(rawVPadDp, 2.dp) else rawVPadDp
 
@@ -654,7 +650,7 @@ private fun DynamicBubbleView(
             .offset { IntOffset(boxLeft.roundToInt(), boxTop.roundToInt()) }
             .width(targetWidthDp)
             .then(
-                if (dynamicBubbleSize && !bubble.isSfx) {
+                if (dynamicBubbleSize && !bubble.isSfx && !exact) {
                     // At least the measured height (so the original balloon is
                     // covered), but allowed to grow if the text needs more room.
                     // The box stays centred on the balloon while it grows, so it
@@ -665,12 +661,12 @@ private fun DynamicBubbleView(
                 },
             )
             .onSizeChanged { size ->
-                if (!bubble.isSfx && size.height > 0) {
+                if (!bubble.isSfx && !exact && size.height > 0) {
                     measuredHeightPx = size.height.toFloat()
                 }
             }
             .then(
-                if (bubble.isSfx || outlineMode) {
+                if (bubble.isSfx || outlineMode || exact) {
                     Modifier
                 } else {
                     Modifier.background(Color.White.copy(alpha = bubbleOpacity), bubbleShapeDrawable)
@@ -679,12 +675,12 @@ private fun DynamicBubbleView(
             .then(borderModifier)
             .then(touchModifier)
             .padding(
-                horizontal = if (bubble.isSfx) 0.dp else hPadDp,
-                vertical = if (bubble.isSfx) 0.dp else vPadDp,
+                horizontal = if (bubble.isSfx || exact) 0.dp else hPadDp,
+                vertical = if (bubble.isSfx || exact) 0.dp else vPadDp,
             ),
         contentAlignment = Alignment.Center,
     ) {
-        if (outlineMode || bubble.isSfx) {
+        if (outlineMode || bubble.isSfx || exact) {
             // The letters are drawn twice, a thick stroke first and the fill on
             // top, so the translation stays readable over the artwork.
             Box(contentAlignment = Alignment.Center) {

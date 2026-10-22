@@ -145,7 +145,7 @@ class TranslatorSettings(context: Context) {
         append('|').append(if (skipOcr) 1 else 0)
         // Bumped when the vision prompt or the way its boxes are read changes,
         // so pages cached by an older build are translated again.
-        append("|v4")
+        append("|v7")
         append('|').append(if (mergeBubbleColumns) 1 else 0)
         append('|').append((maxColumnGapRatio * 1000).toInt())
         append('|').append((minColumnOverlap * 1000).toInt())

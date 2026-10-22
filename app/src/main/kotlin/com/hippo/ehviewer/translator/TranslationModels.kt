@@ -40,4 +40,8 @@ data class PageTranslation(
     val mergedBoxes: Int = 0,
     /** Number of OCR boxes the model discarded as empty or duplicated. */
     val discardedBoxes: Int = 0,
+    /** Width of the Bitmap used when this translation was produced. Used to rescale boxes on cache hit. */
+    val bitmapWidth: Int = 0,
+    /** Height of the Bitmap used when this translation was produced. */
+    val bitmapHeight: Int = 0,
 )
