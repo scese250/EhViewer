@@ -101,7 +101,12 @@ fun PagerViewer(
         snapshotFlow { pagerState.currentPage }.collect { currentPage ->
             if (currentPage > lastPage) {
                 val inheritedZoom = pageZooms[lastPage] ?: 1f
-                pageZooms[currentPage] = inheritedZoom
+                // The zoom is only handed over to a page left at its default value.
+                // A page the reader already zoomed (e.g. 1.8) keeps its own zoom.
+                val currentZoom = pageZooms[currentPage] ?: 1f
+                if (currentZoom <= DEFAULT_ZOOM_TOLERANCE) {
+                    pageZooms[currentPage] = inheritedZoom
+                }
                 pagePans[currentPage] = Offset.Zero
             } else if (currentPage < lastPage) {
                 val srcPan = pagePans[lastPage] ?: Offset.Zero
@@ -232,8 +237,10 @@ private fun PageContainer(
             val contentLocation = ZoomableContentLocation.scaledInsideAndCenterAligned(size)
             zoomableState.setContentLocation(contentLocation)
         }
-        // Vertical Manga Read: preserve zoom when moving forward starting at top-right,
-        // and preserve original page zoom while inheriting pan when navigating backwards.
+        // Vertical Manga Read: preserve zoom when moving forward starting at top-right.
+        // Only a page left at its default zoom inherits the previous page's zoom, a
+        // page the reader already zoomed keeps its value. Navigating backwards keeps
+        // the original page zoom while inheriting the pan.
         if (isVerticalManga) {
             val isCurrentPage = pagerState.currentPage == page.index
             LaunchedEffect(isCurrentPage, size, layoutSize, zoomableState) {
@@ -392,6 +399,8 @@ private inline fun ZoomableState?.canPan(getRemaining: (Rect) -> Float): Boolean
     return this != null && Settings.navigateToPan.value &&
         getRemaining(with(coordinateSystem) { contentBounds(false).rectIn(CoordinateSpace.Viewport) }) > 1f
 }
+
+private const val DEFAULT_ZOOM_TOLERANCE = 1.01f
 
 private val PagerZoomSpec = ZoomSpec(
     maximum = ZoomLimit(factor = 5f),
