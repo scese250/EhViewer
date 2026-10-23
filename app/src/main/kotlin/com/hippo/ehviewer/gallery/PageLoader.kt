@@ -23,6 +23,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -37,7 +38,35 @@ private const val MAX_CACHE_SIZE = 512 * 1024 * 1024
 private const val MIN_CACHE_SIZE = 256 * 1024 * 1024
 
 abstract class PageLoader(val scope: CoroutineScope, val info: GalleryInfo?, startPage: Int, val size: Int, val hasAds: Boolean = false) : AutoCloseable {
+    /**
+     * Progress writes are conflated: while the reader is moving quickly only the
+     * newest page is kept, so a single writer serializes the upserts and an old
+     * page can never overwrite a newer one.
+     */
+    private val progressUpdates = Channel<Int>(Channel.CONFLATED)
+
+    init {
+        info?.let { galleryInfo ->
+            progressScope.launch {
+                for (page in progressUpdates) {
+                    EhDB.putReadProgress(galleryInfo.gid, page)
+                }
+            }
+        }
+    }
+
+    /**
+     * Page the reader is on. Every change is written to the database right away
+     * instead of only when the reader closes, so the progress also survives a
+     * crash or the process being killed from the recents screen.
+     */
     var startPage = startPage.coerceIn(0, size - 1)
+        set(value) {
+            val page = value.coerceIn(0, size - 1)
+            if (field == page) return
+            field = page
+            progressUpdates.trySend(page)
+        }
 
     private val jobs = mutableIntObjectMapOf<Job>()
     private val mutex = NamedMutex<Int>()
@@ -112,11 +141,10 @@ abstract class PageLoader(val scope: CoroutineScope, val info: GalleryInfo?, sta
 
     override fun close() {
         lock.write { cache.evictAll() }
-        info?.run {
-            progressScope.launch {
-                EhDB.putReadProgress(gid, startPage)
-            }
-        }
+        // Flush the last page and let the writer drain before stopping. Closing
+        // the channel ends the loop of the saver started in init.
+        progressUpdates.trySend(startPage)
+        progressUpdates.close()
     }
 
     abstract val title: String
