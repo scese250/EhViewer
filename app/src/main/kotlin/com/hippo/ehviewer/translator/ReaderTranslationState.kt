@@ -201,6 +201,7 @@ class ReaderTranslationState(
                     sourceLang = settings.sourceLang,
                     targetLang = settings.targetLang,
                     systemPrompt = settings.geminiSystemPrompt,
+                    userPrompt = settings.geminiUserPrompt,
                     engine = settings.engine,
                     geminiApiKeys = settings.getGeminiApiKeys(),
                     geminiModel = settings.geminiModel,

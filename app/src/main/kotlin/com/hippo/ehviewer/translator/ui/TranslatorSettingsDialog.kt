@@ -1,6 +1,7 @@
 package com.hippo.ehviewer.translator.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -14,7 +15,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
@@ -29,6 +33,7 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -46,6 +51,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -402,26 +408,54 @@ fun TranslatorSettingsDialog(
                                     value = settings.geminiModel,
                                     onValueChange = { settings.geminiModel = it.trim() },
                                     label = { Text("ID del Modelo") },
+                                    placeholder = { Text(TranslatorSettings.DEFAULT_GEMINI_MODEL) },
                                     modifier = Modifier.fillMaxWidth(),
                                     singleLine = true,
+                                    trailingIcon = {
+                                        IconButton(
+                                            onClick = { settings.addGeminiModel(settings.geminiModel) },
+                                            enabled = settings.geminiModel.isNotBlank(),
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Add,
+                                                contentDescription = "Añadir al selector rápido",
+                                                modifier = Modifier.size(20.dp),
+                                            )
+                                        }
+                                    },
                                 )
 
                                 Spacer(modifier = Modifier.height(6.dp))
 
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) {
-                                    FilterChip(
-                                        selected = settings.geminiModel == "gemini-flash-lite-latest",
-                                        onClick = { settings.geminiModel = "gemini-flash-lite-latest" },
-                                        label = { Text("flash-lite-latest", fontSize = 11.sp) },
+                                if (settings.geminiModels.isEmpty()) {
+                                    Text(
+                                        text = "Selector rápido vacío: escribe un ID y toca + para guardarlo.",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
-                                    FilterChip(
-                                        selected = settings.geminiModel == "gemini-3.5-flash-lite",
-                                        onClick = { settings.geminiModel = "gemini-3.5-flash-lite" },
-                                        label = { Text("3.5-flash-lite", fontSize = 11.sp) },
-                                    )
+                                } else {
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        settings.geminiModels.forEach { model ->
+                                            FilterChip(
+                                                selected = settings.geminiModel == model,
+                                                onClick = { settings.geminiModel = model },
+                                                label = { Text(model, fontSize = 11.sp, maxLines = 1) },
+                                                trailingIcon = {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Close,
+                                                        contentDescription = "Quitar $model del selector rápido",
+                                                        modifier = Modifier
+                                                            .size(18.dp)
+                                                            .clickable { settings.removeGeminiModel(model) },
+                                                    )
+                                                },
+                                            )
+                                        }
+                                    }
                                 }
 
                                 Spacer(modifier = Modifier.height(10.dp))
@@ -455,38 +489,30 @@ fun TranslatorSettingsDialog(
 
                                 Spacer(modifier = Modifier.height(10.dp))
 
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        text = "Instrucciones del sistema:",
-                                        fontWeight = FontWeight.SemiBold,
-                                        style = MaterialTheme.typography.bodySmall,
-                                    )
-                                    TextButton(
-                                        onClick = { settings.geminiSystemPrompt = TranslatorSettings.DEFAULT_SYSTEM_PROMPT },
-                                    ) {
-                                        Text("Restablecer", fontSize = 11.sp)
-                                    }
-                                }
-
-                                OutlinedTextField(
+                                PromptEditor(
+                                    title = "Instrucciones del sistema",
                                     value = settings.geminiSystemPrompt,
                                     onValueChange = { settings.geminiSystemPrompt = it },
-                                    label = { Text("Reglas del traductor (system prompt)") },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    minLines = 5,
-                                    maxLines = 14,
-                                )
-
-                                Text(
-                                    text = "💡 Se envían como system prompt; la imagen va como turno del usuario. " +
+                                    defaultValue = TranslatorSettings.DEFAULT_SYSTEM_PROMPT,
+                                    fieldLabel = "Reglas del traductor (system prompt)",
+                                    hint = "💡 Se envían como system prompt; la imagen va como turno del usuario. " +
                                         "Aquí viven los pronombres y el género según el panel, futanari femenino, " +
                                         "los términos H (\"Ya voy\" → \"Me vengo\"), no traducir carteles y el REJECT.",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    minLines = 5,
+                                )
+
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                PromptEditor(
+                                    title = "Instrucciones de usuario",
+                                    value = settings.geminiUserPrompt,
+                                    onValueChange = { settings.geminiUserPrompt = it },
+                                    defaultValue = TranslatorSettings.DEFAULT_USER_PROMPT,
+                                    fieldLabel = "Instrucciones adicionales (user prompt)",
+                                    placeholder = "Ej.: Tutea siempre; conserva los honoríficos -san y -kun.",
+                                    hint = "💡 Se envían en el turno del usuario, junto a la página y la tarea. " +
+                                        "Sirven para ajustes puntuales (tono, nombres, términos) sin tocar las reglas del sistema.",
+                                    minLines = 3,
                                 )
 
                                 Spacer(modifier = Modifier.height(10.dp))
@@ -862,7 +888,7 @@ fun TranslatorSettingsDialog(
                         Text(
                             text = "Se guarda en el almacenamiento de la app y sobrevive al reinicio, así que volver " +
                                 "a una galería no vuelve a traducir sus páginas. Se vacía solo cuando cambias el " +
-                                "motor, el modelo, los idiomas o las instrucciones del sistema.",
+                                "motor, el modelo, los idiomas o las instrucciones (del sistema o de usuario).",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1000,6 +1026,69 @@ private fun SectionTitle(title: String) {
     Spacer(modifier = Modifier.height(6.dp))
 }
 
+/**
+ * Collapsed prompt field: the instructions are long, so they stay folded until
+ * the user opens them. "Restablecer" is always reachable from the header.
+ */
+@Composable
+private fun PromptEditor(
+    title: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    defaultValue: String,
+    fieldLabel: String,
+    hint: String,
+    minLines: Int,
+    placeholder: String = "",
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(
+            onClick = { expanded = !expanded },
+            modifier = Modifier.weight(1f),
+        ) {
+            Icon(
+                imageVector = Icons.Default.ExpandMore,
+                contentDescription = null,
+                modifier = Modifier
+                    .size(18.dp)
+                    .rotate(if (expanded) 180f else 0f),
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = "$title:",
+                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+            )
+        }
+        TextButton(onClick = { onValueChange(defaultValue) }) {
+            Text("Restablecer", fontSize = 11.sp)
+        }
+    }
+    AnimatedVisibility(visible = expanded) {
+        Column {
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValueChange,
+                label = { Text(fieldLabel) },
+                placeholder = { Text(placeholder) },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = minLines,
+                maxLines = 14,
+            )
+            Text(
+                text = hint,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 @Composable
 private fun SettingChips(
     label: String,
@@ -1013,7 +1102,10 @@ private fun SettingChips(
         style = MaterialTheme.typography.bodySmall,
     )
     Spacer(modifier = Modifier.height(4.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
         options.forEach { (text, value) ->
             FilterChip(
                 selected = selected == value,

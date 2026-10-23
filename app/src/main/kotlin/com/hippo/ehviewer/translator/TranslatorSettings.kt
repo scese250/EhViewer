@@ -23,6 +23,20 @@ class TranslatorSettings(context: Context) {
     var geminiModel by mutableStateOf(
         prefs.getString("gemini_model", DEFAULT_GEMINI_MODEL) ?: DEFAULT_GEMINI_MODEL,
     )
+
+    /**
+     * Models pinned to the quick selector. The current model can be picked from
+     * here, and every entry can be removed; the list is empty only if the user
+     * deletes them all.
+     */
+    var geminiModels by mutableStateOf(
+        prefs.getString("gemini_models", null)?.let { raw ->
+            raw.split('\n')
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+        } ?: listOf(DEFAULT_GEMINI_MODEL),
+    )
     var sourceLang by mutableStateOf(prefs.getString("source_lang", "ja") ?: "ja")
     var targetLang by mutableStateOf(prefs.getString("target_lang", "es") ?: "es")
     var globalBubbleScale by mutableFloatStateOf(prefs.getFloat("global_bubble_scale", 1.0f))
@@ -60,6 +74,14 @@ class TranslatorSettings(context: Context) {
                 saved
             }
         },
+    )
+
+    /**
+     * Extra instructions sent in the user turn, together with the page and the
+     * layout task. Empty by default: the system prompt already carries the rules.
+     */
+    var geminiUserPrompt by mutableStateOf(
+        prefs.getString("gemini_user_prompt", "").orEmpty(),
     )
 
     /**
@@ -152,6 +174,7 @@ class TranslatorSettings(context: Context) {
         append('|').append(targetLang)
         append('|').append(geminiModel)
         append('|').append(geminiSystemPrompt.hashCode())
+        append('|').append(geminiUserPrompt.hashCode())
         append('|').append(geminiApiKeysRaw.hashCode())
         append('|').append(if (geminiVision) 1 else 0)
         append('|').append(if (skipOcr) 1 else 0)
@@ -185,6 +208,16 @@ class TranslatorSettings(context: Context) {
         .map { it.trim() }
         .filter { it.isNotBlank() }
 
+    fun addGeminiModel(id: String) {
+        val model = id.trim()
+        if (model.isEmpty() || model in geminiModels) return
+        geminiModels = geminiModels + model
+    }
+
+    fun removeGeminiModel(id: String) {
+        geminiModels = geminiModels - id
+    }
+
     fun save() {
         val signature = translationSignature()
         val translationChanged = signature != savedSignature
@@ -193,6 +226,8 @@ class TranslatorSettings(context: Context) {
             .putString("engine", engine)
             .putString("gemini_api_keys", geminiApiKeysRaw)
             .putString("gemini_model", geminiModel)
+            .putString("gemini_models", geminiModels.joinToString("\n"))
+            .putString("gemini_user_prompt", geminiUserPrompt)
             .putString("source_lang", sourceLang)
             .putString("target_lang", targetLang)
             .putString("gemini_system_prompt", geminiSystemPrompt)
@@ -243,6 +278,9 @@ class TranslatorSettings(context: Context) {
         const val ENGINE_GOOGLE = "google"
         const val ENGINE_GEMINI = "gemini"
         const val DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
+
+        /** No extra user instructions by default. */
+        const val DEFAULT_USER_PROMPT = ""
 
         const val THINKING_MINIMAL = "minimal"
         const val THINKING_LOW = "low"

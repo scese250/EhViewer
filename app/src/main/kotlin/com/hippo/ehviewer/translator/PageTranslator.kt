@@ -66,6 +66,7 @@ object PageTranslator {
         sourceLang: String = "ja",
         targetLang: String = "es",
         systemPrompt: String = TranslatorSettings.DEFAULT_SYSTEM_PROMPT,
+        userPrompt: String = "",
         engine: String = TranslatorSettings.ENGINE_GOOGLE,
         geminiApiKeys: List<String> = emptyList(),
         geminiModel: String = TranslatorSettings.DEFAULT_GEMINI_MODEL,
@@ -141,6 +142,7 @@ object PageTranslator {
                             sourceLang = sourceLang,
                             targetLang = targetLang,
                             systemPrompt = systemPrompt,
+                            userPrompt = userPrompt,
                             apiKeys = geminiApiKeys,
                             model = geminiModel,
                             thinkingLevel = thinkingLevel,
@@ -180,6 +182,7 @@ object PageTranslator {
                             sourceLang = sourceLang,
                             targetLang = targetLang,
                             systemPrompt = systemPrompt,
+                            userPrompt = userPrompt,
                             apiKeys = geminiApiKeys,
                             model = geminiModel,
                             thinkingLevel = thinkingLevel,
@@ -225,6 +228,7 @@ object PageTranslator {
         sourceLang: String,
         targetLang: String,
         systemPrompt: String,
+        userPrompt: String = "",
         apiKeys: List<String>,
         model: String,
         thinkingLevel: String,
@@ -234,6 +238,7 @@ object PageTranslator {
             sourceLang = sourceLang,
             targetLang = targetLang,
             systemPrompt = systemPrompt,
+            userPrompt = userPrompt,
             apiKeys = apiKeys,
             model = model,
             thinkingLevel = thinkingLevel,
@@ -349,6 +354,7 @@ object PageTranslator {
         sourceLang: String,
         targetLang: String,
         systemPrompt: String,
+        userPrompt: String = "",
         apiKeys: List<String>,
         model: String,
         thinkingLevel: String,
@@ -384,7 +390,7 @@ object PageTranslator {
 
             Input dialogue:
             $inputItems
-        """.trimIndent()
+        """.trimIndent() + userPromptSuffix(userPrompt, sourceLang, targetLang)
 
         val requestJson = JSONObject().apply {
             val parts = JSONArray().apply {
@@ -570,6 +576,26 @@ object PageTranslator {
         throw lastError ?: IllegalStateException("Todas las claves de API fallaron")
     }
 
+    /** The user's extra instructions, formatted and trimmed; empty when unset. */
+    private fun formatUserPrompt(
+        userPrompt: String,
+        sourceLang: String,
+        targetLang: String,
+    ): String = if (userPrompt.isBlank()) {
+        ""
+    } else {
+        TranslatorSettings.formatGeminiPrompt(userPrompt, sourceLang, targetLang).trim()
+    }
+
+    private fun userPromptSuffix(
+        userPrompt: String,
+        sourceLang: String,
+        targetLang: String,
+    ): String {
+        val extra = formatUserPrompt(userPrompt, sourceLang, targetLang)
+        return if (extra.isEmpty()) "" else "\n\nAdditional reader instructions:\n$extra"
+    }
+
     /** The translator's rules travel outside the conversation, as the system prompt. */
     private fun systemInstruction(
         systemPrompt: String,
@@ -739,6 +765,7 @@ object PageTranslator {
         sourceLang: String,
         targetLang: String,
         systemPrompt: String,
+        userPrompt: String = "",
         apiKeys: List<String>,
         model: String,
         thinkingLevel: String,
@@ -788,6 +815,9 @@ object PageTranslator {
                     },
                 )
                 put(JSONObject().apply { put("text", prompt) })
+                formatUserPrompt(userPrompt, sourceLang, targetLang).takeIf { it.isNotEmpty() }?.let { extra ->
+                    put(JSONObject().apply { put("text", extra) })
+                }
             }
             put(
                 "contents",
