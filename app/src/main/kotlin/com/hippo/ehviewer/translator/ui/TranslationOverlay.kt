@@ -313,7 +313,7 @@ fun TranslationOverlay(
                 var measuredTextHeightPx = measureTextHeight(finalFontSizeSp, contentWidthPx) + bubbleVPaddingPx
                 // Only shrink, and only when the text would otherwise be cut:
                 // the standard size is the ceiling for every balloon.
-                if (fitTextInsideBubble && customSizeSp == null && !bubble.isSfx) {
+                if (fitTextInsideBubble && customSizeSp == null && !bubble.isSfx && !exact) {
                     var guard = 0
                     while (guard < 80 && finalFontSizeSp > effectiveMinFontSp && measuredTextHeightPx > coverHeightPx) {
                         finalFontSizeSp = (finalFontSizeSp - 0.25f).coerceAtLeast(effectiveMinFontSp)
@@ -322,7 +322,9 @@ fun TranslationOverlay(
                     }
                 }
 
-                val actualHeightPx = if (dynamicBubbleSize && !exact) {
+                val actualHeightPx = if (exact) {
+                    maxOf(coverHeightPx, measuredTextHeightPx)
+                } else if (dynamicBubbleSize) {
                     maxOf(coverHeightPx, measuredTextHeightPx).coerceIn(24f, maxHeightPx)
                 } else {
                     coverHeightPx.coerceIn(24f, maxHeightPx)
@@ -449,7 +451,7 @@ private fun DynamicBubbleView(
     }
 
     val liveWidthPx = (layout.baseWidthPx * liveWidthScale).coerceAtLeast(layout.minRequiredWidthPx)
-    val liveHeightPx = if (dynamicBubbleSize && !exact) {
+    val liveHeightPx = if (exact || dynamicBubbleSize) {
         measuredHeightPx * liveHeightScale
     } else {
         layout.baseHeightPx * liveHeightScale
@@ -641,7 +643,7 @@ private fun DynamicBubbleView(
     val maxLines = when {
         // A sound word is short: more lines would overflow the small box.
         bubble.isSfx -> 3
-        dynamicBubbleSize -> Int.MAX_VALUE
+        exact || dynamicBubbleSize -> Int.MAX_VALUE
         else -> 14
     }
 
@@ -650,7 +652,7 @@ private fun DynamicBubbleView(
             .offset { IntOffset(boxLeft.roundToInt(), boxTop.roundToInt()) }
             .width(targetWidthDp)
             .then(
-                if (dynamicBubbleSize && !bubble.isSfx && !exact) {
+                if (exact || (dynamicBubbleSize && !bubble.isSfx)) {
                     // At least the measured height (so the original balloon is
                     // covered), but allowed to grow if the text needs more room.
                     // The box stays centred on the balloon while it grows, so it
@@ -661,7 +663,7 @@ private fun DynamicBubbleView(
                 },
             )
             .onSizeChanged { size ->
-                if (!bubble.isSfx && !exact && size.height > 0) {
+                if (!bubble.isSfx && size.height > 0) {
                     measuredHeightPx = size.height.toFloat()
                 }
             }

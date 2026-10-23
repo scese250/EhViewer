@@ -13,13 +13,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.neverEqualPolicy
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.text.parseAsHtml
@@ -38,6 +42,7 @@ fun GalleryCommentCard(
     onUrlClick: (String) -> Unit,
     maxLines: Int = Int.MAX_VALUE,
     ellipsis: Boolean = false,
+    isTranslated: Boolean = false,
     processComment: @Composable (GalleryComment, Html.ImageGetter) -> CharSequence = { c, ig -> c.comment.parseAsHtml(imageGetter = ig) },
 ) = with(comment) {
     val targetUrl = remember { mutableStateOf<String?>(null) }
@@ -54,13 +59,30 @@ fun GalleryCommentCard(
         Row(
             modifier = Modifier.padding(horizontal = margin, vertical = 8.dp).fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             ProvideTextStyle(value = MaterialTheme.typography.titleSmall) {
                 val userText = if (uploader) stringResource(id = R.string.comment_user_uploader, user.orEmpty()) else user.orEmpty()
-                Text(
-                    text = userText,
-                    modifier = Modifier.clickable(onClick = onUserClick),
-                )
+                Row(
+                    modifier = Modifier.weight(1f, fill = false).padding(end = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = userText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.clickable(onClick = onUserClick),
+                    )
+                    if (isTranslated) {
+                        Text(
+                            text = "Comment Translated",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontStyle = FontStyle.Italic,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
                 Text(
                     text = ReadableTime.getTimeAgo(time),
                 )
@@ -70,19 +92,22 @@ fun GalleryCommentCard(
         val linkTextColor = MaterialTheme.colorScheme.primary.toArgb()
         val redrawSignal = remember { mutableStateOf(Unit, neverEqualPolicy()) }
         val commentText = processComment(comment, CoilImageGetter { redrawSignal.value = Unit })
-        AndroidView(
-            factory = { context ->
-                LinkifyTextView(context) { targetUrl.value = it }.apply {
-                    setTextColor(textColor)
-                    setLinkTextColor(linkTextColor)
-                    this.maxLines = maxLines
-                    if (ellipsis) ellipsize = TextUtils.TruncateAt.END
-                }
-            },
-            modifier = Modifier.padding(start = margin, end = margin, bottom = 8.dp),
-        ) { view ->
-            view.text = commentText
-            redrawSignal.value
+        key(isTranslated, commentText.toString()) {
+            AndroidView(
+                factory = { context ->
+                    LinkifyTextView(context) { targetUrl.value = it }.apply {
+                        setTextColor(textColor)
+                        setLinkTextColor(linkTextColor)
+                        this.maxLines = maxLines
+                        if (ellipsis) ellipsize = TextUtils.TruncateAt.END
+                        text = commentText
+                    }
+                },
+                modifier = Modifier.padding(start = margin, end = margin, bottom = 8.dp),
+            ) { view ->
+                view.text = commentText
+                redrawSignal.value
+            }
         }
     }
 }

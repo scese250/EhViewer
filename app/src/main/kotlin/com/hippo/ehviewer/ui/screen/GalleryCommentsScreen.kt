@@ -35,6 +35,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularWavyProgressIndicator
 import androidx.compose.material3.FloatingActionButton
@@ -102,6 +103,7 @@ import com.hippo.ehviewer.client.EhFilter.remember
 import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.client.data.ListUrlBuilder
 import com.hippo.ehviewer.collectAsState
+import com.hippo.ehviewer.translator.CommentTranslator
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.jumpToReaderByPage
 import com.hippo.ehviewer.ui.main.GalleryCommentCard
@@ -141,7 +143,8 @@ private inline fun SpannableStringBuilder.withSpans(
 fun processComment(
     comment: GalleryComment,
     imageGetter: Html.ImageGetter,
-) = comment.comment.parseAsHtml(imageGetter = imageGetter).let { text ->
+    translatedText: String? = null,
+) = (translatedText ?: comment.comment.parseAsHtml(imageGetter = imageGetter)).let { text ->
     buildSpannedString {
         append(text)
         URL_PATTERN.findAll(text).forEach { result ->
@@ -194,6 +197,10 @@ fun AnimatedVisibilityScope.GalleryCommentsScreen(gid: Long, navigator: Destinat
     }
     var refreshing by remember { mutableStateOf(false) }
     val density = LocalDensity.current
+
+    var translatedComments by remember(galleryDetail.gid) { mutableStateOf<Map<Long, String>>(emptyMap()) }
+    var showUntranslatedIds by remember(galleryDetail.gid) { mutableStateOf<Set<Long>>(emptySet()) }
+    var isTranslatingComments by remember { mutableStateOf(false) }
 
     suspend fun refreshComment(showAll: Boolean) {
         val url = EhUrl.getGalleryDetailUrl(galleryDetail.gid, galleryDetail.token, allComment = showAll)
@@ -282,18 +289,85 @@ fun AnimatedVisibilityScope.GalleryCommentsScreen(gid: Long, navigator: Destinat
             )
         },
         floatingActionButton = {
-            if (hasSignedIn && !commenting) {
-                FloatingActionButton(
-                    onClick = {
-                        if (commentId != -1L) {
-                            commentId = -1L
-                            userComment = TextFieldValue()
-                        }
-                        commenting = true
-                    },
+            if (!commenting) {
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
                     modifier = Modifier.snackBarPadding(),
                 ) {
-                    Icon(imageVector = Icons.AutoMirrored.Default.Reply, contentDescription = null)
+                    FloatingActionButton(
+                        onClick = {
+                            if (!isTranslatingComments) {
+                                launchIO {
+                                    val asianComments = comments.comments.filter {
+                                        val plain = it.comment.parseAsHtml().toString().trim()
+                                        CommentTranslator.containsAsianCharacters(plain)
+                                    }
+                                    if (asianComments.isEmpty()) {
+                                        snackbar("No Asian comments found to translate")
+                                        return@launchIO
+                                    }
+                                    val needed = asianComments.filter { !translatedComments.containsKey(it.id) }
+                                    if (needed.isEmpty()) {
+                                        if (showUntranslatedIds.isNotEmpty()) {
+                                            withUIContext {
+                                                showUntranslatedIds = emptySet()
+                                            }
+                                            snackbar("Comments translated")
+                                        } else {
+                                            snackbar("All Asian comments are already translated")
+                                        }
+                                        return@launchIO
+                                    }
+
+                                    isTranslatingComments = true
+                                    runSuspendCatching {
+                                        val newTranslations = CommentTranslator.translateCommentsBatch(
+                                            comments = comments.comments,
+                                            existingTranslations = translatedComments,
+                                            targetLang = "en",
+                                        )
+                                        withUIContext {
+                                            translatedComments = newTranslations
+                                            showUntranslatedIds = showUntranslatedIds - newTranslations.keys
+                                            isTranslatingComments = false
+                                        }
+                                        val count = needed.size
+                                        snackbar(if (count == 1) "Translated 1 comment" else "Translated $count comments")
+                                    }.onFailure {
+                                        withUIContext {
+                                            isTranslatingComments = false
+                                        }
+                                        snackbar("Translation failed: ${it.displayString()}")
+                                    }
+                                }
+                            }
+                        },
+                    ) {
+                        if (isTranslatingComments) {
+                            CircularWavyProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Translate,
+                                contentDescription = "Translate comments",
+                            )
+                        }
+                    }
+                    if (hasSignedIn) {
+                        FloatingActionButton(
+                            onClick = {
+                                if (commentId != -1L) {
+                                    commentId = -1L
+                                    userComment = TextFieldValue()
+                                }
+                                commenting = true
+                            },
+                        ) {
+                            Icon(imageVector = Icons.AutoMirrored.Default.Reply, contentDescription = null)
+                        }
+                    }
                 }
             }
         },
@@ -326,11 +400,7 @@ fun AnimatedVisibilityScope.GalleryCommentsScreen(gid: Long, navigator: Destinat
             val additionalPadding = if (commenting) {
                 editTextMeasured
             } else {
-                if (!comments.hasMore) {
-                    MinimumContentPaddingEditText
-                } else {
-                    0.dp
-                }
+                if (hasSignedIn) 144.dp else MinimumContentPaddingEditText
             }
             val voteUpSucceed = stringResource(R.string.vote_up_successfully)
             val cancelVoteUpSucceed = stringResource(R.string.cancel_vote_up_successfully)
@@ -351,8 +421,13 @@ fun AnimatedVisibilityScope.GalleryCommentsScreen(gid: Long, navigator: Destinat
             ) {
                 items(
                     items = comments.comments,
-                    key = { it.id },
+                    key = { "${it.id}_${translatedComments[it.id] != null && it.id !in showUntranslatedIds}" },
                 ) { item ->
+                    val translation = translatedComments[item.id]
+                    val isUntranslatedOverride = item.id in showUntranslatedIds
+                    val isTranslated = translation != null && !isUntranslatedOverride
+                    val activeTranslation = if (isTranslated) translation else null
+
                     suspend fun voteComment(comment: GalleryComment, isUp: Boolean) {
                         galleryDetail.runSuspendCatching {
                             EhEngine.voteComment(apiUid, apiKey, gid, token, comment.id, if (isUp) 1 else -1).also {
@@ -372,8 +447,23 @@ fun AnimatedVisibilityScope.GalleryCommentsScreen(gid: Long, navigator: Destinat
                     }
 
                     suspend fun doCommentAction(comment: GalleryComment) = awaitSelectAction {
+                        if (isTranslated) {
+                            onSelect("View untranslated comment") {
+                                showUntranslatedIds = showUntranslatedIds + comment.id
+                            }
+                        } else if (translation != null && isUntranslatedOverride) {
+                            onSelect("View translated comment") {
+                                showUntranslatedIds = showUntranslatedIds - comment.id
+                            }
+                        }
+
                         onSelect(copyComment) {
-                            addTextToClipboard(comment.comment.parseAsHtml())
+                            val textToCopy = if (isTranslated) {
+                                translation ?: comment.comment.parseAsHtml()
+                            } else {
+                                comment.comment.parseAsHtml()
+                            }
+                            addTextToClipboard(textToCopy)
                         }
                         if (!comment.uploader && !comment.editable) {
                             onSelect(blockCommenter) { showFilterCommenter(comment) }
@@ -426,7 +516,8 @@ fun AnimatedVisibilityScope.GalleryCommentsScreen(gid: Long, navigator: Destinat
                                 if (!jumpToReaderByPage(it, galleryDetail)) if (!navWithUrl(it)) openBrowser(it)
                             }
                         },
-                        processComment = { c, ig -> processComment(c, ig) },
+                        isTranslated = isTranslated,
+                        processComment = { c, ig -> processComment(c, ig, activeTranslation) },
                     )
                 }
                 if (comments.hasMore) {
