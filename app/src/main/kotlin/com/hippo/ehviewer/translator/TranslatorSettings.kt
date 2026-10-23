@@ -47,7 +47,19 @@ class TranslatorSettings(context: Context) {
      * (pronouns, H vocabulary, signs, REJECT) live here and stay editable.
      */
     var geminiSystemPrompt by mutableStateOf(
-        prefs.getString("gemini_system_prompt", DEFAULT_SYSTEM_PROMPT) ?: DEFAULT_SYSTEM_PROMPT,
+        run {
+            val saved = prefs.getString("gemini_system_prompt", null)
+            val version = prefs.getInt("gemini_system_prompt_version", 0)
+            if (saved.isNullOrBlank() || version < 2 || saved.contains("You are the translator and letterer of a manga page")) {
+                prefs.edit()
+                    .putString("gemini_system_prompt", DEFAULT_SYSTEM_PROMPT)
+                    .putInt("gemini_system_prompt_version", 2)
+                    .apply()
+                DEFAULT_SYSTEM_PROMPT
+            } else {
+                saved
+            }
+        },
     )
 
     /**
@@ -184,6 +196,7 @@ class TranslatorSettings(context: Context) {
             .putString("source_lang", sourceLang)
             .putString("target_lang", targetLang)
             .putString("gemini_system_prompt", geminiSystemPrompt)
+            .putInt("gemini_system_prompt_version", 2)
             .putString("thinking_level", thinkingLevel)
             .putString("bubble_style", bubbleStyle)
             .putFloat("outline_width", outlineWidth)
@@ -266,23 +279,28 @@ class TranslatorSettings(context: Context) {
          * so the same text works for every target language.
          */
         val DEFAULT_SYSTEM_PROMPT = """
-            |You are the translator and letterer of a manga page. The user turn carries the page image; read it and translate its dialogue from {lang input} into {lang output}.
+            |You are the OCR and direct text overlay lettering engine for this manga page: the attached image is the complete page.
+            |Your job is to read every block of Japanese text, translate it to {lang output}, and provide the exact bounding box of the Japanese text characters so the translated {lang output} text is rendered directly on top of the original Japanese text.
             |
-            |TRANSLATION
-            |- Write natural, colloquial {lang output} the way a published scanlation does, never literal textbook prose. Balloons are small, so keep every line short.
-            |- Read the whole panel before translating. Japanese drops pronouns: decide first or third person from what the panel shows and from the speech level, and never switch person in the middle of a conversation.
-            |- Match the gender of the character who is speaking, as shown in the panel: feminine or masculine pronouns and agreement.
-            |- Futanari characters always take feminine pronouns and feminine agreement.
-            |- Keep -san, -kun, -chan, -sempai or -sensei only when the scene depends on the honorific.
-            |- Adult scenes: translate the intent, not the dictionary meaning. In a sexual context いく / "Ya voy" is "Me vengo", 気持ちいい is "qué rico", だめ is "no... me voy a venir". Keep the intensity of the original.
-            |- Onomatopoeia drawn as stylised letters is not dialogue: give a short {lang output} sound word and mark that entry as "sfx". Those are lettered horizontally on a single line at the standard size, so never wrap them in long sentences.
-            |- Never translate signs, posters, shop fronts, book spines, credits, watermarks, page numbers, logos, on-screen text or background artwork.
-            |- If a numbered box or a balloon has no readable dialogue (empty balloon, only a sound effect, only artwork, garbled OCR), answer exactly "REJECT" for it. Never invent text for it.
-            |- Do not add notes, romanisation or explanations.
+            |Coordinates:
+            |- Use normalised coordinates 0-1000 for both axes (0,0 = top-left of the image, 1000,1000 = bottom-right).
+            |- The "box" field is [ymin, xmin, ymax, xmax].
             |
-            |LAYOUT
-            |- Rectangles use normalised coordinates 0-1000 over the whole page.
-            |- Cover the text only: follow the lines of dialogue, not the balloon outline and not the character. The app centres the translation inside that rectangle and grows it up and down when the {lang output} text is longer, so centre the rectangle on the original text.
+            |Rules:
+            |1. Return one entry per block of dialogue, monologue, or caption, in Japanese manga reading order (right to left, top to bottom).
+            |2. "ids" must always be empty ([]).
+            |3. "box": [ymin, xmin, ymax, xmax] must tightly enclose the JAPANESE CHARACTERS of each dialogue block:
+            |   - Enclose all vertical columns of that sentence together (from the top of the highest character to the bottom of the lowest, and from the leftmost column to the rightmost column).
+            |   - The app stamps the translated {lang output} text directly ON TOP of the original Japanese characters with a thick white outline.
+            |   - Do NOT report the speech balloon interior or padding. Do NOT place the box over empty space, and NEVER place the box over a character's face or body unless the Japanese text is literally drawn over them.
+            |   - The box does not auto-grow or expand: it is the exact placement target where the translated text will sit directly over the original Japanese text.
+            |4. If a sentence spans across multiple adjacent vertical columns in the same bubble, join them into a single entry covering all those columns.
+            |5. Onomatopoeia painted on artwork must be returned in "extra" with "kind": "sfx" and "box" tightly covering the sound effect characters.
+            |6. Ignore non-manga text: watermarks, scanlation credits, page numbers, store logos, and URLs.
+            |7. Do not add notes, romanisation or explanations.
+            |
+            |Reply with raw JSON only, without markdown fences or commentary:
+            |{"bubbles":[{"ids":[],"box":[ymin,xmin,ymax,xmax],"source":"japanese text as printed","text":"{lang output} translation","kind":"dialogue"}],"extra":[{"box":[ymin,xmin,ymax,xmax],"source":"...","text":"...","kind":"sfx"}]}
         """.trimMargin()
 
         /** ML Kit only ships the Japanese recognizer in this build. */

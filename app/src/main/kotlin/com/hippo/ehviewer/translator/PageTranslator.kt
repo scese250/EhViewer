@@ -401,7 +401,8 @@ object PageTranslator {
             put("contents", contents)
             // The translator's rules travel as the system prompt; the dialogue
             // and, in vision mode, the page image are the user turn.
-            put("systemInstruction", systemInstruction(systemPrompt, sourceLang, targetLang))
+            val effectiveSystemPrompt = systemPrompt.ifBlank { TranslatorSettings.DEFAULT_SYSTEM_PROMPT }
+            put("systemInstruction", systemInstruction(effectiveSystemPrompt, sourceLang, targetLang))
             put(
                 "generationConfig",
                 JSONObject().apply {
@@ -799,7 +800,8 @@ object PageTranslator {
                     )
                 },
             )
-            put("systemInstruction", systemInstruction(systemPrompt, sourceLang, targetLang))
+            val effectiveSystemPrompt = systemPrompt.ifBlank { TranslatorSettings.DEFAULT_SYSTEM_PROMPT }
+            put("systemInstruction", systemInstruction(effectiveSystemPrompt, sourceLang, targetLang))
             put(
                 "generationConfig",
                 JSONObject().apply {
@@ -872,9 +874,6 @@ object PageTranslator {
             append(langName)
             append(" translation\",\"kind\":\"dialogue\"}],")
             append("\"extra\":[{\"box\":[ymin,xmin,ymax,xmax],\"source\":\"...\",\"text\":\"...\",\"kind\":\"sfx\"}]}")
-            appendLine()
-            appendLine("\"source\" is the text exactly as printed on the page. \"kind\" is \"dialogue\" for speech and")
-            appendLine("\"sfx\" for onomatopoeia. \"extra\" is for sound effects painted on the artwork. Use at most ${MAX_EXTRA_BUBBLES * 2} extra entries.")
         } else {
             appendLine("You are ALSO the OCR engine and the bubble layout engine for this manga page: the attached")
             appendLine("image is the complete page.")
