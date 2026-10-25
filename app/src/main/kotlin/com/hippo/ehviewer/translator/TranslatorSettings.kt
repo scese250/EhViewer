@@ -56,6 +56,7 @@ class TranslatorSettings(context: Context) {
                 .distinct()
         } ?: listOf(DEFAULT_GEMINI_MODEL),
     )
+
     /** Language names as the user typed them, e.g. "Japanese" / "English". */
     var sourceLang by mutableStateOf(prefs.getString("source_lang", "Japanese") ?: "Japanese")
     var targetLang by mutableStateOf(prefs.getString("target_lang", "English") ?: "English")
