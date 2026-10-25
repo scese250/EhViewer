@@ -274,7 +274,7 @@ object TranslationCache {
             ocrDurationMs = item.optLong("ocr"),
             translateDurationMs = item.optLong("tr"),
             totalDurationMs = item.optLong("total"),
-            engineName = item.optString("engine", "Google"),
+            engineName = item.optString("engine", "Gemini"),
             settingsSignature = item.optString("sig"),
             mergedBoxes = item.optInt("merged"),
             discardedBoxes = item.optInt("discarded"),

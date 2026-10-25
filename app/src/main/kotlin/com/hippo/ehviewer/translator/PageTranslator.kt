@@ -16,7 +16,6 @@ import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URI
-import java.net.URLEncoder
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.math.max
@@ -25,22 +24,24 @@ import kotlin.math.roundToInt
 import kotlin.system.measureTimeMillis
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+
+/**
+ * A translation failure that keeps the untouched API reply, so the reader can
+ * show exactly what the server or the model answered instead of a fixed text.
+ */
+class TranslationFailure(
+    message: String,
+    val rawResponse: String,
+) : Exception(message)
 
 object PageTranslator {
     private val recognizer by lazy {
         TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build())
     }
-
-    private val googleSemaphore = Semaphore(6)
 
     @Volatile
     private var currentKeyIndex = 0
@@ -63,23 +64,20 @@ object PageTranslator {
     suspend fun translatePage(
         pageIndex: Int,
         bitmap: Bitmap,
-        sourceLang: String = "ja",
-        targetLang: String = "es",
+        sourceLang: String = "Japanese",
+        targetLang: String = "English",
         systemPrompt: String = TranslatorSettings.DEFAULT_SYSTEM_PROMPT,
         userPrompt: String = "",
-        engine: String = TranslatorSettings.ENGINE_GOOGLE,
         geminiApiKeys: List<String> = emptyList(),
         geminiModel: String = TranslatorSettings.DEFAULT_GEMINI_MODEL,
         thinkingLevel: String = TranslatorSettings.THINKING_MINIMAL,
-        grouping: BubbleGroupingConfig = BubbleGroupingConfig(),
-        visionMode: Boolean = true,
-        skipOcr: Boolean = false,
         onPhase: (Phase) -> Unit = {},
     ): PageTranslation = withContext(Dispatchers.Default) {
-        val gemini = engine == TranslatorSettings.ENGINE_GEMINI && geminiApiKeys.isNotEmpty()
-        // Without the local OCR there are neither hint boxes nor fallback text,
-        // so this mode only makes sense when the vision model can be called.
-        val ocrSkipped = skipOcr && gemini
+        // The model is the only engine left: without a key there is nothing to
+        // call, so fail loudly instead of silently using another translator.
+        if (geminiApiKeys.isEmpty()) {
+            error("No Gemini API key: add one in the translation settings.")
+        }
 
         suspend fun recognize(): Pair<List<RawBlock>, Long> {
             var visionText: Text? = null
@@ -101,111 +99,86 @@ object PageTranslator {
             return blocks to ms
         }
 
-        var rawBlocks: List<RawBlock> = emptyList()
         var ocrTime = 0L
-        var mergedBlocks: List<RawBlock> = emptyList()
-        if (!ocrSkipped) {
-            onPhase(Phase.OCR)
-            val (blocks, ms) = recognize()
-            rawBlocks = blocks
-            ocrTime = ms
-            // Stitch the per-column OCR fragments of every balloon back
-            // together. Without this a single vertical bubble is translated
-            // twice and drawn as two overlapping boxes. Keep the raw blocks if
-            // analysis fails so a detection bug can never break translation.
-            mergedBlocks = runCatching {
-                BubbleDetector.group(rawBlocks, bitmap, grouping)
-            }.getOrElse { rawBlocks }
-        }
-
         var bubbles: List<TranslatedBubble> = emptyList()
-        var engineUsed = "Google"
+        var engineUsed = "Gemini"
         var mergedBoxes = 0
         var discardedBoxes = 0
 
-        if (engine == TranslatorSettings.ENGINE_GEMINI && geminiApiKeys.isEmpty()) {
-            engineUsed = "Google (sin claves de Gemini)"
-        }
-
         val transTime = measureTimeMillis {
-            if (gemini) {
-                var translated = false
-                var visionFailure: Exception? = null
+            var translated = false
+            var visionFailure: Exception? = null
 
-                if (visionMode || ocrSkipped) {
-                    onPhase(Phase.VISION)
-                    try {
-                        val result = translateWithGeminiVision(
-                            bitmap = bitmap,
-                            blocks = mergedBlocks,
-                            noHints = ocrSkipped,
-                            sourceLang = sourceLang,
-                            targetLang = targetLang,
-                            systemPrompt = systemPrompt,
-                            userPrompt = userPrompt,
-                            apiKeys = geminiApiKeys,
-                            model = geminiModel,
-                            thinkingLevel = thinkingLevel,
-                        )
-                        bubbles = result.bubbles
-                        mergedBoxes = result.mergedBoxes
-                        discardedBoxes = result.discardedBoxes
-                        engineUsed = if (ocrSkipped) {
-                            "Gemini sin OCR (${geminiModel.removePrefix("gemini-")})"
-                        } else {
-                            "Gemini visión (${geminiModel.removePrefix("gemini-")})"
-                        }
-                        translated = true
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        visionFailure = e
-                    }
-                }
+            // The model reads the page and measures every balloon itself; the
+            // on-device OCR only exists as a rescue path now.
+            onPhase(Phase.VISION)
+            try {
+                val result = translateWithGeminiVision(
+                    bitmap = bitmap,
+                    blocks = emptyList(),
+                    noHints = true,
+                    sourceLang = sourceLang,
+                    targetLang = targetLang,
+                    systemPrompt = systemPrompt,
+                    userPrompt = userPrompt,
+                    apiKeys = geminiApiKeys,
+                    model = geminiModel,
+                    thinkingLevel = thinkingLevel,
+                )
+                bubbles = result.bubbles
+                mergedBoxes = result.mergedBoxes
+                discardedBoxes = result.discardedBoxes
+                engineUsed = "Gemini (${geminiModel.removePrefix("gemini-")})"
+                translated = true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: TranslationFailure) {
+                // The API or the model already answered: surface that reply
+                // instead of spending seconds on the OCR rescue.
+                throw e
+            } catch (e: Exception) {
+                visionFailure = e
+            }
 
-                if (!translated) {
-                    // With the OCR skipped there is no text to fall back to:
-                    // run ML Kit now so the rescue path can still translate.
-                    if (ocrSkipped && rawBlocks.isEmpty()) {
-                        onPhase(Phase.OCR)
-                        val (blocks, ms) = recognize()
-                        rawBlocks = blocks
-                        ocrTime += ms
-                        mergedBlocks = runCatching {
-                            BubbleDetector.group(rawBlocks, bitmap, grouping)
-                        }.getOrElse { rawBlocks }
-                    }
-                    onPhase(Phase.TRANSLATE)
-                    try {
-                        bubbles = translateWithGeminiText(
-                            blocks = mergedBlocks,
-                            sourceLang = sourceLang,
-                            targetLang = targetLang,
-                            systemPrompt = systemPrompt,
-                            userPrompt = userPrompt,
-                            apiKeys = geminiApiKeys,
-                            model = geminiModel,
-                            thinkingLevel = thinkingLevel,
-                        )
-                        engineUsed = if (visionFailure != null) {
-                            "Gemini texto (visión: ${visionFailure.message?.take(40)})"
-                        } else {
-                            "Gemini (${geminiModel.removePrefix("gemini-")})"
-                        }
-                        translated = true
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        engineUsed = "Google (Fallback: ${(visionFailure ?: e).message?.take(24)})"
-                    }
-                }
-
-                if (!translated) {
-                    bubbles = translateWithGoogleBatch(mergedBlocks, sourceLang, targetLang)
-                }
-            } else {
+            if (!translated) {
+                // Last resort: run ML Kit and send the recognised text alone.
+                onPhase(Phase.OCR)
+                val (blocks, ms) = recognize()
+                ocrTime += ms
+                // Stitch the per-column OCR fragments of every balloon back
+                // together so a vertical bubble is not translated twice.
+                val mergedBlocks = runCatching {
+                    // The detection controls are gone: the rescue path uses the
+                    // tuned defaults of the detector.
+                    BubbleDetector.group(blocks, bitmap, BubbleGroupingConfig())
+                }.getOrElse { blocks }
                 onPhase(Phase.TRANSLATE)
-                bubbles = translateWithGoogleBatch(mergedBlocks, sourceLang, targetLang)
+                try {
+                    bubbles = translateWithGeminiText(
+                        blocks = mergedBlocks,
+                        sourceLang = sourceLang,
+                        targetLang = targetLang,
+                        systemPrompt = systemPrompt,
+                        userPrompt = userPrompt,
+                        apiKeys = geminiApiKeys,
+                        model = geminiModel,
+                        thinkingLevel = thinkingLevel,
+                    )
+                    engineUsed = "Gemini text (vision failed: ${visionFailure?.message?.take(40)})"
+                    translated = true
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Prefer the newest reply: if the text call failed too, its
+                    // raw body explains why (quota, safety, bad model...).
+                    val failure = (e as? TranslationFailure)
+                        ?: (visionFailure as? TranslationFailure)
+                    if (failure != null) throw failure
+                    throw TranslationFailure(
+                        message = "Gemini could not translate this page",
+                        rawResponse = (visionFailure ?: e).message.orEmpty(),
+                    )
+                }
             }
         }
 
@@ -255,91 +228,6 @@ object PageTranslator {
             )
         }
         return bubbles
-    }
-
-    private suspend fun translateWithGoogleBatch(
-        blocks: List<RawBlock>,
-        sourceLang: String,
-        targetLang: String,
-    ): List<TranslatedBubble> = coroutineScope {
-        blocks.mapIndexed { idx, block ->
-            async(Dispatchers.IO) {
-                // A page can have dozens of bubbles; firing them all at once
-                // makes the endpoint throttle every request and the page takes
-                // minutes. Keep a small pool so results still stream in order.
-                val translated = googleSemaphore.withPermit {
-                    translateTextGoogle(block.text, sourceLang, targetLang)
-                }
-                TranslatedBubble(
-                    id = idx,
-                    originalText = block.text,
-                    translatedText = translated,
-                    boundingBox = block.rect,
-                )
-            }
-        }.awaitAll()
-    }
-
-    private suspend fun translateTextGoogle(
-        text: String,
-        sourceLang: String,
-        targetLang: String,
-    ): String = withContext(Dispatchers.IO) {
-        if (text.isBlank()) return@withContext text
-
-        // Primary Google endpoint with explicit source and target languages (never auto)
-        val primaryResult = runCatching {
-            val encoded = URLEncoder.encode(text, "UTF-8")
-            val urlString = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=$sourceLang&tl=$targetLang&dt=t&q=$encoded"
-            val url = URI.create(urlString).toURL()
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10)")
-                connectTimeout = 5000
-                readTimeout = 5000
-            }
-            val response = conn.inputStream.bufferedReader().use { it.readText() }
-            val array = JSONArray(response)
-            val sentences = array.optJSONArray(0) ?: return@runCatching text
-            val sb = StringBuilder()
-            for (i in 0 until sentences.length()) {
-                val part = sentences.optJSONArray(i)
-                if (part != null && part.length() > 0) {
-                    sb.append(part.optString(0))
-                }
-            }
-            cleanMangaText(sb.toString())
-        }.getOrNull()
-
-        if (primaryResult != null && primaryResult.isNotBlank()) {
-            if (sourceLang != "ja" || !containsJapanese(primaryResult)) {
-                return@withContext primaryResult
-            }
-        }
-
-        // Secondary Google endpoint (dict-chrome-ex) fallback with explicit languages
-        val secondaryResult = runCatching {
-            val encoded = URLEncoder.encode(text, "UTF-8")
-            val urlString = "https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=$sourceLang&tl=$targetLang&q=$encoded"
-            val url = URI.create(urlString).toURL()
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                setRequestProperty("User-Agent", "Mozilla/5.0")
-                connectTimeout = 5000
-                readTimeout = 5000
-            }
-            val response = conn.inputStream.bufferedReader().use { it.readText() }
-            val array = JSONArray(response)
-            cleanMangaText(array.optString(0))
-        }.getOrNull()
-
-        if (secondaryResult != null && secondaryResult.isNotBlank()) {
-            if (sourceLang != "ja" || !containsJapanese(secondaryResult)) {
-                return@withContext secondaryResult
-            }
-        }
-
-        cleanMangaText(primaryResult ?: secondaryResult ?: text)
     }
 
     private fun cleanMangaText(text: String): String = text
@@ -453,30 +341,15 @@ object PageTranslator {
                 continue
             }
             val clean = cleanMangaText(transText)
-            if (clean.isNotBlank() && (sourceLang != "ja" || !containsJapanese(clean))) {
+            if (clean.isNotBlank() && (!TranslatorSettings.isJapanese(sourceLang) || !containsJapanese(clean))) {
                 results[targetId] = clean
             }
         }
 
-        // Anything the model skipped is recovered with the free endpoint, in
-        // parallel, so one malformed reply never leaves a balloon empty.
-        val missing = texts.indices.filter { results[it] == null && !rejected[it] }
-        val recovered = coroutineScope {
-            missing.map { idx ->
-                async(Dispatchers.IO) {
-                    idx to googleSemaphore.withPermit {
-                        translateTextGoogle(texts[idx], sourceLang, targetLang)
-                    }
-                }
-            }.awaitAll().toMap()
-        }
-
+        // Rejected lines are dropped and lines the model skipped stay empty:
+        // with a single engine there is no second translator to recover them.
         texts.indices.map { idx ->
-            when {
-                rejected[idx] -> null
-                results[idx] != null -> results[idx]
-                else -> recovered[idx]?.takeIf { it.isNotBlank() }
-            }
+            if (rejected[idx]) null else results[idx]
         }
     }
 
@@ -553,7 +426,11 @@ object PageTranslator {
                 }
 
                 val errorText = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-                lastError = IllegalStateException("Gemini API ($responseCode): ${errorText.take(200)}")
+                // Keep the body verbatim: the reader shows it as the reason.
+                lastError = TranslationFailure(
+                    message = "Gemini API ($responseCode)",
+                    rawResponse = errorText.ifBlank { "HTTP $responseCode" },
+                )
                 if (responseCode == 400 && !retriedWithoutThinking &&
                     errorText.contains("thinking", ignoreCase = true)
                 ) {
@@ -573,7 +450,10 @@ object PageTranslator {
             attempt++
         }
 
-        throw lastError ?: IllegalStateException("Todas las claves de API fallaron")
+        throw lastError ?: TranslationFailure(
+            message = "Gemini API request failed",
+            rawResponse = "No response from the API",
+        )
     }
 
     /** The user's extra instructions, formatted and trimmed; empty when unset. */
@@ -614,13 +494,13 @@ object PageTranslator {
     private fun candidateText(root: JSONObject): String {
         val blockReason = root.optJSONObject("promptFeedback")?.optString("blockReason").orEmpty()
         if (blockReason.isNotBlank()) {
-            error("Gemini bloqueó la imagen ($blockReason)")
+            throw TranslationFailure("Gemini blocked the image", root.toString())
         }
 
         val candidate = root.optJSONArray("candidates")?.optJSONObject(0)
-            ?: error("Gemini no devolvió respuesta")
+            ?: throw TranslationFailure("Gemini returned no answer", root.toString())
         val parts = candidate.optJSONObject("content")?.optJSONArray("parts")
-            ?: error("Gemini devolvió una respuesta vacía")
+            ?: throw TranslationFailure("Gemini returned an empty answer", root.toString())
 
         val builder = StringBuilder()
         for (i in 0 until parts.length()) {
@@ -629,8 +509,8 @@ object PageTranslator {
 
         val text = builder.toString().trim()
         if (text.isEmpty()) {
-            val reason = candidate.optString("finishReason")
-            error("Gemini devolvió una respuesta vacía${if (reason.isNotBlank()) " ($reason)" else ""}")
+            // The raw reply carries the finishReason (SAFETY, RECITATION, ...).
+            throw TranslationFailure("Gemini returned an empty answer", root.toString())
         }
         return text
     }
@@ -1125,7 +1005,11 @@ object PageTranslator {
 
         val extras = root.optJSONArray("extra") ?: root.optJSONArray("extras") ?: JSONArray()
         val bubbleArray = findVisionArray(root)
-            ?: if (extras.length() == 0) error("La IA no devolvió ninguna viñeta") else JSONArray()
+            ?: if (extras.length() == 0) {
+                throw TranslationFailure("The model returned no bubbles", raw)
+            } else {
+                JSONArray()
+            }
         for (i in 0 until bubbleArray.length()) {
             val item = bubbleArray.optJSONObject(i) ?: continue
             val ids = readIds(item)
@@ -1243,7 +1127,9 @@ object PageTranslator {
         if (bubbles.isEmpty()) {
             // Every box was rejected: that is a valid answer for a page with no
             // readable dialogue. No answer at all is a failure worth retrying.
-            if (entries.isEmpty()) error("La IA no reconoció texto en esta página")
+            if (entries.isEmpty()) {
+                throw TranslationFailure("The model recognised no text on this page", raw)
+            }
             return VisionResult(emptyList(), 0, blocks.size)
         }
 
@@ -1373,7 +1259,7 @@ object PageTranslator {
         val start = text.indexOf('{')
         val end = text.lastIndexOf('}')
         if (start == -1 || end <= start) {
-            error("Respuesta de la IA no válida: ${raw.take(120)}")
+            throw TranslationFailure("The model reply is not valid JSON", raw)
         }
         return JSONObject(text.substring(start, end + 1))
     }

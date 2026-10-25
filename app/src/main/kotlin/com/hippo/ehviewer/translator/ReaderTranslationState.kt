@@ -39,7 +39,15 @@ sealed interface TranslationStatus {
     data object ReadingPage : TranslationStatus
     data object TranslatingText : TranslationStatus
     data object Done : TranslationStatus
-    data class Failed(val message: String) : TranslationStatus
+
+    /**
+     * [rawResponse] is the API reply verbatim; the reader shows it as the
+     * reason instead of a fixed message.
+     */
+    data class Failed(
+        val message: String,
+        val rawResponse: String? = null,
+    ) : TranslationStatus
 
     val isBusy: Boolean
         get() = this is WaitingForPage || this is RecognizingText ||
@@ -202,13 +210,9 @@ class ReaderTranslationState(
                     targetLang = settings.targetLang,
                     systemPrompt = settings.geminiSystemPrompt,
                     userPrompt = settings.geminiUserPrompt,
-                    engine = settings.engine,
                     geminiApiKeys = settings.getGeminiApiKeys(),
                     geminiModel = settings.geminiModel,
                     thinkingLevel = settings.thinkingLevel,
-                    grouping = settings.groupingConfig(),
-                    visionMode = settings.geminiVision,
-                    skipOcr = settings.skipOcr,
                     onPhase = { phase ->
                         statuses[index] = when (phase) {
                             PageTranslator.Phase.OCR -> TranslationStatus.RecognizingText
@@ -245,7 +249,11 @@ class ReaderTranslationState(
             return fail(index, "Memoria insuficiente para traducir esta página")
         } catch (e: Throwable) {
             logcat("ReaderTranslator", e)
-            return fail(index, "Error: ${e.message ?: e.javaClass.simpleName}")
+            return fail(
+                index = index,
+                message = e.message ?: e.javaClass.simpleName,
+                rawResponse = (e as? TranslationFailure)?.rawResponse,
+            )
         }
     }
 
@@ -289,8 +297,12 @@ class ReaderTranslationState(
             statuses[index] = TranslationStatus.Done
         }
 
-    private fun fail(index: Int, message: String): PageTranslation? {
-        statuses[index] = TranslationStatus.Failed(message)
+    private fun fail(
+        index: Int,
+        message: String,
+        rawResponse: String? = null,
+    ): PageTranslation? {
+        statuses[index] = TranslationStatus.Failed(message, rawResponse)
         return null
     }
 

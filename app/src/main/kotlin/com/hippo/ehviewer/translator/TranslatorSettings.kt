@@ -18,7 +18,26 @@ class TranslatorSettings(context: Context) {
     private val prefs: SharedPreferences =
         context.getSharedPreferences("manga_translator_prefs", Context.MODE_PRIVATE)
 
-    var engine by mutableStateOf(prefs.getString("engine", ENGINE_GOOGLE) ?: ENGINE_GOOGLE)
+    init {
+        // The languages are written by hand now. Older builds stored a code
+        // ("ja", "es"...), so turn it into a name once to avoid showing it.
+        if (!prefs.getBoolean("languages_v2", false)) {
+            prefs.edit()
+                .putString("source_lang", normalizeLanguage(prefs.getString("source_lang", null), "Japanese"))
+                .putString("target_lang", normalizeLanguage(prefs.getString("target_lang", null), "English"))
+                .putBoolean("languages_v2", true)
+                .apply()
+        }
+        // The anti-overlap used to leave 12dp of air between the neighbours;
+        // it now only separates until the edges touch.
+        if (!prefs.getBoolean("collision_v2", false)) {
+            prefs.edit()
+                .putFloat("collision_gap", 0f)
+                .putBoolean("collision_v2", true)
+                .apply()
+        }
+    }
+
     var geminiApiKeysRaw by mutableStateOf(prefs.getString("gemini_api_keys", "").orEmpty())
     var geminiModel by mutableStateOf(
         prefs.getString("gemini_model", DEFAULT_GEMINI_MODEL) ?: DEFAULT_GEMINI_MODEL,
@@ -37,13 +56,11 @@ class TranslatorSettings(context: Context) {
                 .distinct()
         } ?: listOf(DEFAULT_GEMINI_MODEL),
     )
-    var sourceLang by mutableStateOf(prefs.getString("source_lang", "ja") ?: "ja")
-    var targetLang by mutableStateOf(prefs.getString("target_lang", "es") ?: "es")
+    /** Language names as the user typed them, e.g. "Japanese" / "English". */
+    var sourceLang by mutableStateOf(prefs.getString("source_lang", "Japanese") ?: "Japanese")
+    var targetLang by mutableStateOf(prefs.getString("target_lang", "English") ?: "English")
     var globalBubbleScale by mutableFloatStateOf(prefs.getFloat("global_bubble_scale", 1.0f))
-    var horizontalExpansion by mutableFloatStateOf(prefs.getFloat("horizontal_expansion", 1.20f))
-    var globalFontScale by mutableFloatStateOf(prefs.getFloat("global_font_scale", 0.90f))
     var bubbleOpacity by mutableFloatStateOf(prefs.getFloat("bubble_opacity", 1.0f))
-    var dynamicBubbleSize by mutableStateOf(prefs.getBoolean("dynamic_bubble_size", true))
     var autoTranslate by mutableStateOf(prefs.getBoolean("auto_translate", false))
     var batchSize by mutableIntStateOf(prefs.getInt("batch_size", 3))
 
@@ -84,18 +101,6 @@ class TranslatorSettings(context: Context) {
         prefs.getString("gemini_user_prompt", "").orEmpty(),
     )
 
-    /**
-     * Send the page with the OCR boxes drawn so Gemini reads the real text
-     * instead of trusting the OCR transcription.
-     */
-    var geminiVision by mutableStateOf(prefs.getBoolean("gemini_vision", true))
-
-    /**
-     * Skips ML Kit and lets the vision model find the balloons itself. Faster
-     * and immune to OCR failures, but without local boxes there is no safety
-     * net: if the model misreads the page, nothing is drawn.
-     */
-    var skipOcr by mutableStateOf(prefs.getBoolean("skip_ocr", false))
     var bubbleOrientation by mutableStateOf(
         prefs.getString("bubble_orientation", ORIENTATION_VERTICAL) ?: ORIENTATION_VERTICAL,
     )
@@ -118,28 +123,13 @@ class TranslatorSettings(context: Context) {
         prefs.getString("bubble_padding", PADDING_COMPACT) ?: PADDING_COMPACT,
     )
 
-    /**
-     * Use the rectangle returned by the model verbatim: no widening, no scaling
-     * and no collision shifting. Without this the translation drifts away from
-     * the balloons the model measured.
-     */
-    var exactPlacement by mutableStateOf(prefs.getBoolean("exact_placement", true))
     var uppercaseScanlation by mutableStateOf(prefs.getBoolean("uppercase_scanlation", true))
     var preventCollisions by mutableStateOf(prefs.getBoolean("prevent_collisions", true))
-    var collisionGap by mutableFloatStateOf(prefs.getFloat("collision_gap", 12f))
+    var collisionGap by mutableFloatStateOf(prefs.getFloat("collision_gap", 0f))
     var collisionIterations by mutableIntStateOf(prefs.getInt("collision_iterations", 40))
     var maxCollisionShiftRatio by mutableFloatStateOf(prefs.getFloat("max_collision_shift_ratio", 0.30f))
     var borderThickness by mutableFloatStateOf(prefs.getFloat("border_thickness", 1.2f))
     var isManipulationMode by mutableStateOf(prefs.getBoolean("is_manipulation_mode", false))
-
-    // Bubble detection (OCR fragment grouping)
-    var mergeBubbleColumns by mutableStateOf(prefs.getBoolean("merge_bubble_columns", true))
-    var maxColumnGapRatio by mutableFloatStateOf(prefs.getFloat("max_column_gap_ratio", 0.35f))
-    var minColumnOverlap by mutableFloatStateOf(prefs.getFloat("min_column_overlap", 0.55f))
-    var borderDarkRatio by mutableFloatStateOf(prefs.getFloat("border_dark_ratio", 0.40f))
-
-    // Text fitting inside the original balloon
-    var fitTextInsideBubble by mutableStateOf(prefs.getBoolean("fit_text_inside_bubble", true))
 
     /**
      * Font size used by every balloon. The model only measures rectangles; the
@@ -147,9 +137,6 @@ class TranslatorSettings(context: Context) {
      * with huge text and the page keeps one consistent lettering size.
      */
     var standardFontSizeSp by mutableFloatStateOf(prefs.getFloat("standard_font_size_sp", 12f))
-    var minFontSizeSp by mutableFloatStateOf(prefs.getFloat("min_font_size_sp", 6.5f))
-    var maxFontSizeSp by mutableFloatStateOf(prefs.getFloat("max_font_size_sp", 16f))
-    var maxHeightExpansion by mutableFloatStateOf(prefs.getFloat("max_height_expansion", 1.6f))
 
     /**
      * Incremented when a value that affects OCR/translation changes, so cached
@@ -161,46 +148,23 @@ class TranslatorSettings(context: Context) {
     private var savedSignature: String =
         prefs.getString("translation_signature", null) ?: translationSignature()
 
-    fun groupingConfig(): BubbleGroupingConfig = BubbleGroupingConfig(
-        enabled = mergeBubbleColumns,
-        maxColumnGapRatio = maxColumnGapRatio,
-        minColumnOverlap = minColumnOverlap,
-        borderDarkRatio = borderDarkRatio,
-    )
-
     fun translationSignature(): String = buildString {
-        append(engine)
+        // The engine and the vision switches are fixed now (the model is the
+        // only translator). The literal values keep the signature, and so the
+        // saved cache, compatible with pages translated by older builds.
+        append(ENGINE_GEMINI)
         append('|').append(sourceLang)
         append('|').append(targetLang)
         append('|').append(geminiModel)
         append('|').append(geminiSystemPrompt.hashCode())
         append('|').append(geminiUserPrompt.hashCode())
         append('|').append(geminiApiKeysRaw.hashCode())
-        append('|').append(if (geminiVision) 1 else 0)
-        append('|').append(if (skipOcr) 1 else 0)
+        append("|1|1")
         // Bumped when the vision prompt or the way its boxes are read changes,
         // so pages cached by an older build are translated again.
-        append("|v7")
-        append('|').append(if (mergeBubbleColumns) 1 else 0)
-        append('|').append((maxColumnGapRatio * 1000).toInt())
-        append('|').append((minColumnOverlap * 1000).toInt())
-        append('|').append((borderDarkRatio * 1000).toInt())
-    }
-
-    fun resetDetectionDefaults() {
-        mergeBubbleColumns = true
-        maxColumnGapRatio = 0.35f
-        minColumnOverlap = 0.55f
-        borderDarkRatio = 0.40f
-        fitTextInsideBubble = true
-        minFontSizeSp = 6.5f
-        standardFontSizeSp = 12f
-        maxFontSizeSp = 16f
-        maxHeightExpansion = 1.6f
-        horizontalExpansion = 1.20f
-        collisionGap = 12f
-        collisionIterations = 40
-        maxCollisionShiftRatio = 0.30f
+        // The OCR grouping settings are gone; these literals are the values it
+        // used to contribute, so existing caches stay valid.
+        append("|v7|1|350|550|400")
     }
 
     fun getGeminiApiKeys(): List<String> = geminiApiKeysRaw
@@ -219,11 +183,14 @@ class TranslatorSettings(context: Context) {
     }
 
     fun save() {
+        // A field left empty must not reach the prompt: fall back to the
+        // defaults, and turn a bare code into its name.
+        sourceLang = normalizeLanguage(sourceLang, "Japanese")
+        targetLang = normalizeLanguage(targetLang, "English")
         val signature = translationSignature()
         val translationChanged = signature != savedSignature
 
         prefs.edit()
-            .putString("engine", engine)
             .putString("gemini_api_keys", geminiApiKeysRaw)
             .putString("gemini_model", geminiModel)
             .putString("gemini_models", geminiModels.joinToString("\n"))
@@ -235,12 +202,9 @@ class TranslatorSettings(context: Context) {
             .putString("thinking_level", thinkingLevel)
             .putString("bubble_style", bubbleStyle)
             .putFloat("outline_width", outlineWidth)
-            .putBoolean("gemini_vision", geminiVision)
-            .putBoolean("skip_ocr", skipOcr)
             .putString("bubble_orientation", bubbleOrientation)
             .putString("bubble_shape", bubbleShape)
             .putString("bubble_padding", bubblePadding)
-            .putBoolean("exact_placement", exactPlacement)
             .putBoolean("uppercase_scanlation", uppercaseScanlation)
             .putBoolean("prevent_collisions", preventCollisions)
             .putFloat("collision_gap", collisionGap)
@@ -248,21 +212,10 @@ class TranslatorSettings(context: Context) {
             .putFloat("max_collision_shift_ratio", maxCollisionShiftRatio)
             .putBoolean("is_manipulation_mode", isManipulationMode)
             .putFloat("border_thickness", borderThickness)
-            .putBoolean("merge_bubble_columns", mergeBubbleColumns)
-            .putFloat("max_column_gap_ratio", maxColumnGapRatio)
-            .putFloat("min_column_overlap", minColumnOverlap)
-            .putFloat("border_dark_ratio", borderDarkRatio)
-            .putBoolean("fit_text_inside_bubble", fitTextInsideBubble)
             .putFloat("standard_font_size_sp", standardFontSizeSp)
-            .putFloat("min_font_size_sp", minFontSizeSp)
-            .putFloat("max_font_size_sp", maxFontSizeSp)
-            .putFloat("max_height_expansion", maxHeightExpansion)
             .putString("translation_signature", signature)
             .putFloat("global_bubble_scale", globalBubbleScale)
-            .putFloat("horizontal_expansion", horizontalExpansion)
-            .putFloat("global_font_scale", globalFontScale)
             .putFloat("bubble_opacity", bubbleOpacity)
-            .putBoolean("dynamic_bubble_size", dynamicBubbleSize)
             .putBoolean("show_sfx", showSfx)
             .putBoolean("auto_translate", autoTranslate)
             .putInt("batch_size", batchSize)
@@ -275,7 +228,7 @@ class TranslatorSettings(context: Context) {
     }
 
     companion object {
-        const val ENGINE_GOOGLE = "google"
+        /** The model is the only engine; kept for the cache signature. */
         const val ENGINE_GEMINI = "gemini"
         const val DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
 
@@ -341,20 +294,33 @@ class TranslatorSettings(context: Context) {
             |{"bubbles":[{"ids":[],"box":[ymin,xmin,ymax,xmax],"source":"japanese text as printed","text":"{lang output} translation","kind":"dialogue"}],"extra":[{"box":[ymin,xmin,ymax,xmax],"source":"...","text":"...","kind":"sfx"}]}
         """.trimMargin()
 
-        /** ML Kit only ships the Japanese recognizer in this build. */
-        val SOURCE_LANGUAGES = listOf(
-            "ja" to "Japonés (日本語)",
+        /** Codes older builds stored, so the language fields show a name. */
+        private val LEGACY_LANGUAGE_CODES = mapOf(
+            "ja" to "Japanese",
+            "en" to "English",
+            "es" to "Spanish",
+            "pt" to "Portuguese",
+            "fr" to "French",
+            "de" to "German",
+            "it" to "Italian",
+            "ru" to "Russian",
+            "zh" to "Chinese",
+            "ko" to "Korean",
         )
 
-        val TARGET_LANGUAGES = listOf(
-            "es" to "Español (ES)",
-            "en" to "Inglés (EN)",
-            "pt" to "Portugués (PT)",
-            "fr" to "Francés (FR)",
-            "de" to "Alemán (DE)",
-            "it" to "Italiano (IT)",
-            "ru" to "Ruso (RU)",
-        )
+        fun normalizeLanguage(value: String?, fallback: String): String {
+            val text = value?.trim().orEmpty()
+            if (text.isEmpty()) return fallback
+            return LEGACY_LANGUAGE_CODES[text.lowercase()] ?: text
+        }
+
+        /** True while the source is Japanese, spelled as a code or as a name. */
+        fun isJapanese(language: String): Boolean {
+            val text = language.trim()
+            return text.equals("ja", ignoreCase = true) ||
+                text.equals("japanese", ignoreCase = true) ||
+                text.contains("日本")
+        }
 
         fun getLanguageName(code: String): String = when (code.lowercase()) {
             "ja" -> "Japanese"

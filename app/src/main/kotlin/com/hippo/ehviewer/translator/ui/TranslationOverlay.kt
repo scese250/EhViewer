@@ -58,6 +58,9 @@ enum class OverlayFitMode {
     FILL_WIDTH,
 }
 
+/** Smallest lettering size used when a long translation has to be shrunk to fit. */
+private const val MIN_FIT_FONT_SP = 5f
+
 @Composable
 fun TranslationOverlay(
     bubbles: List<TranslatedBubble>,
@@ -88,7 +91,7 @@ fun TranslationOverlay(
     exactPlacement: Boolean = true,
     uppercaseScanlation: Boolean = true,
     preventCollisions: Boolean = true,
-    collisionGap: Float = 12f,
+    collisionGap: Float = 0f,
     collisionIterations: Int = 40,
     maxCollisionShift: Float = 0.30f,
     borderThickness: Float = 1.2f,
@@ -186,6 +189,7 @@ fun TranslationOverlay(
             horizontalExpansion,
             bubbleOrientation,
             bubbleShape,
+            bubbleStyle,
             bubblePadding,
             uppercaseScanlation,
             preventCollisions,
@@ -206,8 +210,13 @@ fun TranslationOverlay(
                 // Only the rectangles measured by the model itself are exact;
                 // the ones derived from OCR blocks keep the usual margins.
                 val exact = exactPlacement && bubble.exactBox
-                val bubbleHPaddingPx = if (exact) 0f else hPaddingPx
-                val bubbleVPaddingPx = if (exact) 0f else vPaddingPx
+                // A white balloon needs its padding even on a measured box, or
+                // the letters end up touching the outline. Outline-only
+                // lettering keeps no padding at all, so the glyphs stay as
+                // tight as the model placed them.
+                val fillMode = bubbleStyle == TranslatorSettings.STYLE_FILL
+                val bubbleHPaddingPx = if (exact && !fillMode) 0f else hPaddingPx
+                val bubbleVPaddingPx = if (exact && !fillMode) 0f else vPaddingPx
 
                 val rawText = if (uppercaseScanlation) {
                     bubble.translatedText.uppercase()
@@ -266,6 +275,39 @@ fun TranslationOverlay(
                     constraints = Constraints(maxWidth = widthPx.roundToInt().coerceAtLeast(1)),
                 ).size.height.toFloat()
 
+                // Widest rendered line of the wrapped text, taken from the very
+                // same layout the composable draws. Used by the anti-overlap
+                // pass in outline-only mode, where the box is not what the
+                // reader sees: the letters are.
+                fun measureTextWidth(fontSp: Float, widthPx: Float): Float {
+                    val style = TextStyle(
+                        fontSize = fontSp.sp,
+                        lineHeight = (fontSp * 1.16f).sp,
+                        fontWeight = FontWeight.Bold,
+                        lineBreak = LineBreak.Heading,
+                        hyphens = Hyphens.None,
+                    )
+                    val layout = textMeasurer.measure(
+                        text = AnnotatedString(displayText),
+                        style = style,
+                        constraints = Constraints(maxWidth = widthPx.roundToInt().coerceAtLeast(1)),
+                    )
+                    var widest = 0f
+                    for (line in 0 until layout.lineCount) {
+                        val start = layout.getLineStart(line)
+                        val end = layout.getLineEnd(line, visibleEnd = true)
+                        if (end <= start) continue
+                        val lineText = displayText.substring(start, end).trimEnd()
+                        if (lineText.isEmpty()) continue
+                        val lineWidth = textMeasurer.measure(
+                            text = AnnotatedString(lineText),
+                            style = style,
+                        ).size.width.toFloat()
+                        if (lineWidth > widest) widest = lineWidth
+                    }
+                    return widest
+                }
+
                 // Never let one long word force the balloon wider than the page.
                 var maxWordWidthPx = measureWordWidth(finalFontSizeSp)
                 // A sound word is short: its box grows to hold it instead of
@@ -283,11 +325,14 @@ fun TranslationOverlay(
                     maxOf(origWidthPx * horizontalExpansion, with(density) { 60.dp.toPx() })
                 }
                 val maxWidthPx = containerWidthPx * 0.92f
-                val baseWidthPx = if (exact) {
+                var baseWidthPx = if (exact) {
                     // The model measured the text area, so the width is the
                     // measurement itself; only a word that would be cut can
-                    // widen it, and then symmetrically.
-                    origWidthPx.coerceIn(minRequiredWidthPx.coerceAtMost(maxWidthPx), maxWidthPx)
+                    // widen it, and then symmetrically. A white balloon wraps
+                    // that measurement in its padding instead of eating into
+                    // the text area, so both styles wrap the text the same way.
+                    val measuredWidthPx = if (fillMode) origWidthPx + bubbleHPaddingPx else origWidthPx
+                    measuredWidthPx.coerceIn(minRequiredWidthPx.coerceAtMost(maxWidthPx), maxWidthPx)
                 } else {
                     maxOf(desiredWidthPx * globalBubbleScale, minRequiredWidthPx)
                         .coerceAtMost(maxWidthPx)
@@ -309,8 +354,29 @@ fun TranslationOverlay(
                 // The text is laid out inside the horizontal padding, so the
                 // measured width must exclude it or the real rendered height is
                 // underestimated and the last lines get clipped.
-                val contentWidthPx = (baseWidthPx - bubbleHPaddingPx).coerceAtLeast(1f)
+                var contentWidthPx = (baseWidthPx - bubbleHPaddingPx).coerceAtLeast(1f)
                 var measuredTextHeightPx = measureTextHeight(finalFontSizeSp, contentWidthPx) + bubbleVPaddingPx
+
+                if (exact && !bubble.isSfx && measuredTextHeightPx > heightLimitPx) {
+                    // A long translation inside the narrow box of a vertical
+                    // Japanese line is taller than the page, and the old code
+                    // simply cut it. Widen the box first, keeping it centred on
+                    // the measured text, and only then reduce the letters.
+                    var guard = 0
+                    while (guard++ < 24 && measuredTextHeightPx > heightLimitPx && baseWidthPx < maxWidthPx) {
+                        baseWidthPx = (baseWidthPx * 1.20f).coerceAtMost(maxWidthPx)
+                        contentWidthPx = (baseWidthPx - bubbleHPaddingPx).coerceAtLeast(1f)
+                        measuredTextHeightPx = measureTextHeight(finalFontSizeSp, contentWidthPx) + bubbleVPaddingPx
+                    }
+                    while (guard++ < 200 &&
+                        measuredTextHeightPx > heightLimitPx &&
+                        finalFontSizeSp > MIN_FIT_FONT_SP
+                    ) {
+                        finalFontSizeSp = (finalFontSizeSp - 0.25f).coerceAtLeast(MIN_FIT_FONT_SP)
+                        measuredTextHeightPx = measureTextHeight(finalFontSizeSp, contentWidthPx) + bubbleVPaddingPx
+                    }
+                }
+
                 // Only shrink, and only when the text would otherwise be cut:
                 // the standard size is the ceiling for every balloon.
                 if (fitTextInsideBubble && customSizeSp == null && !bubble.isSfx && !exact) {
@@ -328,6 +394,25 @@ fun TranslationOverlay(
                     maxOf(coverHeightPx, measuredTextHeightPx).coerceIn(24f, maxHeightPx)
                 } else {
                     coverHeightPx.coerceIn(24f, maxHeightPx)
+                }
+
+                // Outline-only lettering has no balloon: the only thing that can
+                // bump into the neighbour is the written text, so the anti-overlap
+                // pass uses the measured text block (centred inside the box)
+                // instead of the whole rectangle. That keeps it gentle and leaves
+                // the letters almost touching instead of a whole box apart.
+                var collisionWidthPx = baseWidthPx
+                var collisionHeightPx = actualHeightPx
+                if (!fillMode && !bubble.isSfx && displayText.isNotEmpty()) {
+                    val textWidthPx = measureTextWidth(
+                        finalFontSizeSp,
+                        (baseWidthPx - bubbleHPaddingPx).coerceAtLeast(1f),
+                    )
+                    if (textWidthPx > 1f) {
+                        collisionWidthPx = textWidthPx.coerceAtMost(baseWidthPx)
+                        collisionHeightPx = (measuredTextHeightPx - bubbleVPaddingPx)
+                            .coerceIn(1f, actualHeightPx)
+                    }
                 }
 
                 val isManual = bubble.offsetX != 0f || bubble.offsetY != 0f
@@ -349,9 +434,15 @@ fun TranslationOverlay(
                     baseCenterY = bubbleCenterY,
                     fontSizeSp = finalFontSizeSp,
                     isVertical = isVertical,
-                    // Exact boxes stay anchored: the collision solver must not
-                    // drag them away from the text the model measured.
-                    isManuallyPositioned = isManual || exact,
+                    collisionWidthPx = collisionWidthPx,
+                    collisionHeightPx = collisionHeightPx,
+                    collisionInsetX = (baseWidthPx - collisionWidthPx) / 2f,
+                    collisionInsetY = (actualHeightPx - collisionHeightPx) / 2f,
+                    // Only the bubbles the user moved stay anchored. The model's
+                    // exact boxes do take part in the anti-overlap pass, because
+                    // a long translation grows past the measured text and would
+                    // otherwise cover the neighbouring balloon.
+                    isManuallyPositioned = isManual,
                 )
             }
 
@@ -510,6 +601,10 @@ private fun DynamicBubbleView(
     }
 
     val outlineMode = bubbleStyle == TranslatorSettings.STYLE_OUTLINE
+    // The balloon is a skin, not a layout: "white balloon" fills the measured
+    // box, "outline only" leaves the page untouched and relies on the white
+    // stroke around the letters. The box is the same in both.
+    val balloonVisible = !outlineMode && !bubble.isSfx
 
     val borderModifier = when {
         isManipulationEnabled -> {
@@ -517,7 +612,7 @@ private fun DynamicBubbleView(
         }
         // No balloon at all: neither for onomatopoeia nor for the thick white
         // text outline mode.
-        bubble.isSfx || outlineMode || exact -> {
+        !balloonVisible -> {
             Modifier
         }
         bubbleShape == TranslatorSettings.SHAPE_BORDERLESS || borderThickness <= 0.05f -> {
@@ -628,8 +723,11 @@ private fun DynamicBubbleView(
         TranslatorSettings.PADDING_SPACIOUS -> Pair(14.dp, 8.dp)
         else -> Pair(9.dp, 5.dp)
     }
-    val hPadDp = if (exact) minOf(rawHPadDp, 4.dp) else rawHPadDp
-    val vPadDp = if (exact) minOf(rawVPadDp, 2.dp) else rawVPadDp
+    // The layout reserved the full padding when it measured the text, so the
+    // render has to use the same one: a smaller padding here would draw wider
+    // lines than were measured and push the last line out of the balloon.
+    val hPadDp = if (outlineMode) 0.dp else rawHPadDp
+    val vPadDp = if (outlineMode) 0.dp else rawVPadDp
 
     val contentFontSp = safeFontSp
     val textStyle = TextStyle(
@@ -668,21 +766,23 @@ private fun DynamicBubbleView(
                 }
             }
             .then(
-                if (bubble.isSfx || outlineMode || exact) {
-                    Modifier
-                } else {
+                if (balloonVisible) {
                     Modifier.background(Color.White.copy(alpha = bubbleOpacity), bubbleShapeDrawable)
+                } else {
+                    Modifier
                 },
             )
             .then(borderModifier)
             .then(touchModifier)
             .padding(
-                horizontal = if (bubble.isSfx || exact) 0.dp else hPadDp,
-                vertical = if (bubble.isSfx || exact) 0.dp else vPadDp,
+                horizontal = if (bubble.isSfx) 0.dp else hPadDp,
+                vertical = if (bubble.isSfx) 0.dp else vPadDp,
             ),
         contentAlignment = Alignment.Center,
     ) {
-        if (outlineMode || bubble.isSfx || exact) {
+        // A translucent balloon no longer hides the art, so the letters keep
+        // their white halo to stay readable over it.
+        if (outlineMode || bubble.isSfx || bubbleOpacity < 0.99f) {
             // The letters are drawn twice, a thick stroke first and the fill on
             // top, so the translation stays readable over the artwork.
             Box(contentAlignment = Alignment.Center) {
@@ -732,6 +832,11 @@ private class BubbleLayoutItem(
     val baseCenterY: Float,
     val fontSizeSp: Float,
     val isVertical: Boolean,
+    /** Rectangle the anti-overlap pass compares: the text block, not the box. */
+    val collisionWidthPx: Float,
+    val collisionHeightPx: Float,
+    val collisionInsetX: Float,
+    val collisionInsetY: Float,
     val isManuallyPositioned: Boolean,
 ) {
     val width get() = baseWidthPx
@@ -740,6 +845,15 @@ private class BubbleLayoutItem(
     val bottom get() = top + height
     val centerX get() = left + width / 2f
     val centerY get() = top + height / 2f
+
+    // The collision rectangle travels with the bubble, inset by the empty space
+    // between the box and the letters drawn inside it.
+    val collisionLeft get() = left + collisionInsetX
+    val collisionTop get() = top + collisionInsetY
+    val collisionRight get() = collisionLeft + collisionWidthPx
+    val collisionBottom get() = collisionTop + collisionHeightPx
+    val collisionCenterX get() = collisionLeft + collisionWidthPx / 2f
+    val collisionCenterY get() = collisionTop + collisionHeightPx / 2f
 }
 
 /**
@@ -775,8 +889,8 @@ private fun resolveBubbleCollisions(
                 val b = bubbles[j]
 
                 // Penetration including the requested breathing gap.
-                val overlapX = minOf(a.right, b.right) - maxOf(a.left, b.left) + gapPx
-                val overlapY = minOf(a.bottom, b.bottom) - maxOf(a.top, b.top) + gapPx
+                val overlapX = minOf(a.collisionRight, b.collisionRight) - maxOf(a.collisionLeft, b.collisionLeft) + gapPx
+                val overlapY = minOf(a.collisionBottom, b.collisionBottom) - maxOf(a.collisionTop, b.collisionTop) + gapPx
                 if (overlapX <= 0f || overlapY <= 0f) continue
 
                 val canMoveA = !a.isManuallyPositioned
@@ -793,11 +907,11 @@ private fun resolveBubbleCollisions(
                 val moveHorizontally = overlapX <= overlapY
 
                 if (moveHorizontally) {
-                    val direction = if (a.centerX <= b.centerX) -1f else 1f
+                    val direction = if (a.collisionCenterX <= b.collisionCenterX) -1f else 1f
                     a.left += direction * overlapX * shareA
                     b.left -= direction * overlapX * shareB
                 } else {
-                    val direction = if (a.centerY <= b.centerY) -1f else 1f
+                    val direction = if (a.collisionCenterY <= b.collisionCenterY) -1f else 1f
                     a.top += direction * overlapY * shareA
                     b.top -= direction * overlapY * shareB
                 }
@@ -807,15 +921,15 @@ private fun resolveBubbleCollisions(
 
                 // If a container edge or the drift budget blocked the first
                 // correction, finish the separation on the other axis.
-                val remainingX = minOf(a.right, b.right) - maxOf(a.left, b.left) + gapPx
-                val remainingY = minOf(a.bottom, b.bottom) - maxOf(a.top, b.top) + gapPx
+                val remainingX = minOf(a.collisionRight, b.collisionRight) - maxOf(a.collisionLeft, b.collisionLeft) + gapPx
+                val remainingY = minOf(a.collisionBottom, b.collisionBottom) - maxOf(a.collisionTop, b.collisionTop) + gapPx
                 if (remainingX > 0f && remainingY > 0f) {
                     if (moveHorizontally) {
-                        val direction = if (a.centerY <= b.centerY) -1f else 1f
+                        val direction = if (a.collisionCenterY <= b.collisionCenterY) -1f else 1f
                         a.top += direction * remainingY * shareA
                         b.top -= direction * remainingY * shareB
                     } else {
-                        val direction = if (a.centerX <= b.centerX) -1f else 1f
+                        val direction = if (a.collisionCenterX <= b.collisionCenterX) -1f else 1f
                         a.left += direction * remainingX * shareA
                         b.left -= direction * remainingX * shareB
                     }

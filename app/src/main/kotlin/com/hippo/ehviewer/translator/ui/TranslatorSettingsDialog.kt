@@ -25,11 +25,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuAnchorType
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -53,6 +48,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hippo.ehviewer.translator.PageTranslation
@@ -66,16 +63,14 @@ private const val SECTION_LANGUAGES = "languages"
 private const val SECTION_AI = "ai"
 private const val SECTION_STYLE = "style"
 private const val SECTION_FIT = "fit"
-private const val SECTION_DETECTION = "detection"
 private const val SECTION_PRELOAD = "preload"
 private const val SECTION_CACHE = "cache"
 
 /**
- * Compact translator dialog: the log, the two translate actions and the engine
- * are always on screen; everything else lives in one category that opens at a
- * time, so the sheet does not become a wall of sliders.
+ * Compact translator dialog: the log and the two translate actions are always
+ * on screen; everything else lives in one category that opens at a time, so
+ * the sheet does not become a wall of sliders.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TranslatorSettingsDialog(
     settings: TranslatorSettings,
@@ -94,23 +89,17 @@ fun TranslatorSettingsDialog(
     var isTestingKey by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
     var isTestSuccess by remember { mutableStateOf(false) }
-    var isSourceExpanded by remember { mutableStateOf(false) }
-    var isTargetExpanded by remember { mutableStateOf(false) }
     var openSection by remember { mutableStateOf<String?>(null) }
     var cacheStamp by remember { mutableIntStateOf(0) }
     var confirmClearCache by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val keys = settings.getGeminiApiKeys()
-    val sourceName = TranslatorSettings.SOURCE_LANGUAGES.find { it.first == settings.sourceLang }?.second
-        ?: settings.sourceLang
-    val targetName = TranslatorSettings.TARGET_LANGUAGES.find { it.first == settings.targetLang }?.second
-        ?: settings.targetLang
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "Ajustes del Traductor",
+                text = "Translation settings",
                 fontWeight = FontWeight.Bold,
             )
         },
@@ -139,9 +128,9 @@ fun TranslatorSettingsDialog(
                         } else {
                             Text(
                                 text = when (status) {
-                                    is TranslationStatus.Failed -> "Reintentar"
-                                    TranslationStatus.Done -> "Traducir de nuevo"
-                                    else -> "Traducir"
+                                    is TranslationStatus.Failed -> "Retry"
+                                    TranslationStatus.Done -> "Translate again"
+                                    else -> "Translate page"
                                 },
                                 maxLines = 1,
                             )
@@ -152,7 +141,12 @@ fun TranslatorSettingsDialog(
                         enabled = !status.isBusy,
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("Siguientes $retranslateCount", maxLines = 1)
+                        Text(
+                            text = "Redo translation next $retranslateCount pages",
+                            fontSize = 11.sp,
+                            textAlign = TextAlign.Center,
+                            maxLines = 2,
+                        )
                     }
                 }
 
@@ -175,64 +169,23 @@ fun TranslatorSettingsDialog(
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Motor: la única elección que cambia todo lo demás.
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "Motor",
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (settings.engine == TranslatorSettings.ENGINE_GEMINI) {
-                        Text(
-                            text = if (keys.isEmpty()) "sin claves" else "${keys.size} claves",
-                            fontSize = 11.sp,
-                            color = if (keys.isEmpty()) {
-                                MaterialTheme.colorScheme.error
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterChip(
-                        selected = settings.engine == TranslatorSettings.ENGINE_GOOGLE,
-                        onClick = { settings.engine = TranslatorSettings.ENGINE_GOOGLE },
-                        label = { Text("Google", fontSize = 11.sp) },
-                    )
-                    FilterChip(
-                        selected = settings.engine == TranslatorSettings.ENGINE_GEMINI,
-                        onClick = { settings.engine = TranslatorSettings.ENGINE_GEMINI },
-                        label = { Text("Gemini IA", fontSize = 11.sp) },
-                    )
-                }
-
-                if (settings.engine == TranslatorSettings.ENGINE_GEMINI && keys.isEmpty()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "Sin claves se traduce con Google.",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = { openSection = SECTION_AI }) {
-                            Text("Añadir", fontSize = 11.sp)
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-
                 Text(
-                    text = "$sourceName → $targetName",
+                    text = "${settings.sourceLang} → ${settings.targetLang}",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+
+                // The model is the only engine now, so an empty key list is the
+                // one thing that stops the page from being translated.
+                if (keys.isEmpty()) {
+                    TextButton(onClick = { openSection = SECTION_AI }) {
+                        Text(
+                            text = "No API key yet, add one in IA",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(10.dp))
 
@@ -254,9 +207,6 @@ fun TranslatorSettingsDialog(
                     CategoryChip("Ajuste", openSection == SECTION_FIT) {
                         openSection = nextSection(openSection, SECTION_FIT)
                     }
-                    CategoryChip("Detección", openSection == SECTION_DETECTION) {
-                        openSection = nextSection(openSection, SECTION_DETECTION)
-                    }
                     CategoryChip("Lote", openSection == SECTION_PRELOAD) {
                         openSection = nextSection(openSection, SECTION_PRELOAD)
                     }
@@ -272,72 +222,24 @@ fun TranslatorSettingsDialog(
                     Column {
                         SectionTitle("Idiomas de traducción")
 
-                        ExposedDropdownMenuBox(
-                            expanded = isSourceExpanded,
-                            onExpandedChange = { isSourceExpanded = it },
-                        ) {
-                            OutlinedTextField(
-                                value = sourceName,
-                                onValueChange = {},
-                                readOnly = true,
-                                label = { Text("Idioma de entrada (Manga)") },
-                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isSourceExpanded) },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
-                            )
-                            ExposedDropdownMenu(
-                                expanded = isSourceExpanded,
-                                onDismissRequest = { isSourceExpanded = false },
-                            ) {
-                                TranslatorSettings.SOURCE_LANGUAGES.forEach { (code, name) ->
-                                    DropdownMenuItem(
-                                        text = { Text(name) },
-                                        onClick = {
-                                            settings.sourceLang = code
-                                            isSourceExpanded = false
-                                        },
-                                    )
-                                }
-                            }
-                        }
+                        OutlinedTextField(
+                            value = settings.sourceLang,
+                            onValueChange = { settings.sourceLang = it },
+                            label = { Text("Language input") },
+                            placeholder = { Text("Japanese") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        ExposedDropdownMenuBox(
-                            expanded = isTargetExpanded,
-                            onExpandedChange = { isTargetExpanded = it },
-                        ) {
-                            OutlinedTextField(
-                                value = targetName,
-                                onValueChange = {},
-                                readOnly = true,
-                                label = { Text("Idioma de salida (Traducción)") },
-                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isTargetExpanded) },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
-                            )
-                            ExposedDropdownMenu(
-                                expanded = isTargetExpanded,
-                                onDismissRequest = { isTargetExpanded = false },
-                            ) {
-                                TranslatorSettings.TARGET_LANGUAGES.forEach { (code, name) ->
-                                    DropdownMenuItem(
-                                        text = { Text(name) },
-                                        onClick = {
-                                            settings.targetLang = code
-                                            isTargetExpanded = false
-                                        },
-                                    )
-                                }
-                            }
-                        }
-
-                        Text(
-                            text = "Aplica tanto a Google Translate como a Gemini IA. Idioma de entrada por defecto: Japonés.",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        OutlinedTextField(
+                            value = settings.targetLang,
+                            onValueChange = { settings.targetLang = it },
+                            label = { Text("Language output") },
+                            placeholder = { Text("English") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
                         )
                     }
                 }
@@ -461,30 +363,10 @@ fun TranslatorSettingsDialog(
                                 Spacer(modifier = Modifier.height(10.dp))
 
                                 SettingChips(
-                                    label = "Razonamiento (thinking)",
+                                    label = "Thinking",
                                     options = TranslatorSettings.THINKING_LEVELS,
                                     selected = settings.thinkingLevel,
                                     onSelect = { settings.thinkingLevel = it },
-                                )
-
-                                Text(
-                                    text = when (settings.thinkingLevel) {
-                                        TranslatorSettings.THINKING_HIGH ->
-                                            "High: razona al máximo. Mejor lectura y traducción, más lento."
-                                        TranslatorSettings.THINKING_MEDIUM ->
-                                            "Medium: punto medio entre velocidad y calidad."
-                                        TranslatorSettings.THINKING_LOW ->
-                                            "Low: poco razonamiento, respuestas más rápidas."
-                                        else ->
-                                            "Minimal: casi sin razonamiento, la opción más rápida."
-                                    },
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Text(
-                                    text = "Si el modelo no admite este parámetro, se reintenta sin él.",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
 
                                 Spacer(modifier = Modifier.height(10.dp))
@@ -513,35 +395,6 @@ fun TranslatorSettingsDialog(
                                     hint = "💡 Se envían en el turno del usuario, junto a la página y la tarea. " +
                                         "Sirven para ajustes puntuales (tono, nombres, términos) sin tocar las reglas del sistema.",
                                     minLines = 3,
-                                )
-
-                                Spacer(modifier = Modifier.height(10.dp))
-                                HorizontalDivider()
-                                Spacer(modifier = Modifier.height(10.dp))
-
-                                SettingSwitch(
-                                    title = "Lectura visual de la página",
-                                    subtitle = "La IA lee el texto real dentro de la cuadrícula, ajusta cada globo al " +
-                                        "texto, une globos partidos y dibuja las onomatopeyas de lado.",
-                                    checked = settings.geminiVision,
-                                    onCheckedChange = {
-                                        settings.geminiVision = it
-                                        if (!it) settings.skipOcr = false
-                                    },
-                                )
-
-                                Spacer(modifier = Modifier.height(10.dp))
-
-                                SettingSwitch(
-                                    title = "Omitir el OCR (solo IA)",
-                                    subtitle = "No se ejecuta ML Kit: la IA encuentra y coloca todas las burbujas. " +
-                                        "Ahorra el OCR y esquiva sus fallos, pero sin cuadros de respaldo; si la " +
-                                        "llamada falla, se hace el OCR y se usa el modo texto.",
-                                    checked = settings.skipOcr,
-                                    onCheckedChange = {
-                                        settings.skipOcr = it
-                                        if (it) settings.geminiVision = true
-                                    },
                                 )
 
                                 Spacer(modifier = Modifier.height(10.dp))
@@ -698,12 +551,6 @@ fun TranslatorSettingsDialog(
                             onValueChange = { settings.globalBubbleScale = it },
                         )
                         SettingSlider(
-                            label = "Fuente: ${"%.2f".format(settings.globalFontScale)}x",
-                            value = settings.globalFontScale,
-                            valueRange = 0.6f..1.5f,
-                            onValueChange = { settings.globalFontScale = it },
-                        )
-                        SettingSlider(
                             label = "Opacidad: ${(settings.bubbleOpacity * 100).toInt()}%",
                             value = settings.bubbleOpacity,
                             valueRange = 0.5f..1.0f,
@@ -716,26 +563,21 @@ fun TranslatorSettingsDialog(
                     Column {
                         SectionTitle("Ajuste del texto")
 
-                        SettingSwitch(
-                            title = "Posición exacta de la IA",
-                            subtitle = "Usa la caja medida por el modelo tal cual: sin ensanchar, sin escalar y sin " +
-                                "anti-choque. El alto crece centrado solo si el texto no cabe.",
-                            checked = settings.exactPlacement,
-                            onCheckedChange = { settings.exactPlacement = it },
+                        SettingSlider(
+                            label = "Fuente: ${"%.1f".format(settings.standardFontSizeSp)} sp",
+                            value = settings.standardFontSizeSp,
+                            valueRange = 6f..24f,
+                            onValueChange = { settings.standardFontSizeSp = it },
+                        )
+                        Text(
+                            text = "Un solo tamaño para todas las viñetas. La IA solo mide dónde va el texto; " +
+                                "si no cabe, la caja se ensancha y la letra se reduce antes que recortarlo.",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
 
-                        SettingSwitch(
-                            title = "Burbuja dinámica",
-                            subtitle = "Crece arriba y abajo para que entre todo el texto sin cortarse",
-                            checked = settings.dynamicBubbleSize,
-                            onCheckedChange = { settings.dynamicBubbleSize = it },
-                        )
-                        SettingSwitch(
-                            title = "Ajustar texto dentro del globo",
-                            subtitle = "Reduce la fuente en vez de invadir los globos vecinos",
-                            checked = settings.fitTextInsideBubble,
-                            onCheckedChange = { settings.fitTextInsideBubble = it },
-                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+
                         SettingSwitch(
                             title = "Modo manipulación táctil",
                             subtitle = "Mover con 1 dedo, pellizcar con 2 para cambiar el tamaño",
@@ -743,59 +585,23 @@ fun TranslatorSettingsDialog(
                             onCheckedChange = { settings.isManipulationMode = it },
                         )
 
-                        SettingSlider(
-                            label = "Fuente estándar: ${"%.1f".format(settings.standardFontSizeSp)} sp",
-                            value = settings.standardFontSizeSp,
-                            valueRange = 8f..18f,
-                            onValueChange = {
-                                settings.standardFontSizeSp = it
-                                if (settings.maxFontSizeSp < it) settings.maxFontSizeSp = it
-                            },
-                        )
-                        Text(
-                            text = "Todas las viñetas usan este tamaño (multiplicado por \"Fuente\"). La IA ya no " +
-                                "decide el tamaño: la caja que devuelve solo indica dónde va el texto.",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        SettingSlider(
-                            label = "Fuente mínima: ${"%.1f".format(settings.minFontSizeSp)} sp",
-                            value = settings.minFontSizeSp,
-                            valueRange = 5f..12f,
-                            onValueChange = { settings.minFontSizeSp = it.coerceAtMost(settings.maxFontSizeSp - 1f) },
-                        )
-                        SettingSlider(
-                            label = "Fuente máxima: ${"%.1f".format(settings.maxFontSizeSp)} sp",
-                            value = settings.maxFontSizeSp,
-                            valueRange = 8f..24f,
-                            onValueChange = { settings.maxFontSizeSp = it.coerceAtLeast(settings.minFontSizeSp + 1f) },
-                        )
-                        SettingSlider(
-                            label = "Crecimiento de alto: ${"%.1f".format(settings.maxHeightExpansion)}x",
-                            value = settings.maxHeightExpansion,
-                            valueRange = 1f..3f,
-                            onValueChange = { settings.maxHeightExpansion = it },
-                        )
-                        SettingSlider(
-                            label = "Expansión horizontal: ${"%.2f".format(settings.horizontalExpansion)}x",
-                            value = settings.horizontalExpansion,
-                            valueRange = 1f..2f,
-                            onValueChange = { settings.horizontalExpansion = it },
-                        )
-
                         Spacer(modifier = Modifier.height(4.dp))
 
                         SettingSwitch(
                             title = "Anti-choque de burbujas",
-                            subtitle = "Separa globos adyacentes para que no se solapen",
+                            subtitle = "Separa los textos que caen uno encima de otro, también los que midió la IA",
                             checked = settings.preventCollisions,
                             onCheckedChange = { settings.preventCollisions = it },
                         )
                         if (settings.preventCollisions) {
                             SettingSlider(
-                                label = "Separación: ${settings.collisionGap.toInt()}dp",
+                                label = if (settings.collisionGap < 0.5f) {
+                                    "Separación: pegados"
+                                } else {
+                                    "Separación: ${settings.collisionGap.toInt()}dp"
+                                },
                                 value = settings.collisionGap,
-                                valueRange = 2f..40f,
+                                valueRange = 0f..24f,
                                 onValueChange = { settings.collisionGap = it },
                             )
                             SettingSlider(
@@ -810,55 +616,6 @@ fun TranslatorSettingsDialog(
                                 valueRange = 0.10f..0.60f,
                                 onValueChange = { settings.maxCollisionShiftRatio = it },
                             )
-                        }
-                    }
-                }
-
-                AnimatedVisibility(visible = openSection == SECTION_DETECTION) {
-                    Column {
-                        SectionTitle("Detección de globos (OCR)")
-
-                        Text(
-                            text = "ML Kit devuelve una columna por bloque; estos valores deciden cómo se vuelven a " +
-                                "unir las columnas del mismo bocadillo. Al cambiarlos se descarta la caché.",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-
-                        Spacer(modifier = Modifier.height(6.dp))
-
-                        SettingSwitch(
-                            title = "Unir columnas del mismo globo",
-                            subtitle = "Evita que un bocadillo vertical salga como dos burbujas superpuestas",
-                            checked = settings.mergeBubbleColumns,
-                            onCheckedChange = { settings.mergeBubbleColumns = it },
-                        )
-                        if (settings.mergeBubbleColumns) {
-                            SettingSlider(
-                                label = "Separación columnas: ${(settings.maxColumnGapRatio * 100).toInt()}%",
-                                value = settings.maxColumnGapRatio,
-                                valueRange = 0.10f..0.80f,
-                                onValueChange = { settings.maxColumnGapRatio = it },
-                            )
-                            SettingSlider(
-                                label = "Solape vertical: ${(settings.minColumnOverlap * 100).toInt()}%",
-                                value = settings.minColumnOverlap,
-                                valueRange = 0.30f..0.90f,
-                                onValueChange = { settings.minColumnOverlap = it },
-                            )
-                            SettingSlider(
-                                label = "Borde oscuro: ${(settings.borderDarkRatio * 100).toInt()}%",
-                                value = settings.borderDarkRatio,
-                                valueRange = 0.20f..0.70f,
-                                onValueChange = { settings.borderDarkRatio = it },
-                            )
-                        }
-
-                        TextButton(
-                            onClick = { settings.resetDetectionDefaults() },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text("Restablecer valores de detección", fontSize = 12.sp)
                         }
                     }
                 }
@@ -974,8 +731,8 @@ fun TranslatorSettingsDialog(
                         Spacer(modifier = Modifier.height(4.dp))
 
                         Text(
-                            text = "\"Siguientes $retranslateCount\" borra la copia guardada de esas páginas y las " +
-                                "vuelve a leer con la configuración actual, sin salir de la galería.",
+                            text = "\"Redo translation next $retranslateCount pages\" borra la copia guardada de " +
+                                "esas páginas y las vuelve a leer con la configuración actual, sin salir de la galería.",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1062,7 +819,10 @@ private fun PromptEditor(
                 text = "$title:",
                 fontWeight = FontWeight.SemiBold,
                 style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Start,
+                modifier = Modifier.weight(1f, fill = false),
             )
         }
         TextButton(onClick = { onValueChange(defaultValue) }) {

@@ -33,7 +33,7 @@ data class PageTranslation(
     val ocrDurationMs: Long,
     val translateDurationMs: Long,
     val totalDurationMs: Long,
-    val engineName: String = "Google",
+    val engineName: String = "Gemini",
     /** Signature of the settings used to produce this translation. */
     val settingsSignature: String = "",
     /** Number of OCR boxes the model collapsed into one balloon. */

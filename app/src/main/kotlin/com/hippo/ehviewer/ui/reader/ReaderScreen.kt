@@ -13,8 +13,10 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -52,6 +54,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.keepScreenOn
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.unit.dp
 import arrow.core.Either
 import arrow.core.Either.Companion.catch
 import arrow.core.raise.ensure
@@ -81,6 +84,7 @@ import com.hippo.ehviewer.translator.LocalReaderTranslation
 import com.hippo.ehviewer.translator.ReaderTranslationState
 import com.hippo.ehviewer.translator.TranslatorSettings
 import com.hippo.ehviewer.translator.ui.BubbleEditDialog
+import com.hippo.ehviewer.translator.ui.TranslationErrorBanner
 import com.hippo.ehviewer.translator.ui.TranslatorSettingsDialog
 import com.hippo.ehviewer.ui.MainActivity
 import com.hippo.ehviewer.ui.Screen
@@ -394,6 +398,17 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
                 )
             }
         }
+        // The failure reason is the API reply itself, so quota, safety and
+        // model errors are shown verbatim while the user keeps reading.
+        TranslationErrorBanner(
+            status = translatorState.status(currentPage),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(horizontal = 12.dp)
+                .padding(bottom = if (appbarVisible) 96.dp else 44.dp)
+                .fillMaxWidth(),
+        )
         ReaderAppBars(
             visible = appbarVisible,
             title = pageLoader.title,
