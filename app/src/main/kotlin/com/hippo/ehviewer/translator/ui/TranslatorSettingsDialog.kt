@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -47,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -916,7 +918,8 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
         TranslationStatus.TranslatingText -> "Sending the texts to Gemini."
         TranslationStatus.Done -> translation?.let { page ->
             if (page.bubbles.isEmpty()) {
-                "No text was found on this page. Try another page."
+                "The AI found no text on this page. Nothing was saved for it, so it is tried again " +
+                    "the next time you open it."
             } else {
                 buildString {
                     append("${page.bubbles.size} balloons · ${page.engineName}")
@@ -939,7 +942,7 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             when (status) {
@@ -977,6 +980,24 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
                     text = detail,
                     fontSize = 11.sp,
                 )
+                // The API reply stays here verbatim, also after the banner was
+                // closed while reading: this is the only place it is kept.
+                val rawResponse = (status as? TranslationStatus.Failed)
+                    ?.rawResponse
+                    ?.takeIf { it.isNotBlank() }
+                if (rawResponse != null) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = rawResponse,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 9.sp,
+                        lineHeight = 12.sp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 220.dp)
+                            .verticalScroll(rememberScrollState()),
+                    )
+                }
             }
         }
     }

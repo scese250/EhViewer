@@ -43,6 +43,16 @@ object PageTranslator {
     private const val GEMINI_VISION_READ_TIMEOUT_MS = 60_000
     private const val MAX_EXTRA_BUBBLES = 4
 
+    /**
+     * The full answer allowance of the model (reasoning included). Asking for
+     * all of it means a page is never cut short, so no second request is needed
+     * to finish a reply that ran out of room.
+     */
+    private const val MAX_OUTPUT_TOKENS = 65_536
+
+    /** Older models cap the answer lower; a rejected limit falls back to this. */
+    private const val FALLBACK_OUTPUT_TOKENS = 8_192
+
     /** A long sentence marked as SFX is a model slip: draw it as a normal balloon. */
     private const val MAX_SFX_LENGTH = 24
     private const val GRID_CELLS = 20
@@ -75,20 +85,29 @@ object PageTranslator {
         // balloon and letters the translation in a single call. There is no
         // on-device OCR and no text-only rescue any more; the only fallback is
         // another API key, which the key rotation already handles.
+        suspend fun readPage(): VisionResult = translateWithGeminiVision(
+            bitmap = bitmap,
+            blocks = emptyList(),
+            noHints = true,
+            sourceLang = sourceLang,
+            targetLang = targetLang,
+            systemPrompt = systemPrompt,
+            userPrompt = userPrompt,
+            apiKeys = geminiApiKeys,
+            model = geminiModel,
+            thinkingLevel = thinkingLevel,
+        )
+
         val transTime = measureTimeMillis {
             onPhase(Phase.VISION)
-            val result = translateWithGeminiVision(
-                bitmap = bitmap,
-                blocks = emptyList(),
-                noHints = true,
-                sourceLang = sourceLang,
-                targetLang = targetLang,
-                systemPrompt = systemPrompt,
-                userPrompt = userPrompt,
-                apiKeys = geminiApiKeys,
-                model = geminiModel,
-                thinkingLevel = thinkingLevel,
-            )
+            var result = readPage()
+            // A lite model occasionally answers a page full of balloons with an
+            // empty page. An empty answer is never cached, so asking once more
+            // costs one request and saves the page from staying blank for the
+            // rest of the read.
+            if (result.bubbles.isEmpty()) {
+                result = readPage()
+            }
             bubbles = result.bubbles
             mergedBoxes = result.mergedBoxes
             discardedBoxes = result.discardedBoxes
@@ -163,6 +182,10 @@ object PageTranslator {
         // Older models reject thinkingConfig as an unknown field. Retry the
         // same key once without it instead of failing the whole page.
         var retriedWithoutThinking = generationConfig?.has("thinkingConfig") != true
+        // A model with a smaller cap rejects the full allowance; the same key is
+        // asked once more with a limit it accepts instead of failing the page.
+        var retriedSmallerOutput = false
+        val askedOutputTokens = generationConfig?.optInt("maxOutputTokens", 0) ?: 0
 
         var attempt = 0
         while (attempt < totalKeys) {
@@ -200,6 +223,14 @@ object PageTranslator {
                     retriedWithoutThinking = true
                     generationConfig?.remove("thinkingConfig")
                     // Same key, same attempt, smaller request.
+                    continue
+                }
+                if (responseCode == 400 && !retriedSmallerOutput &&
+                    askedOutputTokens > FALLBACK_OUTPUT_TOKENS &&
+                    errorText.replace("_", "").contains("maxoutputtokens", ignoreCase = true)
+                ) {
+                    retriedSmallerOutput = true
+                    generationConfig?.put("maxOutputTokens", FALLBACK_OUTPUT_TOKENS)
                     continue
                 }
                 // A malformed request or an unknown model fails the same way
@@ -326,6 +357,9 @@ object PageTranslator {
 
     private data class RawBox(val y1: Float, val x1: Float, val y2: Float, val x2: Float)
 
+    /** One complete `{…}` of a model answer, with where it sits in the reply. */
+    private class ReplyEntry(val start: Int, val end: Int, val value: JSONObject)
+
     private fun JSONObject.extractRawBox(): RawBox? {
         val arr = optJSONArray("box") ?: optJSONArray("box_2d") ?: return null
         if (arr.length() < 4) return null
@@ -443,67 +477,61 @@ object PageTranslator {
 
         val prompt = buildVisionPrompt(targetLang, blocks.size, noHints)
 
-        val requestJson = JSONObject().apply {
-            val parts = JSONArray().apply {
-                // The page is the user turn: image first, then the task.
+        suspend fun callModel(): JSONObject {
+            val requestJson = JSONObject().apply {
+                val parts = JSONArray().apply {
+                    // The page is the user turn: image first, then the task.
+                    put(
+                        JSONObject().apply {
+                            put(
+                                "inline_data",
+                                JSONObject().apply {
+                                    put("mime_type", "image/jpeg")
+                                    put("data", imageBase64)
+                                },
+                            )
+                        },
+                    )
+                    put(JSONObject().apply { put("text", prompt) })
+                    formatUserPrompt(userPrompt, sourceLang, targetLang).takeIf { it.isNotEmpty() }?.let { extra ->
+                        put(JSONObject().apply { put("text", extra) })
+                    }
+                }
                 put(
-                    JSONObject().apply {
+                    "contents",
+                    JSONArray().apply {
                         put(
-                            "inline_data",
                             JSONObject().apply {
-                                put("mime_type", "image/jpeg")
-                                put("data", imageBase64)
+                                put("role", "user")
+                                put("parts", parts)
                             },
                         )
                     },
                 )
-                put(JSONObject().apply { put("text", prompt) })
-                formatUserPrompt(userPrompt, sourceLang, targetLang).takeIf { it.isNotEmpty() }?.let { extra ->
-                    put(JSONObject().apply { put("text", extra) })
-                }
+                val effectiveSystemPrompt = systemPrompt.ifBlank { TranslatorSettings.DEFAULT_SYSTEM_PROMPT }
+                put("systemInstruction", systemInstruction(effectiveSystemPrompt, sourceLang, targetLang))
+                put(
+                    "generationConfig",
+                    JSONObject().apply {
+                        put("temperature", 0.1)
+                        put("responseMimeType", "application/json")
+                        // Thinking is charged to this same limit, so the whole
+                        // allowance is requested instead of a per-level share.
+                        put("maxOutputTokens", MAX_OUTPUT_TOKENS)
+                        putThinkingConfig(thinkingLevel)
+                    },
+                )
             }
-            put(
-                "contents",
-                JSONArray().apply {
-                    put(
-                        JSONObject().apply {
-                            put("role", "user")
-                            put("parts", parts)
-                        },
-                    )
-                },
-            )
-            val effectiveSystemPrompt = systemPrompt.ifBlank { TranslatorSettings.DEFAULT_SYSTEM_PROMPT }
-            put("systemInstruction", systemInstruction(effectiveSystemPrompt, sourceLang, targetLang))
-            put(
-                "generationConfig",
-                JSONObject().apply {
-                    put("temperature", 0.1)
-                    put("responseMimeType", "application/json")
-                    // The reasoning budget is charged to this same limit, so a
-                    // high level needs room or the JSON answer is truncated.
-                    put(
-                        "maxOutputTokens",
-                        when (thinkingLevel) {
-                            TranslatorSettings.THINKING_HIGH -> 32768
-                            TranslatorSettings.THINKING_MEDIUM -> 16384
-                            TranslatorSettings.THINKING_LOW -> 8192
-                            else -> 4096
-                        },
-                    )
-                    putThinkingConfig(thinkingLevel)
-                },
+            return postGemini(
+                apiKeys,
+                model,
+                requestJson,
+                readTimeoutFor(thinkingLevel, GEMINI_VISION_READ_TIMEOUT_MS),
             )
         }
 
-        val root = postGemini(
-            apiKeys,
-            model,
-            requestJson,
-            readTimeoutFor(thinkingLevel, GEMINI_VISION_READ_TIMEOUT_MS),
-        )
         parseVisionResult(
-            raw = candidateText(root),
+            raw = candidateText(callModel()),
             blocks = blocks,
             width = bitmap.width,
             height = bitmap.height,
@@ -741,9 +769,7 @@ object PageTranslator {
         sentWidth: Int = width,
         sentHeight: Int = height,
     ): VisionResult {
-        val root = runCatching { extractJsonObject(raw) }.getOrElse {
-            JSONObject().put("bubbles", extractJsonArray(raw))
-        }
+        val root = readReply(raw)
         val entries = mutableListOf<VisionEntry>()
 
         // Pre-extract all raw boxes to auto-detect coordinate scale for this page.
@@ -1014,50 +1040,135 @@ object PageTranslator {
         return Rect(left, top, right, bottom)
     }
 
-    private fun extractJsonObject(raw: String): JSONObject {
-        var text = raw.trim()
-        if (text.startsWith("```")) {
-            text = text.substringAfter('\n', text).substringBeforeLast("```").trim()
+    /**
+     * Reads the answer into the `{"bubbles": […], "extra": […]}` wrapper the
+     * rest of the parser expects.
+     *
+     * A lite model sometimes repeats a closing brace, wraps the list in an array
+     * or gets its answer cut by the token limit. Slicing the text from the first
+     * `{` to the last `}` turned any of those into a failed page, so the answer
+     * is walked instead: every entry object that arrived complete is kept, the
+     * unbalanced rest is dropped, and the entries are rebuilt in page order.
+     */
+    private fun readReply(raw: String): JSONObject {
+        val text = stripCodeFences(raw)
+        if (text.startsWith("{")) {
+            runCatching { JSONObject(text) }.getOrNull()?.let { return it }
+        } else {
+            runCatching { JSONArray(text) }.getOrNull()?.let { return JSONObject().put("bubbles", it) }
         }
-        val start = text.indexOf('{')
-        val end = text.lastIndexOf('}')
-        if (start == -1 || end <= start) {
+
+        val repaired = escapeControlCharsInsideStrings(text)
+        val found = mutableListOf<ReplyEntry>()
+        val open = ArrayDeque<Int>()
+        var inString = false
+        var escaped = false
+        for (index in repaired.indices) {
+            val ch = repaired[index]
+            if (inString) {
+                when {
+                    escaped -> escaped = false
+                    ch == '\\' -> escaped = true
+                    ch == '"' -> inString = false
+                }
+                continue
+            }
+            when (ch) {
+                '"' -> inString = true
+                '{' -> open.addLast(index)
+                '}' -> open.removeLastOrNull()?.let { start ->
+                    parseEntry(repaired.substring(start, index + 1))?.let { entry ->
+                        found += ReplyEntry(start, index, entry)
+                    }
+                }
+            }
+        }
+        if (found.isEmpty()) {
+            // Nothing entry-shaped, but the wrapper may still be a complete JSON
+            // object wrapped in prose: keep the old slice as a last resort.
+            val start = text.indexOf('{')
+            val end = text.lastIndexOf('}')
+            if (start != -1 && end > start) {
+                runCatching { JSONObject(text.substring(start, end + 1)) }.getOrNull()?.let { return it }
+            }
             throw TranslationFailure("The model reply is not valid JSON", raw)
         }
-        return JSONObject(text.substring(start, end + 1))
-    }
 
-    private fun extractJsonArray(raw: String): JSONArray {
-        var text = raw.trim()
-        if (text.startsWith("```json", ignoreCase = true)) {
-            text = text.substringAfter("```json", text)
-        } else if (text.startsWith("```")) {
-            text = text.substringAfter("```", text)
-        }
-        if (text.endsWith("```")) {
-            text = text.substringBeforeLast("```", text)
-        }
-        text = text.trim()
-
-        val startArr = text.indexOf('[')
-        val endArr = text.lastIndexOf(']')
-        if (startArr != -1 && endArr != -1 && endArr > startArr) {
-            return JSONArray(text.substring(startArr, endArr + 1))
-        }
-
-        val startObj = text.indexOf('{')
-        val endObj = text.lastIndexOf('}')
-        if (startObj != -1 && endObj != -1 && endObj > startObj) {
-            val rootObj = JSONObject(text.substring(startObj, endObj + 1))
-            val keys = rootObj.keys()
-            while (keys.hasNext()) {
-                val key = keys.next()
-                val arr = rootObj.optJSONArray(key)
-                if (arr != null) return arr
+        // An object that merely holds other entries (the wrapper, or a box object
+        // the model nested) is not a balloon: only the innermost entries count.
+        val entries = found.filter { entry ->
+            found.none { other ->
+                other !== entry && other.start > entry.start && other.end < entry.end
             }
         }
 
-        return JSONArray(text)
+        val bubbles = JSONArray()
+        val extras = JSONArray()
+        for (entry in entries.map { it.value }) {
+            val hasIds = entry.has("ids") || entry.has("box_ids") || entry.has("boxes")
+            if (hasIds) bubbles.put(entry) else extras.put(entry)
+        }
+        return JSONObject().apply {
+            put("bubbles", bubbles)
+            put("extra", extras)
+        }
+    }
+
+    /** One `{…}` slice of the answer, or null when it is not a balloon entry. */
+    private fun parseEntry(slice: String): JSONObject? {
+        val cleaned = slice.replace(Regex(",\\s*([}\\]])"), "$1")
+        val entry = runCatching { JSONObject(cleaned) }.getOrNull() ?: return null
+        val hasBox = entry.has("box") || entry.has("box_2d") || entry.has("bbox") ||
+            entry.has("ids") || entry.has("box_ids")
+        if (!hasBox) return null
+        val hasText = readText(entry).isNotBlank() || !readSource(entry).isNullOrBlank()
+        return entry.takeIf { hasText }
+    }
+
+    private fun stripCodeFences(raw: String): String {
+        var text = raw.trim()
+        if (text.startsWith("```")) {
+            text = text.substringAfter('\n', text)
+            text = text.substringBeforeLast("```", text)
+        }
+        return text.trim()
+    }
+
+    /**
+     * A raw newline or tab inside a string is enough to make the JSON unreadable.
+     * The characters are escaped in place instead of failing the page.
+     */
+    private fun escapeControlCharsInsideStrings(text: String): String {
+        val out = StringBuilder(text.length + 16)
+        var inString = false
+        var escaped = false
+        for (ch in text) {
+            if (!inString) {
+                out.append(ch)
+                if (ch == '"') inString = true
+                continue
+            }
+            when {
+                escaped -> {
+                    out.append(ch)
+                    escaped = false
+                }
+                ch == '\\' -> {
+                    out.append(ch)
+                    escaped = true
+                }
+                ch == '"' -> {
+                    out.append(ch)
+                    inString = false
+                }
+                ch == '\n' -> out.append("\\n")
+                ch == '\r' -> out.append("\\r")
+                ch == '\t' -> out.append("\\t")
+                ch < ' ' -> out.append(' ')
+                else -> out.append(ch)
+            }
+        }
+        return out.toString()
     }
 
     private fun containsJapanese(str: String): Boolean = str.any { ch ->

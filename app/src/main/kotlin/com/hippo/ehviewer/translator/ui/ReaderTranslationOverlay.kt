@@ -52,7 +52,6 @@ fun ReaderTranslationOverlay(
         outlineWidth = settings.outlineWidth,
         fitMode = fitMode,
         isManipulationEnabled = settings.isManipulationMode,
-        onBubbleClick = { bubble -> state.editingBubble = pageIndex to bubble },
         onBubbleUpdated = { bubble -> state.updateBubble(pageIndex, bubble) },
         modifier = modifier,
     )

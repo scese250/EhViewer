@@ -13,10 +13,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -29,14 +25,19 @@ import com.hippo.ehviewer.translator.TranslationStatus
 /**
  * Shown over the page while reading: the reason of the failure is the API reply
  * itself, untouched, so quota, safety and model errors need no fixed messages.
+ *
+ * [dismissed] lives in the reader state, not here, so closing the message is
+ * final: turning back to this page does not show it again. The raw reply stays
+ * available in the translation settings.
  */
 @Composable
 fun TranslationErrorBanner(
     status: TranslationStatus,
+    dismissed: Boolean = false,
+    onDismiss: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val failure = status as? TranslationStatus.Failed ?: return
-    var dismissed by remember(failure) { mutableStateOf(false) }
     if (dismissed) return
 
     val raw = failure.rawResponse?.takeIf { it.isNotBlank() } ?: failure.message
@@ -68,7 +69,7 @@ fun TranslationErrorBanner(
                 )
             }
             IconButton(
-                onClick = { dismissed = true },
+                onClick = onDismiss,
                 modifier = Modifier.size(28.dp),
             ) {
                 Icon(

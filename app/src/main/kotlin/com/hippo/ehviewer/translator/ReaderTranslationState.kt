@@ -2,10 +2,7 @@ package com.hippo.ehviewer.translator
 
 import android.graphics.Bitmap
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import coil3.BitmapImage
 import com.ehviewer.core.util.logcat
@@ -70,7 +67,18 @@ class ReaderTranslationState(
 
     private val statuses = mutableStateMapOf<Int, TranslationStatus>()
 
-    var editingBubble by mutableStateOf<Pair<Int, TranslatedBubble>?>(null)
+    /**
+     * Failures the reader already closed while reading. The status keeps the raw
+     * reply for the settings dialog, but the banner does not come back when the
+     * page is turned again.
+     */
+    private val dismissedErrors = mutableStateMapOf<Int, Unit>()
+
+    fun isErrorDismissed(index: Int): Boolean = dismissedErrors.containsKey(index)
+
+    fun dismissError(index: Int) {
+        dismissedErrors[index] = Unit
+    }
 
     private val mutex = Mutex()
     private var lastRevision = settings.revision
@@ -115,6 +123,7 @@ class ReaderTranslationState(
             .forEach {
                 translations.remove(it)
                 statuses.remove(it)
+                dismissedErrors.remove(it)
             }
         // The cache is keyed by signature too, but a settings change must also
         // free the old pages instead of keeping them until the LRU evicts them.
@@ -125,7 +134,7 @@ class ReaderTranslationState(
         generation++
         translations.clear()
         statuses.clear()
-        editingBubble = null
+        dismissedErrors.clear()
         TranslationCache.removeAll(galleryKey)
     }
 
@@ -133,6 +142,9 @@ class ReaderTranslationState(
     fun resetPage(index: Int) {
         translations.remove(index)
         statuses.remove(index)
+        // A new attempt after "Translate again" is allowed to report its failure
+        // again: only the dismissals of pages nobody asked to retry are kept.
+        dismissedErrors.remove(index)
         TranslationCache.remove(galleryKey, index)
     }
 
@@ -222,8 +234,17 @@ class ReaderTranslationState(
                 if (requestGeneration == generation && signature == settings.translationSignature()) {
                     val stored = result.copy(settingsSignature = signature)
                     translations[index] = stored
-                    TranslationCache.put(galleryKey, index, stored)
+                    // An empty answer is kept in memory but never written to the
+                    // cache: the model occasionally misses a whole page, and the
+                    // reader tries again the next time that page is opened
+                    // instead of showing "no text" on it forever.
+                    if (stored.bubbles.isEmpty()) {
+                        TranslationCache.remove(galleryKey, index)
+                    } else {
+                        TranslationCache.put(galleryKey, index, stored)
+                    }
                     statuses[index] = TranslationStatus.Done
+                    dismissedErrors.remove(index)
                 } else {
                     // Settings changed while translating: drop the result so the
                     // next pass re-runs with the new configuration.

@@ -83,7 +83,6 @@ import com.hippo.ehviewer.gallery.useEhPageLoader
 import com.hippo.ehviewer.translator.LocalReaderTranslation
 import com.hippo.ehviewer.translator.ReaderTranslationState
 import com.hippo.ehviewer.translator.TranslatorSettings
-import com.hippo.ehviewer.translator.ui.BubbleEditDialog
 import com.hippo.ehviewer.translator.ui.TranslationErrorBanner
 import com.hippo.ehviewer.translator.ui.TranslatorSettingsDialog
 import com.hippo.ehviewer.ui.MainActivity
@@ -402,6 +401,8 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
         // model errors are shown verbatim while the user keeps reading.
         TranslationErrorBanner(
             status = translatorState.status(currentPage),
+            dismissed = translatorState.isErrorDismissed(currentPage),
+            onDismiss = { translatorState.dismissError(currentPage) },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
@@ -461,17 +462,6 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
             onDismiss = {
                 translatorSettings.save()
                 showTranslationSettings = false
-            },
-        )
-    }
-
-    translatorState.editingBubble?.let { (pageIndex, bubble) ->
-        BubbleEditDialog(
-            bubble = bubble,
-            onDismiss = { translatorState.editingBubble = null },
-            onSave = { updated ->
-                translatorState.updateBubble(pageIndex, updated)
-                translatorState.editingBubble = null
             },
         )
     }

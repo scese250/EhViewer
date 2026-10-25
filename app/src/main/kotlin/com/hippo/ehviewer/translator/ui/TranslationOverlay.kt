@@ -97,7 +97,6 @@ fun TranslationOverlay(
     outlineWidth: Float = 3f,
     fitMode: OverlayFitMode = OverlayFitMode.INSIDE,
     isManipulationEnabled: Boolean = false,
-    onBubbleClick: (TranslatedBubble) -> Unit,
     onBubbleUpdated: (TranslatedBubble) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -478,7 +477,6 @@ fun TranslationOverlay(
                     borderThickness = borderThickness,
                     outlineWidth = outlineWidth,
                     isManipulationEnabled = isManipulationEnabled,
-                    onBubbleClick = onBubbleClick,
                     onBubbleUpdated = onBubbleUpdated,
                 )
             }
@@ -502,14 +500,12 @@ private fun DynamicBubbleView(
     borderThickness: Float,
     outlineWidth: Float,
     isManipulationEnabled: Boolean,
-    onBubbleClick: (TranslatedBubble) -> Unit,
     onBubbleUpdated: (TranslatedBubble) -> Unit,
 ) {
     val density = LocalDensity.current
     val textMeasurer = rememberTextMeasurer()
     val currentBubble by rememberUpdatedState(bubble)
     val currentOnBubbleUpdated by rememberUpdatedState(onBubbleUpdated)
-    val currentOnBubbleClick by rememberUpdatedState(onBubbleClick)
 
     var liveOffsetX by remember(bubble.id) { mutableFloatStateOf(bubble.offsetX) }
     var liveOffsetY by remember(bubble.id) { mutableFloatStateOf(bubble.offsetY) }
@@ -619,9 +615,9 @@ private fun DynamicBubbleView(
         }
     }
 
-    // Moving is the only edit available on the page: neither the highlighted
-    // outline that marked the draggable balloons nor the edge/pinch resizing are
-    // drawn or handled any more. A tap (barely any movement) opens the editor.
+    // Dragging is the only edit left: no outline marks the movable balloons, no
+    // edge or pinch resizing, and a tap no longer opens the balloon editor. The
+    // balloon keeps its measured size and only its position changes.
     val touchModifier = if (isManipulationEnabled) {
         Modifier.pointerInput(bubble.id, isManipulationEnabled) {
             awaitEachGesture {
@@ -643,14 +639,9 @@ private fun DynamicBubbleView(
                     change.consume()
                 }
 
-                if (totalDragDistance < 8f * density.density) {
-                    currentOnBubbleClick(
-                        currentBubble.copy(
-                            offsetX = liveOffsetX,
-                            offsetY = liveOffsetY,
-                        ),
-                    )
-                } else {
+                // A tap (barely any movement) is not an edit any more: only a
+                // real drag is stored.
+                if (totalDragDistance >= 8f * density.density) {
                     currentOnBubbleUpdated(
                         currentBubble.copy(
                             offsetX = liveOffsetX,
