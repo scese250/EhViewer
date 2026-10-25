@@ -8,23 +8,14 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.util.Base64
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.Text
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.TextRecognizer
-import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URI
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.system.measureTimeMillis
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -39,15 +30,11 @@ class TranslationFailure(
 ) : Exception(message)
 
 object PageTranslator {
-    private val recognizer by lazy {
-        TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build())
-    }
-
     @Volatile
     private var currentKeyIndex = 0
 
     /** Reported before each expensive step so the UI can show what is running. */
-    enum class Phase { OCR, VISION, TRANSLATE }
+    enum class Phase { VISION }
 
     /** Largest side sent to the model: enough to read balloons, small enough to stay fast. */
     private const val VISION_MAX_EDGE = 1600
@@ -79,155 +66,47 @@ object PageTranslator {
             error("No Gemini API key: add one in the translation settings.")
         }
 
-        suspend fun recognize(): Pair<List<RawBlock>, Long> {
-            var visionText: Text? = null
-            val ms = measureTimeMillis {
-                visionText = recognizer.processImage(InputImage.fromBitmap(bitmap, 0))
-            }
-            val blocks = visionText?.textBlocks.orEmpty()
-                .filter { block ->
-                    block.text.isNotBlank() &&
-                        (block.boundingBox?.width() ?: 0) > 8 &&
-                        (block.boundingBox?.height() ?: 0) > 8
-                }
-                .map { block ->
-                    RawBlock(
-                        text = block.text.replace("\n", " ").trim(),
-                        rect = block.boundingBox ?: Rect(),
-                    )
-                }
-            return blocks to ms
-        }
-
-        var ocrTime = 0L
         var bubbles: List<TranslatedBubble> = emptyList()
         var engineUsed = "Gemini"
         var mergedBoxes = 0
         var discardedBoxes = 0
 
+        // The model is the only engine: it reads the page, measures every
+        // balloon and letters the translation in a single call. There is no
+        // on-device OCR and no text-only rescue any more; the only fallback is
+        // another API key, which the key rotation already handles.
         val transTime = measureTimeMillis {
-            var translated = false
-            var visionFailure: Exception? = null
-
-            // The model reads the page and measures every balloon itself; the
-            // on-device OCR only exists as a rescue path now.
             onPhase(Phase.VISION)
-            try {
-                val result = translateWithGeminiVision(
-                    bitmap = bitmap,
-                    blocks = emptyList(),
-                    noHints = true,
-                    sourceLang = sourceLang,
-                    targetLang = targetLang,
-                    systemPrompt = systemPrompt,
-                    userPrompt = userPrompt,
-                    apiKeys = geminiApiKeys,
-                    model = geminiModel,
-                    thinkingLevel = thinkingLevel,
-                )
-                bubbles = result.bubbles
-                mergedBoxes = result.mergedBoxes
-                discardedBoxes = result.discardedBoxes
-                engineUsed = "Gemini (${geminiModel.removePrefix("gemini-")})"
-                translated = true
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: TranslationFailure) {
-                // The API or the model already answered: surface that reply
-                // instead of spending seconds on the OCR rescue.
-                throw e
-            } catch (e: Exception) {
-                visionFailure = e
-            }
-
-            if (!translated) {
-                // Last resort: run ML Kit and send the recognised text alone.
-                onPhase(Phase.OCR)
-                val (blocks, ms) = recognize()
-                ocrTime += ms
-                // Stitch the per-column OCR fragments of every balloon back
-                // together so a vertical bubble is not translated twice.
-                val mergedBlocks = runCatching {
-                    // The detection controls are gone: the rescue path uses the
-                    // tuned defaults of the detector.
-                    BubbleDetector.group(blocks, bitmap, BubbleGroupingConfig())
-                }.getOrElse { blocks }
-                onPhase(Phase.TRANSLATE)
-                try {
-                    bubbles = translateWithGeminiText(
-                        blocks = mergedBlocks,
-                        sourceLang = sourceLang,
-                        targetLang = targetLang,
-                        systemPrompt = systemPrompt,
-                        userPrompt = userPrompt,
-                        apiKeys = geminiApiKeys,
-                        model = geminiModel,
-                        thinkingLevel = thinkingLevel,
-                    )
-                    engineUsed = "Gemini text (vision failed: ${visionFailure?.message?.take(40)})"
-                    translated = true
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    // Prefer the newest reply: if the text call failed too, its
-                    // raw body explains why (quota, safety, bad model...).
-                    val failure = (e as? TranslationFailure)
-                        ?: (visionFailure as? TranslationFailure)
-                    if (failure != null) throw failure
-                    throw TranslationFailure(
-                        message = "Gemini could not translate this page",
-                        rawResponse = (visionFailure ?: e).message.orEmpty(),
-                    )
-                }
-            }
+            val result = translateWithGeminiVision(
+                bitmap = bitmap,
+                blocks = emptyList(),
+                noHints = true,
+                sourceLang = sourceLang,
+                targetLang = targetLang,
+                systemPrompt = systemPrompt,
+                userPrompt = userPrompt,
+                apiKeys = geminiApiKeys,
+                model = geminiModel,
+                thinkingLevel = thinkingLevel,
+            )
+            bubbles = result.bubbles
+            mergedBoxes = result.mergedBoxes
+            discardedBoxes = result.discardedBoxes
+            engineUsed = "Gemini (${geminiModel.removePrefix("gemini-")})"
         }
 
         PageTranslation(
             pageIndex = pageIndex,
             bubbles = bubbles,
-            ocrDurationMs = ocrTime,
+            ocrDurationMs = 0L,
             translateDurationMs = transTime,
-            totalDurationMs = ocrTime + transTime,
+            totalDurationMs = transTime,
             engineName = engineUsed,
             mergedBoxes = mergedBoxes,
             discardedBoxes = discardedBoxes,
             bitmapWidth = bitmap.width,
             bitmapHeight = bitmap.height,
         )
-    }
-
-    private suspend fun translateWithGeminiText(
-        blocks: List<RawBlock>,
-        sourceLang: String,
-        targetLang: String,
-        systemPrompt: String,
-        userPrompt: String = "",
-        apiKeys: List<String>,
-        model: String,
-        thinkingLevel: String,
-    ): List<TranslatedBubble> {
-        val translated = translateWithGemini(
-            texts = blocks.map { it.text },
-            sourceLang = sourceLang,
-            targetLang = targetLang,
-            systemPrompt = systemPrompt,
-            userPrompt = userPrompt,
-            apiKeys = apiKeys,
-            model = model,
-            thinkingLevel = thinkingLevel,
-        )
-        val bubbles = mutableListOf<TranslatedBubble>()
-        blocks.forEachIndexed { idx, block ->
-            // Null means the model rejected the line as unreadable or garbled.
-            val text = translated.getOrNull(idx) ?: return@forEachIndexed
-            bubbles += TranslatedBubble(
-                id = bubbles.size,
-                originalText = block.text,
-                translatedText = text,
-                boundingBox = block.rect,
-            )
-        }
-        return bubbles
     }
 
     private fun cleanMangaText(text: String): String = text
@@ -237,162 +116,13 @@ object PageTranslator {
         .replace(Regex("\\s+"), " ")
         .trim()
 
-    private suspend fun translateWithGemini(
-        texts: List<String>,
-        sourceLang: String,
-        targetLang: String,
-        systemPrompt: String,
-        userPrompt: String = "",
-        apiKeys: List<String>,
-        model: String,
-        thinkingLevel: String,
-    ): List<String?> = withContext(Dispatchers.IO) {
-        if (texts.isEmpty()) return@withContext emptyList()
-        if (apiKeys.isEmpty()) error("No hay claves de API disponibles")
-
-        val inputItems = JSONArray()
-        texts.forEachIndexed { idx, txt ->
-            inputItems.put(
-                JSONObject().apply {
-                    put("id", idx)
-                    put("text", txt)
-                },
-            )
-        }
-
-        val prompt = """
-            These are the dialogue lines of a manga page, translated from
-            ${TranslatorSettings.getLanguageName(sourceLang)} into
-            ${TranslatorSettings.getLanguageName(targetLang)}.
-            The OCR behind this text is unreliable: lines can be truncated,
-            misspelled or contain fragments of a neighbouring balloon. Read each
-            line as a whole and translate what it is meant to say.
-
-            If a line is not readable dialogue (illegible garbage, logo, watermark,
-            page number, sound effect), do not translate it: answer exactly
-            "REJECT" for that id.
-
-            Return ONLY a valid JSON array of objects with "id" and "translated".
-            Example format:
-            [{"id": 0, "translated": "text"}, {"id": 1, "translated": "REJECT"}]
-
-            Input dialogue:
-            $inputItems
-        """.trimIndent() + userPromptSuffix(userPrompt, sourceLang, targetLang)
-
-        val requestJson = JSONObject().apply {
-            val parts = JSONArray().apply {
-                put(JSONObject().apply { put("text", prompt) })
-            }
-            val contents = JSONArray().apply {
-                put(
-                    JSONObject().apply {
-                        put("role", "user")
-                        put("parts", parts)
-                    },
-                )
-            }
-            put("contents", contents)
-            // The translator's rules travel as the system prompt; the dialogue
-            // and, in vision mode, the page image are the user turn.
-            val effectiveSystemPrompt = systemPrompt.ifBlank { TranslatorSettings.DEFAULT_SYSTEM_PROMPT }
-            put("systemInstruction", systemInstruction(effectiveSystemPrompt, sourceLang, targetLang))
-            put(
-                "generationConfig",
-                JSONObject().apply {
-                    put("temperature", 0.2)
-                    put("responseMimeType", "application/json")
-                    putThinkingConfig(thinkingLevel)
-                },
-            )
-        }
-
-        val root = postGemini(
-            apiKeys,
-            model,
-            requestJson,
-            readTimeoutFor(thinkingLevel, GEMINI_READ_TIMEOUT_MS),
-        )
-        val parsedArray = extractJsonArray(candidateText(root))
-        val results = arrayOfNulls<String>(texts.size)
-        val rejected = BooleanArray(texts.size)
-
-        for (i in 0 until parsedArray.length()) {
-            val item = parsedArray.opt(i)
-            var transText = ""
-            var targetId = i
-
-            if (item is JSONObject) {
-                targetId = item.optInt("id", -1).takeIf { it != -1 }
-                    ?: item.optString("id").toIntOrNull()
-                    ?: i
-                transText = item.optString("translated").takeIf { it.isNotBlank() }
-                    ?: item.optString("translation").takeIf { it.isNotBlank() }
-                    ?: item.optString("text").takeIf { it.isNotBlank() }
-                    ?: item.optString(targetLang).takeIf { it.isNotBlank() }
-                    ?: ""
-            } else if (item is String) {
-                transText = item
-            }
-
-            if (targetId !in results.indices || transText.isBlank()) continue
-            if (isReject(transText)) {
-                rejected[targetId] = true
-                continue
-            }
-            val clean = cleanMangaText(transText)
-            if (clean.isNotBlank() && (!TranslatorSettings.isJapanese(sourceLang) || !containsJapanese(clean))) {
-                results[targetId] = clean
-            }
-        }
-
-        // Rejected lines are dropped and lines the model skipped stay empty:
-        // with a single engine there is no second translator to recover them.
-        texts.indices.map { idx ->
-            if (rejected[idx]) null else results[idx]
-        }
-    }
-
-    /**
-     * The model is told to answer "REJECT" for a balloon it cannot read. Such
-     * balloons are dropped instead of being drawn with the OCR garbage.
-     */
-    private fun isReject(text: String): Boolean {
-        val normalized = text.trim().trim('"', '\'', '[', ']', '.', '!', ':', ' ')
-        if (normalized.equals("REJECT", ignoreCase = true)) return true
-        // Tolerate "REJECT: reason" and similar qualifiers.
-        return normalized.startsWith("REJECT", ignoreCase = true) &&
-            normalized.length > 6 &&
-            !normalized[6].isLetterOrDigit()
-    }
-
-    /** A reasoning model answers slower; the socket must wait for it. */
-    private fun readTimeoutFor(thinkingLevel: String, baseMs: Int): Int = when (thinkingLevel) {
-        TranslatorSettings.THINKING_HIGH -> maxOf(baseMs, 180_000)
-        TranslatorSettings.THINKING_MEDIUM -> maxOf(baseMs, 120_000)
-        TranslatorSettings.THINKING_LOW -> maxOf(baseMs, 90_000)
-        else -> baseMs
-    }
-
-    /**
-     * Requests the reasoning budget chosen in the settings. The REST API spells
-     * the levels in upper case; older models answer 400 to an unknown field and
-     * [postGemini] retries the same key without it.
-     */
-    private fun JSONObject.putThinkingConfig(level: String) {
-        put(
-            "thinkingConfig",
-            JSONObject().apply { put("thinkingLevel", level.uppercase()) },
-        )
-    }
-
     private fun postGemini(
         apiKeys: List<String>,
         model: String,
         request: JSONObject,
         readTimeoutMs: Int,
     ): JSONObject {
-        if (apiKeys.isEmpty()) error("No hay claves de API disponibles")
+        if (apiKeys.isEmpty()) error("No API keys available")
 
         var lastError: Exception? = null
         val totalKeys = apiKeys.size
@@ -1337,25 +1067,17 @@ object PageTranslator {
                     successCount++
                 } else {
                     val err = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "Error ${conn.responseCode}"
-                    errors.add("Clave #${index + 1}: $err")
+                    errors.add("Key #${index + 1}: $err")
                 }
             }.onFailure {
-                errors.add("Clave #${index + 1}: ${it.message}")
+                errors.add("Key #${index + 1}: ${it.message}")
             }
         }
 
         if (successCount > 0) {
-            Result.success("$successCount de ${apiKeys.size} claves funcionan correctamente con $model")
+            Result.success("$successCount of ${apiKeys.size} keys work with $model")
         } else {
             Result.failure(IllegalStateException(errors.joinToString("\n")))
         }
-    }
-
-    private suspend fun TextRecognizer.processImage(
-        inputImage: InputImage,
-    ): Text = suspendCancellableCoroutine { cont ->
-        process(inputImage)
-            .addOnSuccessListener { cont.resume(it) }
-            .addOnFailureListener { cont.resumeWithException(it) }
     }
 }

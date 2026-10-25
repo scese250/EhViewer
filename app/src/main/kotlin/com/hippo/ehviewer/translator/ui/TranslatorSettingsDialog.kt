@@ -924,7 +924,7 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
                     if (sfxCount > 0) append(" · $sfxCount SFX")
                     if (page.mergedBoxes > 0) append(" · ${page.mergedBoxes} merged")
                     if (page.discardedBoxes > 0) append(" · ${page.discardedBoxes} discarded")
-                    append("\nOCR ${page.ocrDurationMs} ms · Translation ${page.translateDurationMs} ms")
+                    append("\nTranslation ${page.translateDurationMs} ms")
                 }
             }
         } ?: "Page translated."

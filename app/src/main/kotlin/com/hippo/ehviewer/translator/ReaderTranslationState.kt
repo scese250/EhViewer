@@ -148,8 +148,8 @@ class ReaderTranslationState(
 
     /**
      * Translates one page, waiting for its bitmap when it is not decoded yet.
-     * Concurrent calls are serialized so the ML Kit recognizer and the API key
-     * rotation are not used in parallel.
+     * Concurrent calls are serialized so the API key rotation is not used in
+     * parallel.
      */
     suspend fun translatePage(
         index: Int,
@@ -215,9 +215,7 @@ class ReaderTranslationState(
                     thinkingLevel = settings.thinkingLevel,
                     onPhase = { phase ->
                         statuses[index] = when (phase) {
-                            PageTranslator.Phase.OCR -> TranslationStatus.RecognizingText
                             PageTranslator.Phase.VISION -> TranslationStatus.ReadingPage
-                            PageTranslator.Phase.TRANSLATE -> TranslationStatus.TranslatingText
                         }
                     },
                 )
@@ -270,9 +268,9 @@ class ReaderTranslationState(
     }
 
     /**
-     * ML Kit only accepts software ARGB_8888 bitmaps, but the reader decodes
-     * pages as HARDWARE bitmaps for rendering. Copy such pages once and let the
-     * caller recycle the copy.
+     * The page has to be drawn and JPEG-encoded before it goes to the model,
+     * but the reader decodes pages as HARDWARE bitmaps for rendering. Copy such
+     * pages once to a software ARGB_8888 bitmap and let the caller recycle it.
      */
     private fun prepareBitmap(image: Image, onCopy: (Bitmap) -> Unit): Bitmap? {
         val source = (image.innerImage as? BitmapImage)?.bitmap ?: return null

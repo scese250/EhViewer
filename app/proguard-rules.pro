@@ -22,9 +22,6 @@
 -dontwarn androidx.window.extensions.**
 -dontwarn androidx.window.sidecar.Sidecar*
 
-# Google ML Kit Text Recognition
--keep class com.google.mlkit.** { *; }
--dontwarn com.google.mlkit.**
 -keep class com.google.android.gms.** { *; }
 -dontwarn com.google.android.gms.**
 -keep class * implements com.google.firebase.components.ComponentRegistrar {
