@@ -34,7 +34,7 @@ object PageTranslator {
     private var currentKeyIndex = 0
 
     /** Reported before each expensive step so the UI can show what is running. */
-    enum class Phase { VISION }
+    enum class Phase { VISION, }
 
     /** Largest side sent to the model: enough to read balloons, small enough to stay fast. */
     private const val VISION_MAX_EDGE = 1600
