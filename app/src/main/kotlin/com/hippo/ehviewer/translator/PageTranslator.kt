@@ -116,6 +116,39 @@ object PageTranslator {
         .replace(Regex("\\s+"), " ")
         .trim()
 
+    /**
+     * The model is told to answer "REJECT" for a balloon it cannot read. Such
+     * balloons are dropped instead of being drawn with unreadable glyphs.
+     */
+    private fun isReject(text: String): Boolean {
+        val normalized = text.trim().trim('"', '\'', '[', ']', '.', '!', ':', ' ')
+        if (normalized.equals("REJECT", ignoreCase = true)) return true
+        // Tolerate "REJECT: reason" and similar qualifiers.
+        return normalized.startsWith("REJECT", ignoreCase = true) &&
+            normalized.length > 6 &&
+            !normalized[6].isLetterOrDigit()
+    }
+
+    /** A reasoning model answers slower; the socket must wait for it. */
+    private fun readTimeoutFor(thinkingLevel: String, baseMs: Int): Int = when (thinkingLevel) {
+        TranslatorSettings.THINKING_HIGH -> maxOf(baseMs, 180_000)
+        TranslatorSettings.THINKING_MEDIUM -> maxOf(baseMs, 120_000)
+        TranslatorSettings.THINKING_LOW -> maxOf(baseMs, 90_000)
+        else -> baseMs
+    }
+
+    /**
+     * Requests the reasoning budget chosen in the settings. The REST API spells
+     * the levels in upper case; older models answer 400 to an unknown field and
+     * [postGemini] retries the same key without it.
+     */
+    private fun JSONObject.putThinkingConfig(level: String) {
+        put(
+            "thinkingConfig",
+            JSONObject().apply { put("thinkingLevel", level.uppercase()) },
+        )
+    }
+
     private fun postGemini(
         apiKeys: List<String>,
         model: String,
