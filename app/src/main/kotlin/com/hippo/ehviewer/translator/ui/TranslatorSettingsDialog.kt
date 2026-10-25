@@ -114,14 +114,17 @@ fun TranslatorSettingsDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Row(
+                // Both buttons hug their label: the old fixed halves left a
+                // blank gap after "Translate". When they do not fit side by
+                // side, the second one moves to the next line.
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     OutlinedButton(
                         onClick = onTranslateCurrent,
                         enabled = !status.isBusy,
-                        modifier = Modifier.weight(1f),
                     ) {
                         if (status.isBusy) {
                             CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
@@ -139,7 +142,6 @@ fun TranslatorSettingsDialog(
                     OutlinedButton(
                         onClick = { onRetranslateNext(retranslateCount) },
                         enabled = !status.isBusy,
-                        modifier = Modifier.weight(1f),
                     ) {
                         Text(
                             text = "Redo translation next $retranslateCount pages",
@@ -155,11 +157,11 @@ fun TranslatorSettingsDialog(
                 // Pausa de la traducción automática: vive fuera de las
                 // categorías porque se usa a mitad de lectura.
                 SettingSwitch(
-                    title = if (settings.autoTranslate) "Traducción automática: activa" else "Traducción automática: en pausa",
+                    title = if (settings.autoTranslate) "Auto-translate: on" else "Auto-translate: paused",
                     subtitle = if (settings.autoTranslate) {
-                        "Traduce la página actual y las siguientes mientras lees. Toca para pausar."
+                        "Translates the current page and the next ones while you read. Tap to pause."
                     } else {
-                        "No se traduce nada solo; usa \"Traducir\" cuando lo quieras. Toca para reanudar."
+                        "Nothing is translated on its own; use \"Translate page\" when you want it. Tap to resume."
                     },
                     checked = settings.autoTranslate,
                     onCheckedChange = { settings.autoTranslate = it },
@@ -180,7 +182,7 @@ fun TranslatorSettingsDialog(
                 if (keys.isEmpty()) {
                     TextButton(onClick = { openSection = SECTION_AI }) {
                         Text(
-                            text = "No API key yet, add one in IA",
+                            text = "No API key yet, add one in AI",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.error,
                         )
@@ -195,22 +197,22 @@ fun TranslatorSettingsDialog(
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    CategoryChip("Idiomas", openSection == SECTION_LANGUAGES) {
+                    CategoryChip("Languages", openSection == SECTION_LANGUAGES) {
                         openSection = nextSection(openSection, SECTION_LANGUAGES)
                     }
                     CategoryChip("IA", openSection == SECTION_AI) {
                         openSection = nextSection(openSection, SECTION_AI)
                     }
-                    CategoryChip("Estilo", openSection == SECTION_STYLE) {
+                    CategoryChip("Style", openSection == SECTION_STYLE) {
                         openSection = nextSection(openSection, SECTION_STYLE)
                     }
-                    CategoryChip("Ajuste", openSection == SECTION_FIT) {
+                    CategoryChip("Fit", openSection == SECTION_FIT) {
                         openSection = nextSection(openSection, SECTION_FIT)
                     }
-                    CategoryChip("Lote", openSection == SECTION_PRELOAD) {
+                    CategoryChip("Batch", openSection == SECTION_PRELOAD) {
                         openSection = nextSection(openSection, SECTION_PRELOAD)
                     }
-                    CategoryChip("Caché", openSection == SECTION_CACHE) {
+                    CategoryChip("Cache", openSection == SECTION_CACHE) {
                         openSection = nextSection(openSection, SECTION_CACHE)
                         confirmClearCache = false
                         // Re-read the size every time the group is opened.
@@ -220,7 +222,7 @@ fun TranslatorSettingsDialog(
 
                 AnimatedVisibility(visible = openSection == SECTION_LANGUAGES) {
                     Column {
-                        SectionTitle("Idiomas de traducción")
+                        SectionTitle("Translation languages")
 
                         OutlinedTextField(
                             value = settings.sourceLang,
@@ -246,7 +248,7 @@ fun TranslatorSettingsDialog(
 
                 AnimatedVisibility(visible = openSection == SECTION_AI) {
                     Column {
-                        SectionTitle("Gemini IA")
+                        SectionTitle("Gemini AI")
 
                         Card(
                             colors = CardDefaults.cardColors(
@@ -261,12 +263,12 @@ fun TranslatorSettingsDialog(
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Text(
-                                        text = "Claves de API:",
+                                        text = "API keys:",
                                         fontWeight = FontWeight.SemiBold,
                                         style = MaterialTheme.typography.bodySmall,
                                     )
                                     Text(
-                                        text = "${keys.size} detectadas",
+                                        text = "${keys.size} detected",
                                         fontWeight = FontWeight.Bold,
                                         style = MaterialTheme.typography.bodySmall,
                                         color = if (keys.isNotEmpty()) {
@@ -285,7 +287,7 @@ fun TranslatorSettingsDialog(
                                         settings.geminiApiKeysRaw = it
                                         testResult = null
                                     },
-                                    label = { Text("Pega tus claves (una por línea)") },
+                                    label = { Text("Paste your keys (one per line)") },
                                     placeholder = { Text("AIzaSy...\nAIzaSy...") },
                                     modifier = Modifier.fillMaxWidth(),
                                     minLines = 2,
@@ -293,7 +295,7 @@ fun TranslatorSettingsDialog(
                                 )
 
                                 Text(
-                                    text = "💡 Varias claves rotan solas cuando una alcanza la cuota (429).",
+                                    text = "💡 Multiple keys rotate on their own when one hits the quota (429).",
                                     fontSize = 11.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -301,7 +303,7 @@ fun TranslatorSettingsDialog(
                                 Spacer(modifier = Modifier.height(10.dp))
 
                                 Text(
-                                    text = "Modelo Gemini:",
+                                    text = "Gemini model:",
                                     fontWeight = FontWeight.SemiBold,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
@@ -309,7 +311,7 @@ fun TranslatorSettingsDialog(
                                 OutlinedTextField(
                                     value = settings.geminiModel,
                                     onValueChange = { settings.geminiModel = it.trim() },
-                                    label = { Text("ID del Modelo") },
+                                    label = { Text("Model ID") },
                                     placeholder = { Text(TranslatorSettings.DEFAULT_GEMINI_MODEL) },
                                     modifier = Modifier.fillMaxWidth(),
                                     singleLine = true,
@@ -320,7 +322,7 @@ fun TranslatorSettingsDialog(
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.Add,
-                                                contentDescription = "Añadir al selector rápido",
+                                                contentDescription = "Add to the quick selector",
                                                 modifier = Modifier.size(20.dp),
                                             )
                                         }
@@ -331,7 +333,7 @@ fun TranslatorSettingsDialog(
 
                                 if (settings.geminiModels.isEmpty()) {
                                     Text(
-                                        text = "Selector rápido vacío: escribe un ID y toca + para guardarlo.",
+                                        text = "Quick selector is empty: type a model ID and tap + to save it.",
                                         fontSize = 11.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
@@ -349,7 +351,7 @@ fun TranslatorSettingsDialog(
                                                 trailingIcon = {
                                                     Icon(
                                                         imageVector = Icons.Default.Close,
-                                                        contentDescription = "Quitar $model del selector rápido",
+                                                        contentDescription = "Remove $model from the quick selector",
                                                         modifier = Modifier
                                                             .size(18.dp)
                                                             .clickable { settings.removeGeminiModel(model) },
@@ -372,28 +374,28 @@ fun TranslatorSettingsDialog(
                                 Spacer(modifier = Modifier.height(10.dp))
 
                                 PromptEditor(
-                                    title = "Instrucciones del sistema",
+                                    title = "System instructions",
                                     value = settings.geminiSystemPrompt,
                                     onValueChange = { settings.geminiSystemPrompt = it },
                                     defaultValue = TranslatorSettings.DEFAULT_SYSTEM_PROMPT,
-                                    fieldLabel = "Reglas del traductor (system prompt)",
-                                    hint = "💡 Se envían como system prompt; la imagen va como turno del usuario. " +
-                                        "Aquí viven los pronombres y el género según el panel, futanari femenino, " +
-                                        "los términos H (\"Ya voy\" → \"Me vengo\"), no traducir carteles y el REJECT.",
+                                    fieldLabel = "Translator rules (system prompt)",
+                                    hint = "💡 Sent as the system prompt; the image goes as the user turn. " +
+                                        "This is where pronouns and per-panel gender, leaving signs untranslated " +
+                                        "and the REJECT live.",
                                     minLines = 5,
                                 )
 
                                 Spacer(modifier = Modifier.height(4.dp))
 
                                 PromptEditor(
-                                    title = "Instrucciones de usuario",
+                                    title = "User instructions",
                                     value = settings.geminiUserPrompt,
                                     onValueChange = { settings.geminiUserPrompt = it },
                                     defaultValue = TranslatorSettings.DEFAULT_USER_PROMPT,
-                                    fieldLabel = "Instrucciones adicionales (user prompt)",
-                                    placeholder = "Ej.: Tutea siempre; conserva los honoríficos -san y -kun.",
-                                    hint = "💡 Se envían en el turno del usuario, junto a la página y la tarea. " +
-                                        "Sirven para ajustes puntuales (tono, nombres, términos) sin tocar las reglas del sistema.",
+                                    fieldLabel = "Additional instructions (user prompt)",
+                                    placeholder = "e.g. Keep the -san and -kun honorifics; never use formal speech.",
+                                    hint = "💡 Sent in the user turn, along with the page and the task. " +
+                                        "Use it for one-off tweaks (tone, names, terms) without touching the system rules.",
                                     minLines = 3,
                                 )
 
@@ -424,7 +426,7 @@ fun TranslatorSettingsDialog(
                                     if (isTestingKey) {
                                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                                         Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Probando conexión...")
+                                        Text("Testing connection…")
                                     } else {
                                         Icon(
                                             imageVector = Icons.Default.Check,
@@ -432,7 +434,7 @@ fun TranslatorSettingsDialog(
                                             modifier = Modifier.size(18.dp),
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Probar Claves de API")
+                                        Text("Test API keys")
                                     }
                                 }
 
@@ -455,10 +457,10 @@ fun TranslatorSettingsDialog(
 
                 AnimatedVisibility(visible = openSection == SECTION_STYLE) {
                     Column {
-                        SectionTitle("Estilo de los globos")
+                        SectionTitle("Balloon style")
 
                         SettingChips(
-                            label = "Orientación",
+                            label = "Orientation",
                             options = listOf(
                                 "Vertical" to TranslatorSettings.ORIENTATION_VERTICAL,
                                 "Horizontal" to TranslatorSettings.ORIENTATION_HORIZONTAL,
@@ -469,30 +471,30 @@ fun TranslatorSettingsDialog(
                         )
 
                         SettingChips(
-                            label = "Forma",
+                            label = "Shape",
                             options = listOf(
-                                "Óvalo" to TranslatorSettings.SHAPE_OVAL,
-                                "Rectángulo" to TranslatorSettings.SHAPE_ROUNDED,
-                                "Sin borde" to TranslatorSettings.SHAPE_BORDERLESS,
+                                "Oval" to TranslatorSettings.SHAPE_OVAL,
+                                "Rectangle" to TranslatorSettings.SHAPE_ROUNDED,
+                                "Borderless" to TranslatorSettings.SHAPE_BORDERLESS,
                             ),
                             selected = settings.bubbleShape,
                             onSelect = { settings.bubbleShape = it },
                         )
 
                         SettingChips(
-                            label = "Fondo del texto",
+                            label = "Text background",
                             options = listOf(
-                                "Burbuja blanca" to TranslatorSettings.STYLE_FILL,
-                                "Solo contorno" to TranslatorSettings.STYLE_OUTLINE,
+                                "White balloon" to TranslatorSettings.STYLE_FILL,
+                                "Outline only" to TranslatorSettings.STYLE_OUTLINE,
                             ),
                             selected = settings.bubbleStyle,
                             onSelect = { settings.bubbleStyle = it },
                         )
                         Text(
                             text = if (settings.bubbleStyle == TranslatorSettings.STYLE_OUTLINE) {
-                                "Sin burbuja: letras negras con un borde blanco grueso."
+                                "No balloon: black letters with a thick white outline."
                             } else {
-                                "Bocadillo blanco clásico con el texto negro encima."
+                                "Classic white balloon with the text in black on top."
                             },
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -500,7 +502,7 @@ fun TranslatorSettingsDialog(
 
                         if (settings.bubbleStyle == TranslatorSettings.STYLE_OUTLINE) {
                             SettingSlider(
-                                label = "Contorno: ${"%.1f".format(settings.outlineWidth)}dp",
+                                label = "Outline: ${"%.1f".format(settings.outlineWidth)}dp",
                                 value = settings.outlineWidth,
                                 valueRange = 1f..8f,
                                 onValueChange = { settings.outlineWidth = it },
@@ -508,50 +510,50 @@ fun TranslatorSettingsDialog(
                         }
 
                         SettingChips(
-                            label = "Margen",
+                            label = "Padding",
                             options = listOf(
-                                "Compacto" to TranslatorSettings.PADDING_COMPACT,
+                                "Compact" to TranslatorSettings.PADDING_COMPACT,
                                 "Normal" to TranslatorSettings.PADDING_NORMAL,
-                                "Espacioso" to TranslatorSettings.PADDING_SPACIOUS,
+                                "Spacious" to TranslatorSettings.PADDING_SPACIOUS,
                             ),
                             selected = settings.bubblePadding,
                             onSelect = { settings.bubblePadding = it },
                         )
 
                         SettingSwitch(
-                            title = "Mayúsculas Manga",
-                            subtitle = "Texto en MAYÚSCULAS como en las publicaciones oficiales",
+                            title = "Manga uppercase",
+                            subtitle = "ALL-CAPS text, like official print releases",
                             checked = settings.uppercaseScanlation,
                             onCheckedChange = { settings.uppercaseScanlation = it },
                         )
 
                         SettingSwitch(
-                            title = "Mostrar onomatopeyas (SFX)",
-                            subtitle = "La IA las sigue devolviendo y quedan guardadas; al desactivarlo solo se " +
-                                "ocultan, sin volver a traducir la página.",
+                            title = "Show sound effects (SFX)",
+                            subtitle = "The AI still returns them and they stay saved; turning this off only " +
+                                "hides them, without translating the page again.",
                             checked = settings.showSfx,
                             onCheckedChange = { settings.showSfx = it },
                         )
 
                         val borderLabel = if (settings.borderThickness <= 0.05f) {
-                            "Sin borde"
+                            "none"
                         } else {
                             "${"%.1f".format(settings.borderThickness)}dp"
                         }
                         SettingSlider(
-                            label = "Borde: $borderLabel",
+                            label = "Border: $borderLabel",
                             value = settings.borderThickness,
                             valueRange = 0f..3.0f,
                             onValueChange = { settings.borderThickness = it },
                         )
                         SettingSlider(
-                            label = "Globo: ${"%.2f".format(settings.globalBubbleScale)}x",
+                            label = "Balloon: ${"%.2f".format(settings.globalBubbleScale)}x",
                             value = settings.globalBubbleScale,
                             valueRange = 0.7f..1.8f,
                             onValueChange = { settings.globalBubbleScale = it },
                         )
                         SettingSlider(
-                            label = "Opacidad: ${(settings.bubbleOpacity * 100).toInt()}%",
+                            label = "Opacity: ${(settings.bubbleOpacity * 100).toInt()}%",
                             value = settings.bubbleOpacity,
                             valueRange = 0.5f..1.0f,
                             onValueChange = { settings.bubbleOpacity = it },
@@ -561,17 +563,17 @@ fun TranslatorSettingsDialog(
 
                 AnimatedVisibility(visible = openSection == SECTION_FIT) {
                     Column {
-                        SectionTitle("Ajuste del texto")
+                        SectionTitle("Text fit")
 
                         SettingSlider(
-                            label = "Fuente: ${"%.1f".format(settings.standardFontSizeSp)} sp",
+                            label = "Font: ${"%.1f".format(settings.standardFontSizeSp)} sp",
                             value = settings.standardFontSizeSp,
                             valueRange = 6f..24f,
                             onValueChange = { settings.standardFontSizeSp = it },
                         )
                         Text(
-                            text = "Un solo tamaño para todas las viñetas. La IA solo mide dónde va el texto; " +
-                                "si no cabe, la caja se ensancha y la letra se reduce antes que recortarlo.",
+                            text = "A single size for every balloon. The AI only measures where the text goes; " +
+                                "if it does not fit, the box widens and the letters shrink instead of being cut.",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -579,8 +581,8 @@ fun TranslatorSettingsDialog(
                         Spacer(modifier = Modifier.height(4.dp))
 
                         SettingSwitch(
-                            title = "Modo manipulación táctil",
-                            subtitle = "Mover con 1 dedo, pellizcar con 2 para cambiar el tamaño",
+                            title = "Touch manipulation mode",
+                            subtitle = "Drag with one finger to move the text. Its size is fixed by the settings above.",
                             checked = settings.isManipulationMode,
                             onCheckedChange = { settings.isManipulationMode = it },
                         )
@@ -588,30 +590,30 @@ fun TranslatorSettingsDialog(
                         Spacer(modifier = Modifier.height(4.dp))
 
                         SettingSwitch(
-                            title = "Anti-choque de burbujas",
-                            subtitle = "Separa los textos que caen uno encima de otro, también los que midió la IA",
+                            title = "Anti-overlap",
+                            subtitle = "Pushes apart texts that land on top of each other, including the ones measured by the AI",
                             checked = settings.preventCollisions,
                             onCheckedChange = { settings.preventCollisions = it },
                         )
                         if (settings.preventCollisions) {
                             SettingSlider(
                                 label = if (settings.collisionGap < 0.5f) {
-                                    "Separación: pegados"
+                                    "Gap: touching"
                                 } else {
-                                    "Separación: ${settings.collisionGap.toInt()}dp"
+                                    "Gap: ${settings.collisionGap.toInt()}dp"
                                 },
                                 value = settings.collisionGap,
                                 valueRange = 0f..24f,
                                 onValueChange = { settings.collisionGap = it },
                             )
                             SettingSlider(
-                                label = "Iteraciones: ${settings.collisionIterations}",
+                                label = "Iterations: ${settings.collisionIterations}",
                                 value = settings.collisionIterations.toFloat(),
                                 valueRange = 10f..80f,
                                 onValueChange = { settings.collisionIterations = it.toInt() },
                             )
                             SettingSlider(
-                                label = "Desplazamiento: ${(settings.maxCollisionShiftRatio * 100).toInt()}%",
+                                label = "Shift: ${(settings.maxCollisionShiftRatio * 100).toInt()}%",
                                 value = settings.maxCollisionShiftRatio,
                                 valueRange = 0.10f..0.60f,
                                 onValueChange = { settings.maxCollisionShiftRatio = it },
@@ -622,7 +624,7 @@ fun TranslatorSettingsDialog(
 
                 AnimatedVisibility(visible = openSection == SECTION_CACHE) {
                     Column {
-                        SectionTitle("Caché de traducciones")
+                        SectionTitle("Translation cache")
 
                         val stats = remember(cacheStamp) { TranslationCache.stats() }
                         Row(
@@ -631,7 +633,7 @@ fun TranslatorSettingsDialog(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                text = "${stats.pages} páginas guardadas",
+                                text = "${stats.pages} pages saved",
                                 fontWeight = FontWeight.SemiBold,
                                 style = MaterialTheme.typography.bodyMedium,
                             )
@@ -643,9 +645,9 @@ fun TranslatorSettingsDialog(
                         }
 
                         Text(
-                            text = "Se guarda en el almacenamiento de la app y sobrevive al reinicio, así que volver " +
-                                "a una galería no vuelve a traducir sus páginas. Se vacía solo cuando cambias el " +
-                                "motor, el modelo, los idiomas o las instrucciones (del sistema o de usuario).",
+                            text = "Kept in the app storage and survives restarts, so coming back to a gallery " +
+                                "does not translate its pages again. It is cleared only when you change the " +
+                                "model, the languages or the instructions (system or user).",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -654,7 +656,7 @@ fun TranslatorSettingsDialog(
 
                         if (confirmClearCache) {
                             Text(
-                                text = "Se borrarán las ${stats.pages} páginas guardadas; habrá que traducirlas otra vez.",
+                                text = "The ${stats.pages} saved pages will be deleted; they will have to be translated again.",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.error,
                             )
@@ -670,13 +672,13 @@ fun TranslatorSettingsDialog(
                                     },
                                     modifier = Modifier.weight(1f),
                                 ) {
-                                    Text("Confirmar")
+                                    Text("Confirm")
                                 }
                                 OutlinedButton(
                                     onClick = { confirmClearCache = false },
                                     modifier = Modifier.weight(1f),
                                 ) {
-                                    Text("Cancelar")
+                                    Text("Cancel")
                                 }
                             }
                         } else {
@@ -684,7 +686,7 @@ fun TranslatorSettingsDialog(
                                 onClick = { confirmClearCache = true },
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Text("Borrar caché")
+                                Text("Clear cache")
                             }
                         }
                     }
@@ -692,15 +694,15 @@ fun TranslatorSettingsDialog(
 
                 AnimatedVisibility(visible = openSection == SECTION_PRELOAD) {
                     Column {
-                        SectionTitle("Pre-traducción")
+                        SectionTitle("Preload")
 
                         Text(
                             text = if (settings.autoTranslate) {
-                                "Activa (se pausa y se reanuda arriba). Mantiene lista la página actual y las " +
-                                    "${settings.batchSize.coerceAtMost(batchLimit)} siguientes; el lote avanza contigo " +
-                                    "al cambiar de página. Tope del preload de EhViewer: $batchLimit."
+                                "On (pause and resume it above). It keeps the current page and the next " +
+                                    "${settings.batchSize.coerceAtMost(batchLimit)} ready; the batch moves with you " +
+                                    "as you change pages. EhViewer preload limit: $batchLimit."
                             } else {
-                                "En pausa (se reanuda arriba): no se traduce nada mientras lees."
+                                "Paused (resume it above): nothing is translated while you read."
                             },
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -714,7 +716,7 @@ fun TranslatorSettingsDialog(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
-                                    text = "Lote: ${settings.batchSize}",
+                                    text = "Batch: ${settings.batchSize}",
                                     style = MaterialTheme.typography.bodySmall,
                                     modifier = Modifier.width(90.dp),
                                 )
@@ -731,8 +733,8 @@ fun TranslatorSettingsDialog(
                         Spacer(modifier = Modifier.height(4.dp))
 
                         Text(
-                            text = "\"Redo translation next $retranslateCount pages\" borra la copia guardada de " +
-                                "esas páginas y las vuelve a leer con la configuración actual, sin salir de la galería.",
+                            text = "\"Redo translation next $retranslateCount pages\" drops the saved copy of " +
+                                "those pages and reads them again with the current settings, without leaving the gallery.",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -744,7 +746,7 @@ fun TranslatorSettingsDialog(
             TextButton(
                 onClick = onDismiss,
             ) {
-                Text("Listo")
+                Text("Done")
             }
         },
     )
@@ -826,7 +828,7 @@ private fun PromptEditor(
             )
         }
         TextButton(onClick = { onValueChange(defaultValue) }) {
-            Text("Restablecer", fontSize = 11.sp)
+            Text("Reset", fontSize = 11.sp)
         }
     }
     AnimatedVisibility(visible = expanded) {
@@ -878,11 +880,11 @@ private fun SettingChips(
 }
 
 private fun TranslationStatus.busyLabel(): String = when (this) {
-    TranslationStatus.WaitingForPage -> "Esperando la imagen…"
-    TranslationStatus.RecognizingText -> "Reconociendo texto (OCR)…"
-    TranslationStatus.ReadingPage -> "La IA está leyendo la página…"
-    TranslationStatus.TranslatingText -> "Traduciendo texto…"
-    else -> "Traduciendo…"
+    TranslationStatus.WaitingForPage -> "Waiting for the image…"
+    TranslationStatus.RecognizingText -> "Recognizing text…"
+    TranslationStatus.ReadingPage -> "The AI is reading the page…"
+    TranslationStatus.TranslatingText -> "Translating text…"
+    else -> "Translating…"
 }
 
 @Composable
@@ -898,34 +900,34 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val title = when (status) {
-        TranslationStatus.Idle -> "Sin traducir"
-        TranslationStatus.WaitingForPage -> "Preparando la página"
-        TranslationStatus.RecognizingText -> "Reconociendo texto (OCR)"
-        TranslationStatus.ReadingPage -> "Leyendo la página con IA"
-        TranslationStatus.TranslatingText -> "Traduciendo"
-        TranslationStatus.Done -> "Traducción lista"
-        is TranslationStatus.Failed -> "Error al traducir"
+        TranslationStatus.Idle -> "Not translated"
+        TranslationStatus.WaitingForPage -> "Preparing the page"
+        TranslationStatus.RecognizingText -> "Recognizing text"
+        TranslationStatus.ReadingPage -> "AI is reading the page"
+        TranslationStatus.TranslatingText -> "Translating"
+        TranslationStatus.Done -> "Translation ready"
+        is TranslationStatus.Failed -> "Translation failed"
     }
     val detail = when (status) {
-        TranslationStatus.Idle -> "Esta página todavía no se ha traducido."
-        TranslationStatus.WaitingForPage -> "Esperando a que la imagen se descargue y decodifique."
-        TranslationStatus.RecognizingText -> "ML Kit está localizando los globos de la página."
-        TranslationStatus.ReadingPage -> "Gemini está leyendo el texto real dentro de los cuadros numerados."
-        TranslationStatus.TranslatingText -> "Enviando los textos al motor de traducción."
+        TranslationStatus.Idle -> "This page has not been translated yet."
+        TranslationStatus.WaitingForPage -> "Waiting for the image to download and decode."
+        TranslationStatus.RecognizingText -> "The AI is locating the balloons on the page."
+        TranslationStatus.ReadingPage -> "Gemini is reading the real text inside the numbered boxes."
+        TranslationStatus.TranslatingText -> "Sending the texts to Gemini."
         TranslationStatus.Done -> translation?.let { page ->
             if (page.bubbles.isEmpty()) {
-                "No se detectó texto en esta página. Prueba otra página o revisa la detección."
+                "No text was found on this page. Try another page."
             } else {
                 buildString {
-                    append("${page.bubbles.size} viñetas · ${page.engineName}")
+                    append("${page.bubbles.size} balloons · ${page.engineName}")
                     val sfxCount = page.bubbles.count { it.isSfx }
                     if (sfxCount > 0) append(" · $sfxCount SFX")
-                    if (page.mergedBoxes > 0) append(" · ${page.mergedBoxes} fusionadas")
-                    if (page.discardedBoxes > 0) append(" · ${page.discardedBoxes} descartadas")
-                    append("\nOCR ${page.ocrDurationMs} ms · Traducción ${page.translateDurationMs} ms")
+                    if (page.mergedBoxes > 0) append(" · ${page.mergedBoxes} merged")
+                    if (page.discardedBoxes > 0) append(" · ${page.discardedBoxes} discarded")
+                    append("\nOCR ${page.ocrDurationMs} ms · Translation ${page.translateDurationMs} ms")
                 }
             }
-        } ?: "Página traducida."
+        } ?: "Page translated."
         is TranslationStatus.Failed -> status.message
     }
 

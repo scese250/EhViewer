@@ -659,7 +659,7 @@ object PageTranslator {
         val annotated = try {
             annotateForVision(bitmap, if (noHints) emptyList() else blocks)
         } catch (e: OutOfMemoryError) {
-            error("Memoria insuficiente para preparar la imagen")
+            error("Not enough memory to prepare the image")
         }
         val scale = min(1f, VISION_MAX_EDGE.toFloat() / max(bitmap.width, bitmap.height))
         val encodedImage = EncodedVisionImage(

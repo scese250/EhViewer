@@ -41,8 +41,10 @@ fun BubbleEditDialog(
     onSave: (TranslatedBubble) -> Unit,
 ) {
     var editedText by remember { mutableStateOf(bubble.translatedText) }
-    var widthScale by remember { mutableFloatStateOf(bubble.widthScale) }
-    var heightScale by remember { mutableFloatStateOf(bubble.heightScale) }
+    // The size is no longer editable: the balloon grows with the text and the
+    // font setting, so only the position is still under the user's control.
+    val widthScale = bubble.widthScale
+    val heightScale = bubble.heightScale
     var offsetX by remember { mutableFloatStateOf(bubble.offsetX) }
     var offsetY by remember { mutableFloatStateOf(bubble.offsetY) }
     var isVertical by remember { mutableStateOf(bubble.isVertical) }
@@ -53,7 +55,7 @@ fun BubbleEditDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "Ajustar Viñeta #${bubble.id + 1}",
+                text = "Adjust balloon #${bubble.id + 1}",
                 fontWeight = FontWeight.Bold,
             )
         },
@@ -71,7 +73,7 @@ fun BubbleEditDialog(
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text(
-                            text = "🇯🇵 Japonés Original:",
+                            text = "🇯🇵 Japanese original:",
                             fontWeight = FontWeight.SemiBold,
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary,
@@ -89,7 +91,7 @@ fun BubbleEditDialog(
                 OutlinedTextField(
                     value = editedText,
                     onValueChange = { editedText = it },
-                    label = { Text("Texto Traducido") },
+                    label = { Text("Translated text") },
                     modifier = Modifier.fillMaxWidth(),
                     maxLines = 5,
                 )
@@ -98,7 +100,7 @@ fun BubbleEditDialog(
 
                 // Orientation selector for this bubble
                 Text(
-                    text = "Orientación de esta viñeta:",
+                    text = "Orientation of this balloon:",
                     fontWeight = FontWeight.SemiBold,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -115,7 +117,7 @@ fun BubbleEditDialog(
                     FilterChip(
                         selected = isVertical == true,
                         onClick = { isVertical = true },
-                        label = { Text("Vertical (Manga)", fontSize = 11.sp) },
+                        label = { Text("Vertical (manga)", fontSize = 11.sp) },
                     )
                     FilterChip(
                         selected = isVertical == false,
@@ -129,7 +131,7 @@ fun BubbleEditDialog(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = "Posición Manual (Mover en pantalla):",
+                    text = "Manual position (move on screen):",
                     fontWeight = FontWeight.Bold,
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -141,7 +143,7 @@ fun BubbleEditDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Mover X: ${offsetX.toInt()}dp",
+                        text = "Move X: ${offsetX.toInt()}dp",
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.width(105.dp),
                     )
@@ -158,7 +160,7 @@ fun BubbleEditDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Mover Y: ${offsetY.toInt()}dp",
+                        text = "Move Y: ${offsetY.toInt()}dp",
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.width(105.dp),
                     )
@@ -174,58 +176,12 @@ fun BubbleEditDialog(
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(10.dp))
 
-                Text(
-                    text = "Escala de Tamaño:",
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Ancho: ${"%.1f".format(widthScale)}x",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.width(105.dp),
-                    )
-                    Slider(
-                        value = widthScale,
-                        onValueChange = { widthScale = it },
-                        valueRange = 0.4f..3.0f,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "Alto: ${"%.1f".format(heightScale)}x",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.width(105.dp),
-                    )
-                    Slider(
-                        value = heightScale,
-                        onValueChange = { heightScale = it },
-                        valueRange = 0.4f..3.0f,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-                HorizontalDivider()
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "Fuente manual",
+                        text = "Custom font",
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.weight(1f),
                     )
@@ -241,7 +197,7 @@ fun BubbleEditDialog(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "Tamaño: ${customFontSizeSp.toInt()} sp",
+                            text = "Size: ${customFontSizeSp.toInt()} sp",
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.width(105.dp),
                         )
@@ -271,12 +227,12 @@ fun BubbleEditDialog(
                     )
                 },
             ) {
-                Text("Guardar")
+                Text("Save")
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancelar")
+                Text("Cancel")
             }
         },
     )

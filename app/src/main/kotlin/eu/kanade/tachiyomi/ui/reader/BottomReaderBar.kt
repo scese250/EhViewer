@@ -77,7 +77,7 @@ fun BottomReaderBar(
     ActionButton(
         onClick = onClickTranslation,
         imageVector = Icons.Default.Translate,
-        contentDescription = "Traducción",
+        contentDescription = "Translation",
     )
     ActionButton(
         onClick = onClickSettings,

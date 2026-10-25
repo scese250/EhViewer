@@ -178,28 +178,28 @@ class ReaderTranslationState(
     }
 
     private suspend fun translateLocked(index: Int, timeoutMs: Long): PageTranslation? {
-        val page = pageLoader.pages.getOrNull(index) ?: return fail(index, "La página no existe")
+        val page = pageLoader.pages.getOrNull(index) ?: return fail(index, "The page does not exist")
         val requestGeneration = generation
         val signature = settings.translationSignature()
         try {
             val image = awaitImage(index, timeoutMs) ?: return fail(
                 index,
                 when (page.statusFlow.value) {
-                    is PageStatus.Blocked -> "La página está bloqueada"
-                    is PageStatus.Error -> "No se pudo descargar la página"
-                    else -> "La imagen no está lista (tiempo de espera agotado)"
+                    is PageStatus.Blocked -> "The page is blocked"
+                    is PageStatus.Error -> "The page could not be downloaded"
+                    else -> "The image is not ready (timed out)"
                 },
             )
 
-            if (!image.pin()) return fail(index, "La imagen se liberó antes de traducir")
+            if (!image.pin()) return fail(index, "The image was released before translating")
             var softwareCopy: Bitmap? = null
             try {
                 val bitmap = prepareBitmap(image) { softwareCopy = it } ?: return fail(
                     index,
                     if (image.innerImage is BitmapImage) {
-                        "No se pudo preparar la imagen para OCR"
+                        "The image could not be prepared for the AI"
                     } else {
-                        "Las páginas animadas (GIF/WebP) no se traducen"
+                        "Animated pages (GIF/WebP) are not translated"
                     },
                 )
 
@@ -246,7 +246,7 @@ class ReaderTranslationState(
             throw e
         } catch (e: OutOfMemoryError) {
             logcat("ReaderTranslator", e)
-            return fail(index, "Memoria insuficiente para traducir esta página")
+            return fail(index, "Not enough memory to translate this page")
         } catch (e: Throwable) {
             logcat("ReaderTranslator", e)
             return fail(

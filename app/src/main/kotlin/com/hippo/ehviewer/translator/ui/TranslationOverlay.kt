@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -607,9 +606,6 @@ private fun DynamicBubbleView(
     val balloonVisible = !outlineMode && !bubble.isSfx
 
     val borderModifier = when {
-        isManipulationEnabled -> {
-            Modifier.border(2.dp, MaterialTheme.colorScheme.primary, bubbleShapeDrawable)
-        }
         // No balloon at all: neither for onomatopoeia nor for the thick white
         // text outline mode.
         !balloonVisible -> {
@@ -623,22 +619,14 @@ private fun DynamicBubbleView(
         }
     }
 
+    // Moving is the only edit available on the page: neither the highlighted
+    // outline that marked the draggable balloons nor the edge/pinch resizing are
+    // drawn or handled any more. A tap (barely any movement) opens the editor.
     val touchModifier = if (isManipulationEnabled) {
         Modifier.pointerInput(bubble.id, isManipulationEnabled) {
             awaitEachGesture {
-                val down = awaitFirstDown(requireUnconsumed = false)
-                val initialPos = down.position
-                val bWidth = size.width.toFloat()
-                val bHeight = size.height.toFloat()
+                awaitFirstDown(requireUnconsumed = false)
 
-                // Edge regions: outer 28% of the bubble bounds
-                val isLeftEdge = initialPos.x < bWidth * 0.28f
-                val isRightEdge = initialPos.x > bWidth * 0.72f
-                val isTopEdge = initialPos.y < bHeight * 0.28f
-                val isBottomEdge = initialPos.y > bHeight * 0.72f
-                val isEdgeTouch = isLeftEdge || isRightEdge || isTopEdge || isBottomEdge
-
-                var prevPinchDistance = 0f
                 var totalDragDistance = 0f
 
                 while (true) {
@@ -646,49 +634,13 @@ private fun DynamicBubbleView(
                     val activePointers = event.changes.filter { it.pressed }
                     if (activePointers.isEmpty()) break
 
-                    if (activePointers.size >= 2) {
-                        // Two-finger pinch: scale both dimensions uniformly
-                        val p1 = activePointers[0].position
-                        val p2 = activePointers[1].position
-                        val currentPinchDistance = (p1 - p2).getDistance()
+                    val change = activePointers.first()
+                    val dragDelta = change.position - change.previousPosition
+                    totalDragDistance += dragDelta.getDistance()
 
-                        if (prevPinchDistance > 0f && currentPinchDistance > 0f) {
-                            val zoomFactor = currentPinchDistance / prevPinchDistance
-                            liveWidthScale = (liveWidthScale * zoomFactor).coerceIn(0.4f, 4.0f)
-                            liveHeightScale = (liveHeightScale * zoomFactor).coerceIn(0.4f, 4.0f)
-                        }
-                        prevPinchDistance = currentPinchDistance
-                        totalDragDistance += 10f
-                        activePointers.forEach { it.consume() }
-                    } else if (activePointers.size == 1) {
-                        val change = activePointers[0]
-                        val dragDelta = change.position - change.previousPosition
-                        totalDragDistance += dragDelta.getDistance()
-
-                        if (isEdgeTouch) {
-                            if (isRightEdge) {
-                                val factor = dragDelta.x / (bWidth * 0.45f).coerceAtLeast(15f)
-                                liveWidthScale = (liveWidthScale + factor).coerceIn(0.4f, 4.0f)
-                            } else if (isLeftEdge) {
-                                val factor = -dragDelta.x / (bWidth * 0.45f).coerceAtLeast(15f)
-                                liveWidthScale = (liveWidthScale + factor).coerceIn(0.4f, 4.0f)
-                            }
-
-                            if (isBottomEdge) {
-                                val factor = dragDelta.y / (bHeight * 0.45f).coerceAtLeast(15f)
-                                liveHeightScale = (liveHeightScale + factor).coerceIn(0.4f, 4.0f)
-                            } else if (isTopEdge) {
-                                val factor = -dragDelta.y / (bHeight * 0.45f).coerceAtLeast(15f)
-                                liveHeightScale = (liveHeightScale + factor).coerceIn(0.4f, 4.0f)
-                            }
-                            change.consume()
-                        } else {
-                            // Center drag: move (pan)
-                            liveOffsetX += dragDelta.x / density.density
-                            liveOffsetY += dragDelta.y / density.density
-                            change.consume()
-                        }
-                    }
+                    liveOffsetX += dragDelta.x / density.density
+                    liveOffsetY += dragDelta.y / density.density
+                    change.consume()
                 }
 
                 if (totalDragDistance < 8f * density.density) {
@@ -696,8 +648,6 @@ private fun DynamicBubbleView(
                         currentBubble.copy(
                             offsetX = liveOffsetX,
                             offsetY = liveOffsetY,
-                            widthScale = liveWidthScale,
-                            heightScale = liveHeightScale,
                         ),
                     )
                 } else {
@@ -705,8 +655,6 @@ private fun DynamicBubbleView(
                         currentBubble.copy(
                             offsetX = liveOffsetX,
                             offsetY = liveOffsetY,
-                            widthScale = liveWidthScale,
-                            heightScale = liveHeightScale,
                         ),
                     )
                 }
