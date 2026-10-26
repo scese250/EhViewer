@@ -267,7 +267,7 @@ suspend fun removeFromFavorites(galleryInfo: GalleryInfo) = doModifyFavorites(
 )
 
 context(_: DestinationsNavigator)
-fun navToReader(info: BaseGalleryInfo, page: Int = -1): Unit {
+fun navToReader(info: BaseGalleryInfo, page: Int = -1) {
     // The start page travels outside the route: a reader restored after the
     // process was killed must read the progress from the database, not the page
     // this route was built with.
