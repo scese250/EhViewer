@@ -11,11 +11,14 @@ import android.util.Base64
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URI
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.system.measureTimeMillis
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -30,8 +33,35 @@ class TranslationFailure(
 ) : Exception(message)
 
 object PageTranslator {
-    @Volatile
-    private var currentKeyIndex = 0
+    /**
+     * Round-robin cursor over the API keys. Each request starts on the key after
+     * the previous one, so two pages running at the same time never share a key.
+     */
+    private val keyCursor = AtomicInteger(0)
+
+    /**
+     * One slot per API key. The keys split the pages between them instead of
+     * standing by as a backup, so five keys translate five pages at once.
+     */
+    private val slotLock = Any()
+    private var slotCount = 0
+    private var slots = Semaphore(1)
+
+    /**
+     * Preparing a page costs a full-size ARGB copy. Only a couple are built at
+     * the same time so a burst of parallel pages cannot run out of memory; the
+     * requests themselves still run one per key.
+     */
+    private val annotationSlots = Semaphore(2)
+
+    private fun slotsFor(keys: Int): Semaphore = synchronized(slotLock) {
+        val wanted = keys.coerceAtLeast(1)
+        if (wanted != slotCount) {
+            slotCount = wanted
+            slots = Semaphore(wanted)
+        }
+        slots
+    }
 
     /** Reported before each expensive step so the UI can show what is running. */
     enum class Phase { VISION, }
@@ -83,8 +113,8 @@ object PageTranslator {
 
         // The model is the only engine: it reads the page, measures every
         // balloon and letters the translation in a single call. There is no
-        // on-device OCR and no text-only rescue any more; the only fallback is
-        // another API key, which the key rotation already handles.
+        // on-device OCR and no text-only rescue any more; the other API keys are
+        // not a fallback but parallel workers on the following pages.
         suspend fun readPage(): VisionResult = translateWithGeminiVision(
             bitmap = bitmap,
             blocks = emptyList(),
@@ -100,14 +130,10 @@ object PageTranslator {
 
         val transTime = measureTimeMillis {
             onPhase(Phase.VISION)
-            var result = readPage()
-            // A lite model occasionally answers a page full of balloons with an
-            // empty page. An empty answer is never cached, so asking once more
-            // costs one request and saves the page from staying blank for the
-            // rest of the read.
-            if (result.bubbles.isEmpty()) {
-                result = readPage()
-            }
+            // One request per page. An answer with no balloons comes back as an
+            // empty result and the reader retries it, so every retry of a page
+            // is counted in the same place instead of here and there.
+            val result = readPage()
             bubbles = result.bubbles
             mergedBoxes = result.mergedBoxes
             discardedBoxes = result.discardedBoxes
@@ -187,9 +213,12 @@ object PageTranslator {
         var retriedSmallerOutput = false
         val askedOutputTokens = generationConfig?.optInt("maxOutputTokens", 0) ?: 0
 
+        // Each call starts on the key after the previous one, so the pages that
+        // run at the same time work on different keys.
+        val firstKey = keyCursor.getAndIncrement().mod(totalKeys)
         var attempt = 0
         while (attempt < totalKeys) {
-            val keyIndex = (currentKeyIndex + attempt) % totalKeys
+            val keyIndex = (firstKey + attempt).mod(totalKeys)
             val urlString = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=${apiKeys[keyIndex]}"
             val conn = (URI.create(urlString).toURL().openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
@@ -206,7 +235,6 @@ object PageTranslator {
 
                 val responseCode = conn.responseCode
                 if (responseCode == 200) {
-                    currentKeyIndex = keyIndex
                     val body = conn.inputStream.bufferedReader().use { it.readText() }
                     return JSONObject(body)
                 }
@@ -430,12 +458,43 @@ object PageTranslator {
     }
 
     /**
+     * Waits for a free key before touching the page. Every key works on one page
+     * at a time, so the pages the reader queues translate in parallel, one per
+     * key, and no request competes with another for the same quota.
+     */
+    private suspend fun translateWithGeminiVision(
+        bitmap: Bitmap,
+        blocks: List<RawBlock>,
+        noHints: Boolean = false,
+        sourceLang: String,
+        targetLang: String,
+        systemPrompt: String,
+        userPrompt: String = "",
+        apiKeys: List<String>,
+        model: String,
+        thinkingLevel: String,
+    ): VisionResult = slotsFor(apiKeys.size).withPermit {
+        translateWithGeminiVisionOnKey(
+            bitmap = bitmap,
+            blocks = blocks,
+            noHints = noHints,
+            sourceLang = sourceLang,
+            targetLang = targetLang,
+            systemPrompt = systemPrompt,
+            userPrompt = userPrompt,
+            apiKeys = apiKeys,
+            model = model,
+            thinkingLevel = thinkingLevel,
+        )
+    }
+
+    /**
      * Sends the whole page with the OCR boxes drawn and numbered, and lets the
      * vision model do the actual reading: it recovers text the OCR truncated,
      * joins boxes that belong to the same balloon and drops boxes that are
      * duplicates or landed on artwork (answering "REJECT" for them).
      */
-    private suspend fun translateWithGeminiVision(
+    private suspend fun translateWithGeminiVisionOnKey(
         bitmap: Bitmap,
         blocks: List<RawBlock>,
         noHints: Boolean = false,
@@ -453,26 +512,29 @@ object PageTranslator {
         // hints to show). Sending a completely clean image caused the model to
         // report wildly inaccurate coordinates because the prompt references a
         // grid that was not visible.
-        val annotated = try {
-            annotateForVision(bitmap, if (noHints) emptyList() else blocks)
-        } catch (e: OutOfMemoryError) {
-            error("Not enough memory to prepare the image")
-        }
-        val scale = min(1f, VISION_MAX_EDGE.toFloat() / max(bitmap.width, bitmap.height))
-        val encodedImage = EncodedVisionImage(
-            base64 = "",
-            sentWidth = (bitmap.width * scale).roundToInt().coerceAtLeast(1),
-            sentHeight = (bitmap.height * scale).roundToInt().coerceAtLeast(1),
-        )
-        val imageBase64 = try {
-            ByteArrayOutputStream().use { stream ->
-                if (!annotated.compress(Bitmap.CompressFormat.JPEG, VISION_JPEG_QUALITY, stream)) {
-                    error("No se pudo comprimir la imagen")
-                }
-                Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+        val (imageBase64, encodedImage) = annotationSlots.withPermit {
+            val annotated = try {
+                annotateForVision(bitmap, if (noHints) emptyList() else blocks)
+            } catch (e: OutOfMemoryError) {
+                error("Not enough memory to prepare the image")
             }
-        } finally {
-            annotated.recycle()
+            val scale = min(1f, VISION_MAX_EDGE.toFloat() / max(bitmap.width, bitmap.height))
+            val size = EncodedVisionImage(
+                base64 = "",
+                sentWidth = (bitmap.width * scale).roundToInt().coerceAtLeast(1),
+                sentHeight = (bitmap.height * scale).roundToInt().coerceAtLeast(1),
+            )
+            val base64 = try {
+                ByteArrayOutputStream().use { stream ->
+                    if (!annotated.compress(Bitmap.CompressFormat.JPEG, VISION_JPEG_QUALITY, stream)) {
+                        error("No se pudo comprimir la imagen")
+                    }
+                    Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+                }
+            } finally {
+                annotated.recycle()
+            }
+            base64 to size
         }
 
         val prompt = buildVisionPrompt(targetLang, blocks.size, noHints)
@@ -914,11 +976,10 @@ object PageTranslator {
         }
 
         if (bubbles.isEmpty()) {
-            // Every box was rejected: that is a valid answer for a page with no
-            // readable dialogue. No answer at all is a failure worth retrying.
-            if (entries.isEmpty()) {
-                throw TranslationFailure("The model recognised no text on this page", raw)
-            }
+            // Every box was rejected, or the answer had no entries: that is a
+            // valid answer for a page with no readable dialogue. It is never
+            // cached, and the reader asks again a couple of times before
+            // accepting it, so a page the lite model skipped is not left blank.
             return VisionResult(emptyList(), 0, blocks.size)
         }
 

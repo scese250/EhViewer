@@ -22,8 +22,21 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 
 private const val CURRENT_PAGE_TIMEOUT_MS = 30_000L
-private const val AHEAD_PAGE_TIMEOUT_MS = 15_000L
+
+/** A page ahead may still be downloading; waiting for it does not block the rest. */
+private const val AHEAD_PAGE_TIMEOUT_MS = 30_000L
 private const val MAX_RETRANSLATE_PAGES = 30
+
+/** Answers with no bubbles a page gets before it is accepted as textless. */
+private const val MAX_EMPTY_ATTEMPTS = 2
+
+/** Automatic retries of a page that failed, before the reader has to ask again. */
+private const val MAX_FAILED_RETRIES = 2
+
+/** Cooldowns, so a page that is not ready is not asked again in a tight loop. */
+private const val EMPTY_RETRY_DELAY_MS = 2_000L
+private const val FAILED_RETRY_DELAY_MS = 10_000L
+private const val AHEAD_POLL_MS = 150L
 
 /**
  * State of the translation of a single page, shown in the translator dialog.
@@ -80,7 +93,23 @@ class ReaderTranslationState(
         dismissedErrors[index] = Unit
     }
 
-    private val mutex = Mutex()
+    /**
+     * One lock per page: two coroutines asking for the same page share the
+     * result instead of paying for it twice, while different pages translate in
+     * parallel, one per API key.
+     */
+    private val pageLocks = mutableMapOf<Int, Mutex>()
+    private val pageLocksGuard = Mutex()
+
+    /** Pages that answered nothing: retried a couple of times, then accepted. */
+    private val emptyAttempts = mutableMapOf<Int, Int>()
+
+    /** Pages that failed and still have an automatic retry left. */
+    private val failedRetries = mutableMapOf<Int, Int>()
+
+    /** Earliest moment to ask for a page again, so a slow page is not hammered. */
+    private val retryAt = mutableMapOf<Int, Long>()
+
     private var lastRevision = settings.revision
     private var generation = 0
 
@@ -124,6 +153,9 @@ class ReaderTranslationState(
                 translations.remove(it)
                 statuses.remove(it)
                 dismissedErrors.remove(it)
+                emptyAttempts.remove(it)
+                failedRetries.remove(it)
+                retryAt.remove(it)
             }
         // The cache is keyed by signature too, but a settings change must also
         // free the old pages instead of keeping them until the LRU evicts them.
@@ -135,6 +167,9 @@ class ReaderTranslationState(
         translations.clear()
         statuses.clear()
         dismissedErrors.clear()
+        emptyAttempts.clear()
+        failedRetries.clear()
+        retryAt.clear()
         TranslationCache.removeAll(galleryKey)
     }
 
@@ -145,6 +180,9 @@ class ReaderTranslationState(
         // A new attempt after "Translate again" is allowed to report its failure
         // again: only the dismissals of pages nobody asked to retry are kept.
         dismissedErrors.remove(index)
+        emptyAttempts.remove(index)
+        failedRetries.remove(index)
+        retryAt.remove(index)
         TranslationCache.remove(galleryKey, index)
     }
 
@@ -160,33 +198,47 @@ class ReaderTranslationState(
 
     /**
      * Translates one page, waiting for its bitmap when it is not decoded yet.
-     * Concurrent calls are serialized so the API key rotation is not used in
-     * parallel.
+     *
+     * Pages translate in parallel: each one waits for its own API key instead of
+     * queueing behind the others.
      */
     suspend fun translatePage(
         index: Int,
         timeoutMs: Long = CURRENT_PAGE_TIMEOUT_MS,
     ): PageTranslation? {
-        translations[index]?.let { return it }
-        cached(index)?.let { return it }
+        if (isSettled(index)) return translations[index]
+        cached(index)?.takeIf { it.bubbles.isNotEmpty() }?.let { return it }
 
-        // Show progress while queued behind another page's OCR too.
+        // Show progress while the page is still downloading.
         statuses[index] = TranslationStatus.WaitingForPage
         try {
-            return mutex.withLock {
-                translations[index]?.let {
-                    statuses[index] = TranslationStatus.Done
-                    return@withLock it
+            return lockFor(index).withLock {
+                if (isSettled(index)) {
+                    translations[index]?.let { return@withLock it }
                 }
-                // Another page's translation may have filled the cache while
-                // this one waited for the lock.
-                cached(index)?.let { return@withLock it }
+                // Another coroutine may have filled the cache while this one
+                // waited for its turn.
+                cached(index)?.takeIf { it.bubbles.isNotEmpty() }?.let { return@withLock it }
                 translateLocked(index, timeoutMs)
             }
         } catch (e: CancellationException) {
             if (statuses[index] == TranslationStatus.WaitingForPage) statuses.remove(index)
             throw e
         }
+    }
+
+    /**
+     * True when the page has an answer and must not be asked again: a page with
+     * bubbles, or one that stayed empty after all of its attempts.
+     */
+    private fun isSettled(index: Int): Boolean {
+        val stored = translations[index] ?: return false
+        if (stored.bubbles.isNotEmpty()) return true
+        return (emptyAttempts[index] ?: 0) >= MAX_EMPTY_ATTEMPTS
+    }
+
+    private suspend fun lockFor(index: Int): Mutex = pageLocksGuard.withLock {
+        pageLocks.getOrPut(index) { Mutex() }
     }
 
     private suspend fun translateLocked(index: Int, timeoutMs: Long): PageTranslation? {
@@ -201,9 +253,12 @@ class ReaderTranslationState(
                     is PageStatus.Error -> "The page could not be downloaded"
                     else -> "The image is not ready (timed out)"
                 },
+                // A page that is still downloading is worth another try; a page
+                // the site blocked is not.
+                retryable = page.statusFlow.value !is PageStatus.Blocked,
             )
 
-            if (!image.pin()) return fail(index, "The image was released before translating")
+            if (!image.pin()) return fail(index, "The image was released before translating", retryable = true)
             var softwareCopy: Bitmap? = null
             try {
                 val bitmap = prepareBitmap(image) { softwareCopy = it } ?: return fail(
@@ -213,6 +268,7 @@ class ReaderTranslationState(
                     } else {
                         "Animated pages (GIF/WebP) are not translated"
                     },
+                    retryable = image.innerImage is BitmapImage,
                 )
 
                 val result = PageTranslator.translatePage(
@@ -234,13 +290,17 @@ class ReaderTranslationState(
                 if (requestGeneration == generation && signature == settings.translationSignature()) {
                     val stored = result.copy(settingsSignature = signature)
                     translations[index] = stored
-                    // An empty answer is kept in memory but never written to the
-                    // cache: the model occasionally misses a whole page, and the
-                    // reader tries again the next time that page is opened
-                    // instead of showing "no text" on it forever.
                     if (stored.bubbles.isEmpty()) {
+                        // Nothing was read: the page is never cached, and the
+                        // scheduler asks again shortly instead of leaving a page
+                        // the model skipped blank for the rest of the read.
+                        emptyAttempts[index] = (emptyAttempts[index] ?: 0) + 1
+                        retryAt[index] = System.currentTimeMillis() + EMPTY_RETRY_DELAY_MS
                         TranslationCache.remove(galleryKey, index)
                     } else {
+                        emptyAttempts.remove(index)
+                        failedRetries.remove(index)
+                        retryAt.remove(index)
                         TranslationCache.put(galleryKey, index, stored)
                     }
                     statuses[index] = TranslationStatus.Done
@@ -272,6 +332,9 @@ class ReaderTranslationState(
                 index = index,
                 message = e.message ?: e.javaClass.simpleName,
                 rawResponse = (e as? TranslationFailure)?.rawResponse,
+                // A dropped connection or a model that answered garbage is worth
+                // another try; fail() stops after a couple of them.
+                retryable = true,
             )
         }
     }
@@ -316,12 +379,28 @@ class ReaderTranslationState(
             statuses[index] = TranslationStatus.Done
         }
 
+    /**
+     * Records the failure. A retryable one is asked again after a cooldown, up to
+     * [MAX_FAILED_RETRIES] times, so a page whose request died does not stay
+     * untranslated for the rest of the read.
+     */
     private fun fail(
         index: Int,
         message: String,
         rawResponse: String? = null,
+        retryable: Boolean = false,
     ): PageTranslation? {
         statuses[index] = TranslationStatus.Failed(message, rawResponse)
+        val attempts = failedRetries[index] ?: 0
+        if (retryable && attempts < MAX_FAILED_RETRIES) {
+            failedRetries[index] = attempts + 1
+            retryAt[index] = System.currentTimeMillis() + FAILED_RETRY_DELAY_MS
+        } else {
+            // Out of tries (or not worth one): the page waits for the reader to
+            // reach it again instead of being asked on every pass.
+            failedRetries.remove(index)
+            retryAt.remove(index)
+        }
         return null
     }
 
@@ -357,10 +436,13 @@ class ReaderTranslationState(
     suspend fun autoTranslate(currentPages: Flow<Int>, maxAhead: Int) {
         onRevisionChanged()
         val target = MutableStateFlow<Int?>(null)
+        // One page per API key: the keys split the window between them, so the
+        // pages ahead translate in parallel instead of one after another.
+        val parallel = settings.getGeminiApiKeys().size.coerceAtLeast(1)
         coroutineScope {
             launch { currentPages.collect { target.value = it } }
+            val inFlight = mutableSetOf<Int>()
             var lastPage = -1
-            var currentFailed = false
             while (isActive) {
                 val current = target.value
                 if (current == null) {
@@ -369,35 +451,49 @@ class ReaderTranslationState(
                 }
                 if (current != lastPage) {
                     lastPage = current
-                    // Arriving at a page is the moment to retry it, even if it
-                    // failed before; the pages ahead stay skipped.
-                    currentFailed = false
+                    // Reaching a page is the moment to try it again, even when it
+                    // failed before; the pages ahead keep their cooldowns.
+                    resetRetries(current)
                 }
-                val next = nextPageToTranslate(current, maxAhead, skipCurrent = currentFailed)
-                if (next == null) {
-                    // Everything in the window is done; poll slowly so a page
-                    // invalidated by a setting change is picked up again.
-                    delay(400)
-                    continue
+                while (inFlight.size < parallel) {
+                    val next = nextPageToTranslate(current, maxAhead, inFlight) ?: break
+                    inFlight += next
+                    launch {
+                        try {
+                            translatePage(
+                                index = next,
+                                timeoutMs = if (next <= current) CURRENT_PAGE_TIMEOUT_MS else AHEAD_PAGE_TIMEOUT_MS,
+                            )
+                        } finally {
+                            inFlight -= next
+                        }
+                    }
                 }
-                if (next == current) {
-                    translatePage(current)
-                    currentFailed = statuses[current] is TranslationStatus.Failed
-                } else {
-                    translatePage(next, AHEAD_PAGE_TIMEOUT_MS)
-                }
+                delay(AHEAD_POLL_MS)
             }
         }
     }
 
-    private fun nextPageToTranslate(current: Int, maxAhead: Int, skipCurrent: Boolean): Int? {
+    /** Forgets the failures of the page the reader just landed on. */
+    private fun resetRetries(index: Int) {
+        if (statuses[index] !is TranslationStatus.Failed) return
+        statuses.remove(index)
+        failedRetries.remove(index)
+        retryAt.remove(index)
+    }
+
+    private fun nextPageToTranslate(current: Int, maxAhead: Int, inFlight: Set<Int>): Int? {
         val last = (current + maxAhead).coerceAtMost(pageLoader.size - 1)
+        val now = System.currentTimeMillis()
         for (index in current..last) {
-            if (index == current && skipCurrent) continue
-            if (translations.containsKey(index)) continue
-            // A page that already failed (blocked, missing, unreadable) is not
-            // retried on every pass: that would hammer the OCR/API for nothing.
-            if (index != current && statuses[index] is TranslationStatus.Failed) continue
+            if (index in inFlight) continue
+            if (isSettled(index)) continue
+            // A page waiting for its cooldown (slow download, empty answer) is
+            // picked up as soon as it expires.
+            if (now < (retryAt[index] ?: 0L)) continue
+            // A page that failed for good (blocked, missing, no key) waits for
+            // the reader to reach it again instead of being asked every pass.
+            if (statuses[index] is TranslationStatus.Failed && index !in failedRetries) continue
             return index
         }
         return null

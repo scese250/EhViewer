@@ -63,6 +63,7 @@ import com.hippo.ehviewer.download.downloadLocation
 import com.hippo.ehviewer.download.tempDownloadDir
 import com.hippo.ehviewer.ui.destinations.ReaderScreenDestination
 import com.hippo.ehviewer.ui.reader.ReaderScreenArgs
+import com.hippo.ehviewer.ui.reader.ReaderStartPage
 import com.hippo.ehviewer.ui.tools.DialogState
 import com.hippo.ehviewer.ui.tools.awaitConfirmationOrCancel
 import com.hippo.ehviewer.ui.tools.awaitResult
@@ -266,7 +267,13 @@ suspend fun removeFromFavorites(galleryInfo: GalleryInfo) = doModifyFavorites(
 )
 
 context(_: DestinationsNavigator)
-fun navToReader(info: BaseGalleryInfo, page: Int = -1) = navToReader(ReaderScreenArgs.Gallery(info, page))
+fun navToReader(info: BaseGalleryInfo, page: Int = -1): Unit {
+    // The start page travels outside the route: a reader restored after the
+    // process was killed must read the progress from the database, not the page
+    // this route was built with.
+    ReaderStartPage.request(info.gid, page)
+    navToReader(ReaderScreenArgs.Gallery(info))
+}
 
 context(_: DestinationsNavigator)
 fun navToReader(path: String) = navToReader(ReaderScreenArgs.Archive(path))

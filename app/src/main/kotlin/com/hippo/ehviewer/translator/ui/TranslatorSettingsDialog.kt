@@ -297,7 +297,7 @@ fun TranslatorSettingsDialog(
                                 )
 
                                 Text(
-                                    text = "💡 Multiple keys rotate on their own when one hits the quota (429).",
+                                    text = "💡 Each key translates its own page, so more keys mean more pages translated at the same time.",
                                     fontSize = 11.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )

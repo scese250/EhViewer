@@ -101,6 +101,7 @@ import eu.kanade.tachiyomi.ui.reader.ReaderAppBars
 import eu.kanade.tachiyomi.ui.reader.ReaderContentOverlay
 import eu.kanade.tachiyomi.ui.reader.ReaderPageSheetMeta
 import eu.kanade.tachiyomi.ui.reader.setting.ReadingModeType
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.awaitCancellation
@@ -115,10 +116,30 @@ import okio.Path.Companion.toPath
 @Serializable
 sealed interface ReaderScreenArgs {
     @Serializable
-    data class Gallery(val info: BaseGalleryInfo, val page: Int) : ReaderScreenArgs
+    data class Gallery(val info: BaseGalleryInfo) : ReaderScreenArgs
 
     @Serializable
     data class Archive(val path: String) : ReaderScreenArgs
+}
+
+/**
+ * Page the reader has to open on, kept out of the navigation arguments.
+ *
+ * The route outlives the process: when Android kills the app and restores it,
+ * the saved arguments still carry the page the reader was opened on hours ago,
+ * which overrode the progress stored in the database. Asking here instead means
+ * a restored reader reads the last page from the database, while a reader opened
+ * on purpose (a page preview, for example) still lands on the page it was asked
+ * for.
+ */
+object ReaderStartPage {
+    private val pending = ConcurrentHashMap<Long, Int>()
+
+    fun request(gid: Long, page: Int) {
+        if (page >= 0) pending[gid] = page else pending.remove(gid)
+    }
+
+    fun take(gid: Long): Int? = pending.remove(gid)
 }
 
 @Composable
@@ -471,7 +492,9 @@ context(_: Context, _: DialogState, nav: DestinationsNavigator)
 suspend inline fun <T> usePageLoader(args: ReaderScreenArgs, crossinline block: suspend (PageLoader) -> T) = when (args) {
     is ReaderScreenArgs.Gallery -> {
         val info = args.info
-        val page = args.page.takeUnless { it == -1 } ?: EhDB.getReadProgress(info.gid)
+        // A page asked for in this process wins; after a restart the request is
+        // gone, so the progress saved on every page change is used instead.
+        val page = ReaderStartPage.take(info.gid) ?: EhDB.getReadProgress(info.gid)
         val archive = DownloadManager.getDownloadInfo(info.gid)?.archiveFile
         if (archive != null) {
             useArchivePageLoader(archive, info, page, info.hasAds, { error("Managed Archive have password???") }, block)
