@@ -46,14 +46,11 @@ fun List<TranslatedBubble>.rescaleIfNeeded(
  * storage, also survives a restart. Entries are keyed by the gallery plus the
  * page index, so two galleries never see each other's pages.
  *
- * Entries keep the settings signature they were produced with. When the engine,
- * the languages or the prompts change, the old entries simply stop matching and
- * are translated again; they are also evicted by the LRU bound.
+ * A stored page is reused as it was saved: changing the model, the languages or
+ * the prompts does not throw it away. Only the "Clear cache" button, a cache
+ * file that cannot be read, or clearing the app data remove entries.
  */
 object TranslationCache {
-    /** Pages are cheap (text plus rectangles), but the map must stay bounded. */
-    private const val MAX_ENTRIES = 600
-
     private const val FILE_NAME = "translation-cache.json"
     private const val VERSION = 1
     private const val SAVE_DELAY_MS = 700L
@@ -62,9 +59,7 @@ object TranslationCache {
 
     private data class Key(val gallery: String, val pageIndex: Int)
 
-    private val entries = object : LinkedHashMap<Key, PageTranslation>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Key, PageTranslation>): Boolean = size > MAX_ENTRIES
-    }
+    private val entries = mutableMapOf<Key, PageTranslation>()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var saveJob: Job? = null
@@ -83,12 +78,10 @@ object TranslationCache {
     fun get(
         gallery: String,
         pageIndex: Int,
-        signature: String,
         currentBitmapWidth: Int = 0,
         currentBitmapHeight: Int = 0,
     ): PageTranslation? {
         val cached = entries[Key(gallery, pageIndex)] ?: return null
-        if (cached.settingsSignature != signature) return null
         if (currentBitmapWidth <= 0 || currentBitmapHeight <= 0) return cached
         val rescaled = cached.bubbles.rescaleIfNeeded(
             cachedWidth = cached.bitmapWidth,
@@ -119,8 +112,8 @@ object TranslationCache {
 
     /** Cached pages of a gallery, used to hydrate the reader instantly. */
     @Synchronized
-    fun snapshot(gallery: String, signature: String): Map<Int, PageTranslation> = entries.entries
-        .filter { it.key.gallery == gallery && it.value.settingsSignature == signature }
+    fun snapshot(gallery: String): Map<Int, PageTranslation> = entries.entries
+        .filter { it.key.gallery == gallery }
         .associate { it.key.pageIndex to it.value }
 
     /**
@@ -172,13 +165,10 @@ object TranslationCache {
                     put("p", key.pageIndex)
                     put("bw", translation.bitmapWidth)
                     put("bh", translation.bitmapHeight)
-                    put("sig", translation.settingsSignature)
                     put("ocr", translation.ocrDurationMs)
                     put("tr", translation.translateDurationMs)
                     put("total", translation.totalDurationMs)
                     put("engine", translation.engineName)
-                    put("merged", translation.mergedBoxes)
-                    put("discarded", translation.discardedBoxes)
                     put(
                         "bubbles",
                         JSONArray().apply {
@@ -275,9 +265,6 @@ object TranslationCache {
             translateDurationMs = item.optLong("tr"),
             totalDurationMs = item.optLong("total"),
             engineName = item.optString("engine", "Gemini"),
-            settingsSignature = item.optString("sig"),
-            mergedBoxes = item.optInt("merged"),
-            discardedBoxes = item.optInt("discarded"),
             bitmapWidth = item.optInt("bw", 0),
             bitmapHeight = item.optInt("bh", 0),
         )

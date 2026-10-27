@@ -3,6 +3,7 @@ package com.hippo.ehviewer.translator.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -21,6 +22,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -41,6 +44,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -50,6 +54,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -283,18 +289,119 @@ fun TranslatorSettingsDialog(
 
                                 Spacer(modifier = Modifier.height(6.dp))
 
-                                OutlinedTextField(
-                                    value = settings.geminiApiKeysRaw,
-                                    onValueChange = {
-                                        settings.geminiApiKeysRaw = it
-                                        testResult = null
-                                    },
-                                    label = { Text("Paste your keys (one per line)") },
-                                    placeholder = { Text("AIzaSy...\nAIzaSy...") },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    minLines = 2,
-                                    maxLines = 4,
-                                )
+                                // One field per key. The settings keep them as a
+                                // single text, so every edit is written back.
+                                val apiKeys = remember {
+                                    mutableStateListOf<String>().apply {
+                                        addAll(settings.getGeminiApiKeys().ifEmpty { listOf("") })
+                                    }
+                                }
+                                var revealedKey by remember { mutableStateOf(-1) }
+                                val publishKeys = {
+                                    // A field left empty is never stored: only the
+                                    // keys with text survive, so an accidental
+                                    // "+" does not leave a blank entry behind.
+                                    settings.geminiApiKeysRaw = apiKeys
+                                        .map { it.trim() }
+                                        .filter { it.isNotEmpty() }
+                                        .joinToString("\n")
+                                    testResult = null
+                                }
+
+                                apiKeys.forEachIndexed { index, key ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = "${index + 1}",
+                                            modifier = Modifier.width(26.dp),
+                                            textAlign = TextAlign.Center,
+                                            fontWeight = FontWeight.SemiBold,
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                        OutlinedTextField(
+                                            value = key,
+                                            onValueChange = { value ->
+                                                val parts = value
+                                                    .split('\n', '\r', ',', ';')
+                                                    .map { it.trim() }
+                                                    .filter { it.isNotEmpty() }
+                                                if (parts.size > 1) {
+                                                    // Several keys pasted at once:
+                                                    // each one gets its own field.
+                                                    apiKeys[index] = parts.first()
+                                                    apiKeys.addAll(index + 1, parts.drop(1))
+                                                } else {
+                                                    apiKeys[index] = value.filterNot { it == '\n' || it == '\r' }
+                                                }
+                                                publishKeys()
+                                            },
+                                            modifier = Modifier.weight(1f),
+                                            singleLine = true,
+                                            placeholder = { Text("AIzaSy...") },
+                                            visualTransformation = if (revealedKey == index) {
+                                                VisualTransformation.None
+                                            } else {
+                                                PasswordVisualTransformation()
+                                            },
+                                            trailingIcon = {
+                                                IconButton(
+                                                    onClick = {
+                                                        revealedKey = if (revealedKey == index) -1 else index
+                                                    },
+                                                ) {
+                                                    Icon(
+                                                        imageVector = if (revealedKey == index) {
+                                                            Icons.Filled.VisibilityOff
+                                                        } else {
+                                                            Icons.Filled.Visibility
+                                                        },
+                                                        contentDescription = if (revealedKey == index) {
+                                                            "Hide key"
+                                                        } else {
+                                                            "Show key"
+                                                        },
+                                                    )
+                                                }
+                                            },
+                                        )
+                                        IconButton(
+                                            onClick = {
+                                                if (apiKeys.size == 1) {
+                                                    apiKeys[0] = ""
+                                                } else {
+                                                    apiKeys.removeAt(index)
+                                                }
+                                                revealedKey = -1
+                                                publishKeys()
+                                            },
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Close,
+                                                contentDescription = "Remove key ${index + 1}",
+                                            )
+                                        }
+                                    }
+                                    // A "+" under every field, never between them:
+                                    // adding a key always appends one at the end.
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(start = 26.dp, end = 48.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        IconButton(
+                                            onClick = {
+                                                apiKeys.add("")
+                                                revealedKey = -1
+                                                publishKeys()
+                                            },
+                                        ) {
+                                            Icon(Icons.Filled.Add, contentDescription = "Add another key")
+                                        }
+                                    }
+                                }
 
                                 Text(
                                     text = "💡 Each key translates its own page, so more keys mean more pages translated at the same time.",
@@ -914,7 +1021,7 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
         TranslationStatus.Idle -> "This page has not been translated yet."
         TranslationStatus.WaitingForPage -> "Waiting for the image to download and decode."
         TranslationStatus.RecognizingText -> "The AI is locating the balloons on the page."
-        TranslationStatus.ReadingPage -> "Gemini is reading the real text inside the numbered boxes."
+        TranslationStatus.ReadingPage -> "Gemini is reading the page text and measuring every balloon."
         TranslationStatus.TranslatingText -> "Sending the texts to Gemini."
         TranslationStatus.Done -> translation?.let { page ->
             if (page.bubbles.isEmpty()) {
@@ -925,8 +1032,6 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
                     append("${page.bubbles.size} balloons · ${page.engineName}")
                     val sfxCount = page.bubbles.count { it.isSfx }
                     if (sfxCount > 0) append(" · $sfxCount SFX")
-                    if (page.mergedBoxes > 0) append(" · ${page.mergedBoxes} merged")
-                    if (page.discardedBoxes > 0) append(" · ${page.discardedBoxes} discarded")
                     append("\nTranslation ${page.translateDurationMs} ms")
                 }
             }

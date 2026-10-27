@@ -2,11 +2,9 @@ package com.hippo.ehviewer.translator
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
-import android.graphics.RectF
 import android.util.Base64
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
@@ -86,7 +84,6 @@ object PageTranslator {
     /** A long sentence marked as SFX is a model slip: draw it as a normal balloon. */
     private const val MAX_SFX_LENGTH = 24
     private const val GRID_CELLS = 20
-    private val markerColor = 0xFFFF0033.toInt()
 
     suspend fun translatePage(
         pageIndex: Int,
@@ -108,8 +105,6 @@ object PageTranslator {
 
         var bubbles: List<TranslatedBubble> = emptyList()
         var engineUsed = "Gemini"
-        var mergedBoxes = 0
-        var discardedBoxes = 0
 
         // The model is the only engine: it reads the page, measures every
         // balloon and letters the translation in a single call. There is no
@@ -117,8 +112,6 @@ object PageTranslator {
         // not a fallback but parallel workers on the following pages.
         suspend fun readPage(): VisionResult = translateWithGeminiVision(
             bitmap = bitmap,
-            blocks = emptyList(),
-            noHints = true,
             sourceLang = sourceLang,
             targetLang = targetLang,
             systemPrompt = systemPrompt,
@@ -135,8 +128,6 @@ object PageTranslator {
             // is counted in the same place instead of here and there.
             val result = readPage()
             bubbles = result.bubbles
-            mergedBoxes = result.mergedBoxes
-            discardedBoxes = result.discardedBoxes
             engineUsed = "Gemini (${geminiModel.removePrefix("gemini-")})"
         }
 
@@ -147,8 +138,6 @@ object PageTranslator {
             translateDurationMs = transTime,
             totalDurationMs = transTime,
             engineName = engineUsed,
-            mergedBoxes = mergedBoxes,
-            discardedBoxes = discardedBoxes,
             bitmapWidth = bitmap.width,
             bitmapHeight = bitmap.height,
         )
@@ -289,15 +278,6 @@ object PageTranslator {
         TranslatorSettings.formatGeminiPrompt(userPrompt, sourceLang, targetLang).trim()
     }
 
-    private fun userPromptSuffix(
-        userPrompt: String,
-        sourceLang: String,
-        targetLang: String,
-    ): String {
-        val extra = formatUserPrompt(userPrompt, sourceLang, targetLang)
-        return if (extra.isEmpty()) "" else "\n\nAdditional reader instructions:\n$extra"
-    }
-
     /** The translator's rules travel outside the conversation, as the system prompt. */
     private fun systemInstruction(
         systemPrompt: String,
@@ -339,12 +319,9 @@ object PageTranslator {
 
     private class VisionResult(
         val bubbles: List<TranslatedBubble>,
-        val mergedBoxes: Int,
-        val discardedBoxes: Int,
     )
 
     private class VisionEntry(
-        val ids: List<Int>,
         val source: String?,
         val translated: String,
         val rect: Rect?,
@@ -357,31 +334,6 @@ object PageTranslator {
         val sentWidth: Int,
         val sentHeight: Int,
     )
-
-    /**
-     * Encodes the bitmap for the Vision API without drawing any grid overlay.
-     * Used in "no OCR" mode so that Lite models don't confuse grid lines with artwork strokes.
-     */
-    private fun encodePageForVision(bitmap: Bitmap): EncodedVisionImage {
-        val w = bitmap.width
-        val h = bitmap.height
-        val maxEdge = maxOf(w, h)
-        val (nw, nh) = if (maxEdge > VISION_MAX_EDGE) {
-            val ratio = VISION_MAX_EDGE.toFloat() / maxEdge.toFloat()
-            Pair((w * ratio).toInt().coerceAtLeast(1), (h * ratio).toInt().coerceAtLeast(1))
-        } else {
-            Pair(w, h)
-        }
-        val scaled = if (nw != w || nh != h) Bitmap.createScaledBitmap(bitmap, nw, nh, true) else bitmap
-        val out = ByteArrayOutputStream()
-        scaled.compress(Bitmap.CompressFormat.JPEG, VISION_JPEG_QUALITY, out)
-        if (scaled !== bitmap) scaled.recycle()
-        return EncodedVisionImage(
-            base64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP),
-            sentWidth = nw,
-            sentHeight = nh,
-        )
-    }
 
     private data class RawBox(val y1: Float, val x1: Float, val y2: Float, val x2: Float)
 
@@ -439,33 +391,12 @@ object PageTranslator {
     }
 
     /**
-     * Anchors the AI-estimated rectangle (no-OCR mode) to the real speech bubble
-     * detected in the bitmap by [BubbleDetector.findEnclosingBubble].
-     *
-     * Returns Pair(anchoredBox, exactBox).
-     * exactBox=true means the returned box is pixel-precise (SFX); false means the
-     * overlay should centre the text and expand the bubble automatically.
-     */
-    private fun anchorVisionGuessWithoutOcr(
-        bitmap: Bitmap,
-        guess: Rect,
-        isSfx: Boolean,
-    ): Pair<Rect, Boolean> {
-        // In no-OCR mode the model now reports the full balloon interior.
-        // Use the coordinates exactly as-is (exactBox=true) so the overlay draws
-        // directly over the balloon without horizontal expansion or collision shifting.
-        return guess to true
-    }
-
-    /**
      * Waits for a free key before touching the page. Every key works on one page
      * at a time, so the pages the reader queues translate in parallel, one per
      * key, and no request competes with another for the same quota.
      */
     private suspend fun translateWithGeminiVision(
         bitmap: Bitmap,
-        blocks: List<RawBlock>,
-        noHints: Boolean = false,
         sourceLang: String,
         targetLang: String,
         systemPrompt: String,
@@ -476,8 +407,6 @@ object PageTranslator {
     ): VisionResult = slotsFor(apiKeys.size).withPermit {
         translateWithGeminiVisionOnKey(
             bitmap = bitmap,
-            blocks = blocks,
-            noHints = noHints,
             sourceLang = sourceLang,
             targetLang = targetLang,
             systemPrompt = systemPrompt,
@@ -489,15 +418,11 @@ object PageTranslator {
     }
 
     /**
-     * Sends the whole page with the OCR boxes drawn and numbered, and lets the
-     * vision model do the actual reading: it recovers text the OCR truncated,
-     * joins boxes that belong to the same balloon and drops boxes that are
-     * duplicates or landed on artwork (answering "REJECT" for them).
+     * Sends the whole page to the vision model, which reads the text, measures
+     * every balloon and letters the translation in a single call.
      */
     private suspend fun translateWithGeminiVisionOnKey(
         bitmap: Bitmap,
-        blocks: List<RawBlock>,
-        noHints: Boolean = false,
         sourceLang: String,
         targetLang: String,
         systemPrompt: String,
@@ -506,15 +431,11 @@ object PageTranslator {
         model: String,
         thinkingLevel: String,
     ): VisionResult = withContext(Dispatchers.IO) {
-        // In no-OCR mode (noHints=true) we annotate with an empty block list:
-        // the coordinate grid is drawn (so the model has a visual ruler to report
-        // accurate coordinates) but NO red OCR boxes are drawn (there are no OCR
-        // hints to show). Sending a completely clean image caused the model to
-        // report wildly inaccurate coordinates because the prompt references a
-        // grid that was not visible.
+        // The coordinate grid is drawn so the model has a visual ruler to report
+        // accurate coordinates.
         val (imageBase64, encodedImage) = annotationSlots.withPermit {
             val annotated = try {
-                annotateForVision(bitmap, if (noHints) emptyList() else blocks)
+                annotateForVision(bitmap)
             } catch (e: OutOfMemoryError) {
                 error("Not enough memory to prepare the image")
             }
@@ -537,12 +458,10 @@ object PageTranslator {
             base64 to size
         }
 
-        val prompt = buildVisionPrompt(targetLang, blocks.size, noHints)
-
         suspend fun callModel(): JSONObject {
             val requestJson = JSONObject().apply {
                 val parts = JSONArray().apply {
-                    // The page is the user turn: image first, then the task.
+                    // The page is the user turn: the image, then any extra instructions.
                     put(
                         JSONObject().apply {
                             put(
@@ -554,7 +473,6 @@ object PageTranslator {
                             )
                         },
                     )
-                    put(JSONObject().apply { put("text", prompt) })
                     formatUserPrompt(userPrompt, sourceLang, targetLang).takeIf { it.isNotEmpty() }?.let { extra ->
                         put(JSONObject().apply { put("text", extra) })
                     }
@@ -594,104 +512,15 @@ object PageTranslator {
 
         parseVisionResult(
             raw = candidateText(callModel()),
-            blocks = blocks,
             width = bitmap.width,
             height = bitmap.height,
-            maxExtras = if (noHints) MAX_EXTRA_BUBBLES * 2 else MAX_EXTRA_BUBBLES,
-            bitmap = if (noHints) bitmap else null,
+            maxExtras = MAX_EXTRA_BUBBLES * 2,
             sentWidth = encodedImage.sentWidth,
             sentHeight = encodedImage.sentHeight,
         )
     }
 
-    private fun buildVisionPrompt(
-        targetLang: String,
-        boxCount: Int,
-        noHints: Boolean = false,
-    ): String = buildString {
-        if (noHints) {
-            val langName = TranslatorSettings.getLanguageName(targetLang)
-            appendLine("You are the OCR and direct text overlay lettering engine for this manga page: the attached image is the complete page.")
-            appendLine("Your job is to read every block of Japanese text, translate it to $langName, and provide the exact bounding box of the Japanese text characters so the translated $langName text is rendered directly on top of the original Japanese text.")
-            appendLine()
-            appendLine("Coordinates:")
-            appendLine("- Use normalised coordinates 0-1000 for both axes (0,0 = top-left of the image, 1000,1000 = bottom-right).")
-            appendLine("- The \"box\" field is [ymin, xmin, ymax, xmax].")
-            appendLine()
-            appendLine("Rules:")
-            appendLine("1. Return one entry per block of dialogue, monologue, or caption, in Japanese manga reading order (right to left, top to bottom).")
-            appendLine("2. \"ids\" must always be empty ([]).")
-            appendLine("3. \"box\": [ymin, xmin, ymax, xmax] must tightly enclose the JAPANESE CHARACTERS of each dialogue block:")
-            appendLine("   - Enclose all vertical columns of that sentence together (from the top of the highest character to the bottom of the lowest, and from the leftmost column to the rightmost column).")
-            appendLine("   - The app stamps the translated $langName text directly ON TOP of the original Japanese characters with a thick white outline.")
-            appendLine("   - Do NOT report the speech balloon interior or padding. Do NOT place the box over empty space, and NEVER place the box over a character's face or body unless the Japanese text is literally drawn over them.")
-            appendLine("   - The box does not auto-grow or expand: it is the exact placement target where the translated text will sit directly over the original Japanese text.")
-            appendLine("4. If a sentence spans across multiple adjacent vertical columns in the same bubble, join them into a single entry covering all those columns.")
-            appendLine("5. Onomatopoeia painted on artwork must be returned in \"extra\" with \"kind\": \"sfx\" and \"box\" tightly covering the sound effect characters.")
-            appendLine("6. Ignore non-manga text: watermarks, scanlation credits, page numbers, store logos, and URLs.")
-            appendLine("7. Do not add notes, romanisation or explanations.")
-            appendLine()
-            appendLine("Reply with raw JSON only, without markdown fences or commentary:")
-            append("{\"bubbles\":[{\"ids\":[],\"box\":[ymin,xmin,ymax,xmax],\"source\":\"japanese text as printed\",")
-            append("\"text\":\"")
-            append(langName)
-            append(" translation\",\"kind\":\"dialogue\"}],")
-            append("\"extra\":[{\"box\":[ymin,xmin,ymax,xmax],\"source\":\"...\",\"text\":\"...\",\"kind\":\"sfx\"}]}")
-        } else {
-            appendLine("You are ALSO the OCR engine and the bubble layout engine for this manga page: the attached")
-            appendLine("image is the complete page.")
-            appendLine("A weak OCR has drawn numbered red boxes over the places where it thinks text may be.")
-            appendLine("Those boxes are only hints; their text is not given to you and both their position and their")
-            appendLine("size may be wrong. Look at the page yourself, read the text that is really inside each place,")
-            appendLine("translate it, and measure the area the translated text must cover.")
-            appendLine("A blue grid is drawn over the page: 20 x 20 cells, each cell 50 units wide, with the")
-            appendLine("normalised coordinate (0-1000) printed along all four edges. Use it as a ruler.")
-            if (boxCount == 0) {
-                appendLine("This page has no numbered boxes: recover every speech balloon you can see with \"extra\".")
-            }
-            appendLine()
-            appendLine("Rules:")
-            appendLine("1. Return one entry per speech balloon of the finished page, in reading order")
-            appendLine("   (Japanese manga: right to left, top to bottom).")
-            appendLine("2. \"ids\" lists every numbered box that belongs to that balloon. If one balloon was split into")
-            appendLine("   two boxes (for example 1 and 2), return a SINGLE entry with \"ids\": [1, 2] and the whole")
-            appendLine("   text of the balloon. Never return two entries for the same balloon.")
-            appendLine("3. If a box has no readable dialogue (it landed on artwork, on a sound effect, or it is a")
-            appendLine("   duplicate fragment of another box), do not translate it: answer exactly \"REJECT\" in its")
-            appendLine("   text. Do not invent text for it.")
-            appendLine("4. If a sentence continues from one box into another box of the same balloon, join both ids in one entry.")
-            appendLine("5. Every entry must also carry \"box\": [ymin, xmin, ymax, xmax], the normalised rectangle")
-            appendLine("   (0-1000) of the TEXT ITSELF, not of the balloon. Follow the lines of dialogue and leave out")
-            appendLine("   the balloon padding, the balloon tail, the character's face and the neighbouring balloon.")
-            appendLine("   The translation is centred inside that rectangle and, when the translated text is longer")
-            appendLine("   than the original, it grows upwards and downwards around the centre on its own, so keep")
-            appendLine("   the rectangle centred on the original text and cover only the text. The lettering size is")
-            appendLine("   fixed by the app, so the rectangle decides the area to cover, never how big the text is.")
-            appendLine("6. A balloon that only holds a sound effect, or that has no text at all, gets no entry:")
-            appendLine("   answer exactly \"REJECT\" for it.")
-            appendLine("7. Ignore text outside balloons: credits, watermarks, page numbers, store logos, meta")
-            appendLine("   commentary, shop signs, posters, book spines and text painted on the artwork.")
-            appendLine("8. Onomatopoeia painted on the artwork is not a balloon: return it as an \"extra\" entry with")
-            appendLine("   \"kind\": \"sfx\" and a short sound word (\"¡BAM!\", \"¡DOON!\"). It is lettered on a")
-            appendLine("   single horizontal line, so never wrap it in a sentence.")
-            appendLine("9. Use the panel around each balloon to decide who is speaking: first or third person, and the")
-            appendLine("   gender of the speaker. Keep the same person and gender for every line of the conversation.")
-            appendLine("10. Do not add notes, romanisation or explanations.")
-            appendLine()
-            appendLine("Reply with JSON only, without prose or code fences:")
-            append("{\"bubbles\":[{\"ids\":[1],\"box\":[ymin,xmin,ymax,xmax],\"source\":\"text as printed\",")
-            append("\"text\":\"")
-            append(TranslatorSettings.getLanguageName(targetLang))
-            append(" translation\",\"kind\":\"dialogue\"}],")
-            append("\"extra\":[{\"box\":[ymin,xmin,ymax,xmax],\"source\":\"...\",\"text\":\"...\",\"kind\":\"sfx\"}]}")
-            appendLine()
-            appendLine("\"source\" is the text exactly as printed on the page. \"kind\" is \"dialogue\" for speech and")
-            appendLine("\"sfx\" for onomatopoeia. \"extra\" is for balloons with no numbered box and for sound")
-            appendLine("effects painted on the artwork. Use at most $MAX_EXTRA_BUBBLES extra entries.")
-        }
-    }
-
-    private fun annotateForVision(bitmap: Bitmap, blocks: List<RawBlock>): Bitmap {
+    private fun annotateForVision(bitmap: Bitmap): Bitmap {
         val scale = min(1f, VISION_MAX_EDGE.toFloat() / max(bitmap.width, bitmap.height))
         val width = (bitmap.width * scale).roundToInt().coerceAtLeast(1)
         val height = (bitmap.height * scale).roundToInt().coerceAtLeast(1)
@@ -708,59 +537,12 @@ object PageTranslator {
         )
         drawVisionGrid(canvas, width, height)
 
-        val stroke = max(2f, width / 600f)
-        val halo = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            // Thin halo: the boxes hug the glyphs, so a fat outline would eat
-            // the strokes the model has to read.
-            strokeWidth = stroke * 1.8f
-            color = Color.WHITE
-        }
-        val frame = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = stroke
-            color = markerColor
-        }
-        val badge = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = markerColor }
-        val label = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            textSize = max(14f, width / 55f)
-            textAlign = Paint.Align.CENTER
-            isFakeBoldText = true
-        }
-
-        blocks.forEachIndexed { index, block ->
-            val rect = Rect(
-                (block.rect.left * scale).roundToInt(),
-                (block.rect.top * scale).roundToInt(),
-                (block.rect.right * scale).roundToInt(),
-                (block.rect.bottom * scale).roundToInt(),
-            )
-            canvas.drawRect(rect, halo)
-            canvas.drawRect(rect, frame)
-
-            val text = (index + 1).toString()
-            val boxWidth = max(label.measureText(text) * 1.6f, label.textSize * 1.5f)
-            val boxHeight = label.textSize * 1.7f
-            val left = rect.left.toFloat().coerceIn(0f, (width - boxWidth).coerceAtLeast(0f))
-            // Prefer the badge just above the box so the number never covers
-            // the dialogue the model has to read.
-            val top = (rect.top - boxHeight).coerceAtLeast(0f)
-            val badgeRect = RectF(left, top, left + boxWidth, top + boxHeight)
-            canvas.drawRect(badgeRect, badge)
-            canvas.drawText(
-                text,
-                badgeRect.centerX(),
-                badgeRect.centerY() - (label.ascent() + label.descent()) / 2f,
-                label,
-            )
-        }
         return output
     }
 
     /**
      * Ruler grid (0-1000 on both axes) so the model can report the balloon
-     * rectangles itself: the OCR boxes are as imprecise as their text.
+     * rectangles itself in normalised coordinates.
      */
     private fun drawVisionGrid(canvas: Canvas, width: Int, height: Int) {
         val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -823,11 +605,9 @@ object PageTranslator {
 
     private fun parseVisionResult(
         raw: String,
-        blocks: List<RawBlock>,
         width: Int,
         height: Int,
         maxExtras: Int = MAX_EXTRA_BUBBLES,
-        bitmap: Bitmap? = null, // needed for anchorVisionGuessWithoutOcr
         sentWidth: Int = width,
         sentHeight: Int = height,
     ): VisionResult {
@@ -863,16 +643,14 @@ object PageTranslator {
             }
         for (i in 0 until bubbleArray.length()) {
             val item = bubbleArray.optJSONObject(i) ?: continue
-            val ids = readIds(item)
             val translated = readText(item)
             if (translated.isBlank()) continue
             if (isReject(translated)) {
-                // Explicit rejection: this box is never drawn.
-                entries += VisionEntry(ids, null, "", null)
+                // Explicit rejection: this balloon is never drawn.
+                entries += VisionEntry(null, "", null)
                 continue
             }
             entries += VisionEntry(
-                ids = ids,
                 source = readSource(item),
                 translated = translated,
                 rect = rawBoxesByIndex[i]?.toPixelRect(coordScaleX, coordScaleY, width, height)
@@ -889,7 +667,6 @@ object PageTranslator {
             if (translated.isBlank() || isReject(translated)) continue
             val rect = readNormalizedRect(item, width, height) ?: continue
             entries += VisionEntry(
-                ids = emptyList(),
                 source = readSource(item),
                 translated = translated,
                 rect = rect,
@@ -899,47 +676,15 @@ object PageTranslator {
             extraCount++
         }
 
-        val used = mutableSetOf<Int>()
         val accepted = mutableListOf<Rect>()
         val bubbles = mutableListOf<TranslatedBubble>()
-        var mergedBoxes = 0
 
         for (entry in entries) {
-            // Rejected and empty entries are deliberately not drawn, so their
-            // ids stay unused and are reported as discarded boxes.
             if (entry.translated.isBlank()) continue
-            // A box already claimed by another balloon must not be drawn twice.
-            if (entry.ids.any { it in used }) continue
 
-            val sources = entry.ids.mapNotNull { id -> blocks.getOrNull(id - 1) }
-            val union = sources
-                .map { it.rect }
-                .filter { it.width() > 0 && it.height() > 0 }
-                .reduceOrNull { acc, rect ->
-                    Rect(acc).apply {
-                        left = min(left, rect.left)
-                        top = min(top, rect.top)
-                        right = max(right, rect.right)
-                        bottom = max(bottom, rect.bottom)
-                    }
-                }
-            val guess = entry.rect?.takeIf { it.isPlausibleBubble(width, height) }
-            var fromModel = false
-            val rect = when {
-                // The model's own rectangle wins: it follows the balloon outline,
-                // not the OCR text. Accept it only when it sits near the hint
-                // boxes, so a hallucinated rectangle cannot land on the artwork.
-                guess != null && (union == null || Rect.intersects(guess, union.expanded(width, height))) -> {
-                    fromModel = true
-                    guess
-                }
-                union != null -> union
-                guess != null -> {
-                    fromModel = true
-                    guess
-                }
-                else -> continue
-            }
+            // The model measures every balloon itself; a rectangle that does not
+            // look like one is dropped instead of landing on the artwork.
+            val rect = entry.rect?.takeIf { it.isPlausibleBubble(width, height) } ?: continue
             val clipped = Rect(rect.left, rect.top, rect.right, rect.bottom).apply {
                 left = left.coerceIn(0, width)
                 top = top.coerceIn(0, height)
@@ -948,46 +693,30 @@ object PageTranslator {
             }
             if (clipped.width() < 4 || clipped.height() < 4) continue
             // Only deduplicate extra (SFX/artwork) entries against already-accepted boxes.
-            // Main bubble entries in no-OCR mode all have empty ids and must NOT be filtered here.
             if (entry.fromExtra && accepted.any { it.overlapsMostly(clipped) }) continue
 
-            entry.ids.forEach { id -> if (id in 1..blocks.size) used += id }
-            if (entry.ids.size > 1) mergedBoxes++
             accepted += clipped
-
-            val original = entry.source?.takeIf { it.isNotBlank() }
-                ?: sources.joinToString(" ") { it.text }
-
-            // In no-OCR mode, try to anchor the bounding box to the real bubble outline.
-            val (finalBox, finalExactBox) = if (blocks.isEmpty() && bitmap != null && fromModel) {
-                anchorVisionGuessWithoutOcr(bitmap, clipped, entry.isSfx)
-            } else {
-                clipped to fromModel
-            }
-
             bubbles += TranslatedBubble(
                 id = bubbles.size,
-                originalText = original,
+                originalText = entry.source?.takeIf { it.isNotBlank() }.orEmpty(),
                 translatedText = cleanMangaText(entry.translated),
-                boundingBox = finalBox,
+                boundingBox = clipped,
                 isSfx = entry.isSfx,
-                exactBox = finalExactBox,
+                // The model measures the balloon interior itself, so the box is
+                // used as-is and the text is centred inside it.
+                exactBox = true,
             )
         }
 
         if (bubbles.isEmpty()) {
-            // Every box was rejected, or the answer had no entries: that is a
-            // valid answer for a page with no readable dialogue. It is never
-            // cached, and the reader asks again a couple of times before
-            // accepting it, so a page the lite model skipped is not left blank.
-            return VisionResult(emptyList(), 0, blocks.size)
+            // Every entry was rejected, or the answer had none: that is a valid
+            // answer for a page with no readable dialogue. It is never cached, and
+            // the reader asks again a couple of times before accepting it, so a
+            // page the lite model skipped is not left blank.
+            return VisionResult(emptyList())
         }
 
-        return VisionResult(
-            bubbles = bubbles,
-            mergedBoxes = mergedBoxes,
-            discardedBoxes = blocks.indices.count { (it + 1) !in used },
-        )
+        return VisionResult(bubbles = bubbles)
     }
 
     /** True when both rectangles cover most of the same area. */
@@ -1008,12 +737,6 @@ object PageTranslator {
         return aspect in 0.08f..12f
     }
 
-    private fun Rect.expanded(pageWidth: Int, pageHeight: Int): Rect {
-        val dx = max(pageWidth / 40, 4)
-        val dy = max(pageHeight / 40, 4)
-        return Rect(left - dx, top - dy, right + dx, bottom + dy)
-    }
-
     private fun findVisionArray(root: JSONObject): JSONArray? {
         val preferred = listOf("bubbles", "panels", "boxes", "results", "translations", "items")
         preferred.firstNotNullOfOrNull { root.optJSONArray(it) }?.let { return it }
@@ -1028,27 +751,6 @@ object PageTranslator {
         // A single balloon returned without the wrapper object.
         if (root.has("ids") || root.has("id")) return JSONArray().put(root)
         return null
-    }
-
-    private fun readIds(item: JSONObject): List<Int> {
-        val rawIds = item.opt("ids") ?: item.opt("box_ids") ?: item.opt("boxes")
-        if (rawIds is String) {
-            return rawIds.split(',', ' ', '[', ']', ';').mapNotNull { it.trim().toIntOrNull() }
-        }
-        val array = rawIds as? JSONArray
-        if (array != null) {
-            val ids = mutableListOf<Int>()
-            for (i in 0 until array.length()) {
-                val id = array.optInt(i, -1).takeIf { it > 0 }
-                    ?: array.optString(i).toIntOrNull()
-                    ?: continue
-                ids += id
-            }
-            return ids
-        }
-        val single = item.optInt("id", -1).takeIf { it > 0 }
-            ?: item.optString("id").toIntOrNull()
-        return listOfNotNull(single)
     }
 
     private fun readText(item: JSONObject): String = listOf("text", "translated", "translation", "es")

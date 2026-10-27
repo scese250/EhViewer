@@ -140,33 +140,12 @@ class TranslatorSettings(context: Context) {
     var standardFontSizeSp by mutableFloatStateOf(prefs.getFloat("standard_font_size_sp", 12f))
 
     /**
-     * Incremented when a value that affects OCR/translation changes, so cached
-     * pages are translated again.
+     * Incremented every time the reader settings are saved, so the reader
+     * restarts its translation scheduler with the new values. It is not a cache
+     * key: a settings change never throws saved pages away.
      */
     var revision by mutableIntStateOf(0)
         private set
-
-    private var savedSignature: String =
-        prefs.getString("translation_signature", null) ?: translationSignature()
-
-    fun translationSignature(): String = buildString {
-        // The engine and the vision switches are fixed now (the model is the
-        // only translator). The literal values keep the signature, and so the
-        // saved cache, compatible with pages translated by older builds.
-        append(ENGINE_GEMINI)
-        append('|').append(sourceLang)
-        append('|').append(targetLang)
-        append('|').append(geminiModel)
-        append('|').append(geminiSystemPrompt.hashCode())
-        append('|').append(geminiUserPrompt.hashCode())
-        append('|').append(geminiApiKeysRaw.hashCode())
-        append("|1|1")
-        // Bumped when the vision prompt or the way its boxes are read changes,
-        // so pages cached by an older build are translated again.
-        // The OCR grouping settings are gone; these literals are the values it
-        // used to contribute, so existing caches stay valid.
-        append("|v7|1|350|550|400")
-    }
 
     fun getGeminiApiKeys(): List<String> = geminiApiKeysRaw
         .split('\n', ',', ';')
@@ -188,9 +167,6 @@ class TranslatorSettings(context: Context) {
         // defaults, and turn a bare code into its name.
         sourceLang = normalizeLanguage(sourceLang, "Japanese")
         targetLang = normalizeLanguage(targetLang, "English")
-        val signature = translationSignature()
-        val translationChanged = signature != savedSignature
-
         prefs.edit()
             .putString("gemini_api_keys", geminiApiKeysRaw)
             .putString("gemini_model", geminiModel)
@@ -214,7 +190,6 @@ class TranslatorSettings(context: Context) {
             .putBoolean("is_manipulation_mode", isManipulationMode)
             .putFloat("border_thickness", borderThickness)
             .putFloat("standard_font_size_sp", standardFontSizeSp)
-            .putString("translation_signature", signature)
             .putFloat("global_bubble_scale", globalBubbleScale)
             .putFloat("bubble_opacity", bubbleOpacity)
             .putBoolean("show_sfx", showSfx)
@@ -222,15 +197,10 @@ class TranslatorSettings(context: Context) {
             .putInt("batch_size", batchSize)
             .apply()
 
-        savedSignature = signature
-        if (translationChanged) {
-            revision++
-        }
+        revision++
     }
 
     companion object {
-        /** The model is the only engine; kept for the cache signature. */
-        const val ENGINE_GEMINI = "gemini"
         const val DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
 
         /** No extra user instructions by default. */

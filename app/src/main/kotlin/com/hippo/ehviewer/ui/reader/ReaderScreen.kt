@@ -234,9 +234,6 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
         }
     }
 
-    LaunchedEffect(translatorState, translatorSettings.revision) {
-        translatorState.onRevisionChanged()
-    }
     val webtoon = remember(info) {
         // Tags in database may or may not have the prefix "other:"
         info?.simpleTags?.any { it.endsWith("webtoon") } == true

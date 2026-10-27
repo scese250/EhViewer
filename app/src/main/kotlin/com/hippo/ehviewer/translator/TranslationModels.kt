@@ -34,12 +34,6 @@ data class PageTranslation(
     val translateDurationMs: Long,
     val totalDurationMs: Long,
     val engineName: String = "Gemini",
-    /** Signature of the settings used to produce this translation. */
-    val settingsSignature: String = "",
-    /** Number of OCR boxes the model collapsed into one balloon. */
-    val mergedBoxes: Int = 0,
-    /** Number of OCR boxes the model discarded as empty or duplicated. */
-    val discardedBoxes: Int = 0,
     /** Width of the Bitmap used when this translation was produced. Used to rescale boxes on cache hit. */
     val bitmapWidth: Int = 0,
     /** Height of the Bitmap used when this translation was produced. */

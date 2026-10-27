@@ -110,7 +110,6 @@ class ReaderTranslationState(
     /** Earliest moment to ask for a page again, so a slow page is not hammered. */
     private val retryAt = mutableMapOf<Int, Long>()
 
-    private var lastRevision = settings.revision
     private var generation = 0
 
     /**
@@ -123,7 +122,7 @@ class ReaderTranslationState(
 
     init {
         // Re-entering a gallery shows the pages translated last time instantly.
-        TranslationCache.snapshot(galleryKey, settings.translationSignature())
+        TranslationCache.snapshot(galleryKey)
             .forEach { (index, translation) ->
                 translations[index] = translation
                 statuses[index] = TranslationStatus.Done
@@ -132,35 +131,6 @@ class ReaderTranslationState(
 
     fun status(index: Int): TranslationStatus = statuses[index]
         ?: if (translations.containsKey(index)) TranslationStatus.Done else TranslationStatus.Idle
-
-    /**
-     * Drops cached pages produced with older OCR/translation settings. Pages
-     * translated manually after editing the settings keep their result even
-     * when [TranslatorSettings.save] bumps the revision on dialog close.
-     */
-    fun onRevisionChanged() {
-        if (lastRevision != settings.revision) {
-            lastRevision = settings.revision
-            purgeStale()
-        }
-    }
-
-    private fun purgeStale() {
-        val signature = settings.translationSignature()
-        translations.keys
-            .filter { translations[it]?.settingsSignature != signature }
-            .forEach {
-                translations.remove(it)
-                statuses.remove(it)
-                dismissedErrors.remove(it)
-                emptyAttempts.remove(it)
-                failedRetries.remove(it)
-                retryAt.remove(it)
-            }
-        // The cache is keyed by signature too, but a settings change must also
-        // free the old pages instead of keeping them until the LRU evicts them.
-        TranslationCache.removeAll(galleryKey)
-    }
 
     fun clear() {
         generation++
@@ -244,7 +214,6 @@ class ReaderTranslationState(
     private suspend fun translateLocked(index: Int, timeoutMs: Long): PageTranslation? {
         val page = pageLoader.pages.getOrNull(index) ?: return fail(index, "The page does not exist")
         val requestGeneration = generation
-        val signature = settings.translationSignature()
         try {
             val image = awaitImage(index, timeoutMs) ?: return fail(
                 index,
@@ -287,10 +256,9 @@ class ReaderTranslationState(
                         }
                     },
                 )
-                if (requestGeneration == generation && signature == settings.translationSignature()) {
-                    val stored = result.copy(settingsSignature = signature)
-                    translations[index] = stored
-                    if (stored.bubbles.isEmpty()) {
+                if (requestGeneration == generation) {
+                    translations[index] = result
+                    if (result.bubbles.isEmpty()) {
                         // Nothing was read: the page is never cached, and the
                         // scheduler asks again shortly instead of leaving a page
                         // the model skipped blank for the rest of the read.
@@ -301,7 +269,7 @@ class ReaderTranslationState(
                         emptyAttempts.remove(index)
                         failedRetries.remove(index)
                         retryAt.remove(index)
-                        TranslationCache.put(galleryKey, index, stored)
+                        TranslationCache.put(galleryKey, index, result)
                     }
                     statuses[index] = TranslationStatus.Done
                     dismissedErrors.remove(index)
@@ -371,9 +339,9 @@ class ReaderTranslationState(
         return copy
     }
 
-    /** Cached page for this reader, if it was translated with the same settings. */
+    /** Page stored for this reader on a previous visit, if there is one. */
     private fun cached(index: Int): PageTranslation? = TranslationCache
-        .get(galleryKey, index, settings.translationSignature())
+        .get(galleryKey, index)
         ?.also {
             translations[index] = it
             statuses[index] = TranslationStatus.Done
@@ -409,7 +377,6 @@ class ReaderTranslationState(
      * pages the user reads carry a fresh translation (new prompt, new bubbles).
      */
     suspend fun retranslateFollowing(index: Int, count: Int) {
-        onRevisionChanged()
         var pending = count.coerceIn(1, MAX_RETRANSLATE_PAGES)
         var next = index + 1
         while (pending > 0 && next < pageLoader.size) {
@@ -434,7 +401,6 @@ class ReaderTranslationState(
      * page is only read from it, never used to cancel work.
      */
     suspend fun autoTranslate(currentPages: Flow<Int>, maxAhead: Int) {
-        onRevisionChanged()
         val target = MutableStateFlow<Int?>(null)
         // One page per API key: the keys split the window between them, so the
         // pages ahead translate in parallel instead of one after another.
