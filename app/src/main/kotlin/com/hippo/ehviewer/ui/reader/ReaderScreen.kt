@@ -471,6 +471,7 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
             maxBatchSize = preloadLimit,
             status = translatorState.status(currentPage),
             translation = translatorState.translations[currentPage],
+            retranslateProgress = translatorState.retranslateProgress,
             onTranslateCurrent = { manualTranslateRequest++ },
             onRetranslateNext = { count ->
                 // Drops the cached copies of the following pages and translates

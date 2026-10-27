@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hippo.ehviewer.translator.PageTranslation
 import com.hippo.ehviewer.translator.PageTranslator
+import com.hippo.ehviewer.translator.RetranslateProgress
 import com.hippo.ehviewer.translator.TranslationCache
 import com.hippo.ehviewer.translator.TranslationStatus
 import com.hippo.ehviewer.translator.TranslatorSettings
@@ -88,12 +89,14 @@ fun TranslatorSettingsDialog(
     maxBatchSize: Int,
     status: TranslationStatus,
     translation: PageTranslation?,
+    retranslateProgress: RetranslateProgress?,
     onTranslateCurrent: () -> Unit,
     onRetranslateNext: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val batchLimit = maxBatchSize.coerceAtLeast(1)
     val retranslateCount = minOf(settings.batchSize, batchLimit).coerceAtLeast(1)
+    val redoProgress = retranslateProgress
     LaunchedEffect(batchLimit) {
         if (settings.batchSize > batchLimit) settings.batchSize = batchLimit
     }
@@ -152,14 +155,28 @@ fun TranslatorSettingsDialog(
                     }
                     OutlinedButton(
                         onClick = { onRetranslateNext(retranslateCount) },
-                        enabled = !status.isBusy,
+                        enabled = !status.isBusy && redoProgress == null,
                     ) {
-                        Text(
-                            text = "Redo translation next $retranslateCount ${pageWord(retranslateCount)}",
-                            fontSize = 11.sp,
-                            textAlign = TextAlign.Center,
-                            maxLines = 2,
-                        )
+                        if (redoProgress != null) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Translating ${redoProgress.done + 1} of ${redoProgress.total}…",
+                                fontSize = 11.sp,
+                                textAlign = TextAlign.Center,
+                                maxLines = 2,
+                            )
+                        } else {
+                            Text(
+                                text = "Redo translation next $retranslateCount ${pageWord(retranslateCount)}",
+                                fontSize = 11.sp,
+                                textAlign = TextAlign.Center,
+                                maxLines = 2,
+                            )
+                        }
                     }
                 }
 

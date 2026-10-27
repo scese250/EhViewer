@@ -2,7 +2,10 @@ package com.hippo.ehviewer.translator
 
 import android.graphics.Bitmap
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import coil3.BitmapImage
 import com.ehviewer.core.util.logcat
@@ -37,6 +40,9 @@ private const val MAX_FAILED_RETRIES = 2
 private const val EMPTY_RETRY_DELAY_MS = 2_000L
 private const val FAILED_RETRY_DELAY_MS = 10_000L
 private const val AHEAD_POLL_MS = 150L
+
+/** Progress of the manual "redo translation" batch. */
+data class RetranslateProgress(val done: Int, val total: Int)
 
 /**
  * State of the translation of a single page, shown in the translator dialog.
@@ -74,6 +80,10 @@ class ReaderTranslationState(
     val settings: TranslatorSettings,
 ) {
     val translations = mutableStateMapOf<Int, PageTranslation>()
+
+    /** Non-null while the manual "redo translation" batch is running. */
+    var retranslateProgress by mutableStateOf<RetranslateProgress?>(null)
+        private set
 
     private val statuses = mutableStateMapOf<Int, TranslationStatus>()
 
@@ -374,13 +384,23 @@ class ReaderTranslationState(
      * pages the user reads carry a fresh translation (new prompt, new bubbles).
      */
     suspend fun retranslateFollowing(index: Int, count: Int) {
-        var pending = count.coerceIn(1, MAX_RETRANSLATE_PAGES)
+        if (retranslateProgress != null) return
+        val available = (pageLoader.size - index - 1).coerceAtLeast(0)
+        val total = minOf(count.coerceIn(1, MAX_RETRANSLATE_PAGES), available)
+        if (total == 0) return
+        var pending = total
         var next = index + 1
-        while (pending > 0 && next < pageLoader.size) {
-            resetPage(next)
-            translatePage(next)
-            next++
-            pending--
+        retranslateProgress = RetranslateProgress(0, total)
+        try {
+            while (pending > 0 && next < pageLoader.size) {
+                resetPage(next)
+                translatePage(next)
+                next++
+                pending--
+                retranslateProgress = RetranslateProgress(total - pending, total)
+            }
+        } finally {
+            retranslateProgress = null
         }
     }
 
