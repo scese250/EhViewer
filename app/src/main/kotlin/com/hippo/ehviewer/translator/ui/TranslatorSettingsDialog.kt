@@ -8,9 +8,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -52,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -65,6 +66,8 @@ import com.hippo.ehviewer.translator.PageTranslator
 import com.hippo.ehviewer.translator.TranslationCache
 import com.hippo.ehviewer.translator.TranslationStatus
 import com.hippo.ehviewer.translator.TranslatorSettings
+import com.hippo.ehviewer.util.addTextToClipboard
+import java.util.Locale
 import kotlinx.coroutines.launch
 
 private const val SECTION_LANGUAGES = "languages"
@@ -152,7 +155,7 @@ fun TranslatorSettingsDialog(
                         enabled = !status.isBusy,
                     ) {
                         Text(
-                            text = "Redo translation next $retranslateCount pages",
+                            text = "Redo translation next $retranslateCount ${pageWord(retranslateCount)}",
                             fontSize = 11.sp,
                             textAlign = TextAlign.Center,
                             maxLines = 2,
@@ -165,7 +168,7 @@ fun TranslatorSettingsDialog(
                 // Pausa de la traducción automática: vive fuera de las
                 // categorías porque se usa a mitad de lectura.
                 SettingSwitch(
-                    title = if (settings.autoTranslate) "Auto-translate: on" else "Auto-translate: paused",
+                    title = if (settings.autoTranslate) "Translation: on" else "Translation: paused",
                     subtitle = if (settings.autoTranslate) {
                         "Translates the current page and the next ones while you read. Tap to pause."
                     } else {
@@ -265,27 +268,11 @@ fun TranslatorSettingsDialog(
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        text = "API keys:",
-                                        fontWeight = FontWeight.SemiBold,
-                                        style = MaterialTheme.typography.bodySmall,
-                                    )
-                                    Text(
-                                        text = "${keys.size} detected",
-                                        fontWeight = FontWeight.Bold,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = if (keys.isNotEmpty()) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            MaterialTheme.colorScheme.error
-                                        },
-                                    )
-                                }
+                                Text(
+                                    text = "API keys:",
+                                    fontWeight = FontWeight.SemiBold,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
 
                                 Spacer(modifier = Modifier.height(6.dp))
 
@@ -383,28 +370,29 @@ fun TranslatorSettingsDialog(
                                             )
                                         }
                                     }
-                                    // A "+" under every field, never between them:
-                                    // adding a key always appends one at the end.
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(start = 26.dp, end = 48.dp),
-                                        contentAlignment = Alignment.Center,
+                                }
+
+                                // A single "+" under the last field: adding a key
+                                // always appends one at the end of the list.
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 26.dp, end = 48.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    IconButton(
+                                        onClick = {
+                                            apiKeys.add("")
+                                            revealedKey = -1
+                                            publishKeys()
+                                        },
                                     ) {
-                                        IconButton(
-                                            onClick = {
-                                                apiKeys.add("")
-                                                revealedKey = -1
-                                                publishKeys()
-                                            },
-                                        ) {
-                                            Icon(Icons.Filled.Add, contentDescription = "Add another key")
-                                        }
+                                        Icon(Icons.Filled.Add, contentDescription = "Add another key")
                                     }
                                 }
 
                                 Text(
-                                    text = "💡 Each key translates its own page, so more keys mean more pages translated at the same time.",
+                                    text = "API keys work in parallel, so translation is faster.",
                                     fontSize = 11.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -736,13 +724,15 @@ fun TranslatorSettingsDialog(
                         SectionTitle("Translation cache")
 
                         val stats = remember(cacheStamp) { TranslationCache.stats() }
+                        val pageLabel = pageWord(stats.pages)
+                        val pronoun = if (stats.pages == 1) "it" else "they"
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                text = "${stats.pages} pages saved",
+                                text = "${stats.pages} $pageLabel translated",
                                 fontWeight = FontWeight.SemiBold,
                                 style = MaterialTheme.typography.bodyMedium,
                             )
@@ -753,19 +743,12 @@ fun TranslatorSettingsDialog(
                             )
                         }
 
-                        Text(
-                            text = "Kept in the app storage and survives restarts, so coming back to a gallery " +
-                                "does not translate its pages again. It is cleared only when you change the " +
-                                "model, the languages or the instructions (system or user).",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-
                         Spacer(modifier = Modifier.height(8.dp))
 
                         if (confirmClearCache) {
                             Text(
-                                text = "The ${stats.pages} saved pages will be deleted; they will have to be translated again.",
+                                text = "The ${stats.pages} translated $pageLabel will be deleted; " +
+                                    "$pronoun will have to be translated again.",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.error,
                             )
@@ -803,16 +786,10 @@ fun TranslatorSettingsDialog(
 
                 AnimatedVisibility(visible = openSection == SECTION_PRELOAD) {
                     Column {
-                        SectionTitle("Preload")
+                        SectionTitle("Pre-translation settings")
 
                         Text(
-                            text = if (settings.autoTranslate) {
-                                "On (pause and resume it above). It keeps the current page and the next " +
-                                    "${settings.batchSize.coerceAtMost(batchLimit)} ready; the batch moves with you " +
-                                    "as you change pages. EhViewer preload limit: $batchLimit."
-                            } else {
-                                "Paused (resume it above): nothing is translated while you read."
-                            },
+                            text = "Set how many preloaded pages to translate.",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -838,15 +815,6 @@ fun TranslatorSettingsDialog(
                                 )
                             }
                         }
-
-                        Spacer(modifier = Modifier.height(4.dp))
-
-                        Text(
-                            text = "\"Redo translation next $retranslateCount pages\" drops the saved copy of " +
-                                "those pages and reads them again with the current settings, without leaving the gallery.",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                     }
                 }
             }
@@ -862,6 +830,8 @@ fun TranslatorSettingsDialog(
 }
 
 private fun nextSection(current: String?, section: String): String? = if (current == section) null else section
+
+private fun pageWord(count: Int): String = if (count == 1) "page" else "pages"
 
 private fun formatBytes(bytes: Long): String = when {
     bytes >= 1024 * 1024 -> "%.1f MB".format(bytes / 1024f / 1024f)
@@ -988,16 +958,9 @@ private fun SettingChips(
     Spacer(modifier = Modifier.height(8.dp))
 }
 
-private fun TranslationStatus.busyLabel(): String = when (this) {
-    TranslationStatus.WaitingForPage -> "Waiting for the image…"
-    TranslationStatus.RecognizingText -> "Recognizing text…"
-    TranslationStatus.ReadingPage -> "The AI is reading the page…"
-    TranslationStatus.TranslatingText -> "Translating text…"
-    else -> "Translating…"
-}
-
 @Composable
 private fun TranslationStatusCard(status: TranslationStatus, translation: PageTranslation?) {
+    val context = LocalContext.current
     val container = when (status) {
         is TranslationStatus.Failed -> MaterialTheme.colorScheme.errorContainer
         TranslationStatus.Done -> MaterialTheme.colorScheme.secondaryContainer
@@ -1011,29 +974,21 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
     val title = when (status) {
         TranslationStatus.Idle -> "Not translated"
         TranslationStatus.WaitingForPage -> "Preparing the page"
-        TranslationStatus.RecognizingText -> "Recognizing text"
         TranslationStatus.ReadingPage -> "AI is reading the page"
-        TranslationStatus.TranslatingText -> "Translating"
         TranslationStatus.Done -> "Translation ready"
         is TranslationStatus.Failed -> "Translation failed"
     }
     val detail = when (status) {
         TranslationStatus.Idle -> "This page has not been translated yet."
         TranslationStatus.WaitingForPage -> "Waiting for the image to download and decode."
-        TranslationStatus.RecognizingText -> "The AI is locating the balloons on the page."
-        TranslationStatus.ReadingPage -> "Gemini is reading the page text and measuring every balloon."
-        TranslationStatus.TranslatingText -> "Sending the texts to Gemini."
+        TranslationStatus.ReadingPage -> "Gemini is translating"
         TranslationStatus.Done -> translation?.let { page ->
             if (page.bubbles.isEmpty()) {
                 "The AI found no text on this page. Nothing was saved for it, so it is tried again " +
                     "the next time you open it."
             } else {
-                buildString {
-                    append("${page.bubbles.size} balloons · ${page.engineName}")
-                    val sfxCount = page.bubbles.count { it.isSfx }
-                    if (sfxCount > 0) append(" · $sfxCount SFX")
-                    append("\nTranslation ${page.translateDurationMs} ms")
-                }
+                val seconds = page.translateDurationMs / 1000.0
+                "Translation is ready. Took ${String.format(Locale.US, "%.1f", seconds)}s."
             }
         } ?: "Page translated."
         is TranslationStatus.Failed -> status.message
@@ -1052,9 +1007,7 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
         ) {
             when (status) {
                 TranslationStatus.WaitingForPage,
-                TranslationStatus.RecognizingText,
                 TranslationStatus.ReadingPage,
-                TranslationStatus.TranslatingText,
                 -> CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
                     strokeWidth = 2.dp,
@@ -1092,16 +1045,30 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
                     ?.takeIf { it.isNotBlank() }
                 if (rawResponse != null) {
                     Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = rawResponse,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 9.sp,
-                        lineHeight = 12.sp,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 220.dp)
-                            .verticalScroll(rememberScrollState()),
-                    )
+                    Card(
+                        modifier = Modifier.fillMaxWidth().height(160.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                        ),
+                    ) {
+                        Text(
+                            text = rawResponse,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 9.sp,
+                            lineHeight = 12.sp,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(8.dp)
+                                .verticalScroll(rememberScrollState()),
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedButton(
+                        onClick = { with(context) { addTextToClipboard(rawResponse) } },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Copy error text")
+                    }
                 }
             }
         }

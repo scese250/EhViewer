@@ -45,9 +45,7 @@ private const val AHEAD_POLL_MS = 150L
 sealed interface TranslationStatus {
     data object Idle : TranslationStatus
     data object WaitingForPage : TranslationStatus
-    data object RecognizingText : TranslationStatus
     data object ReadingPage : TranslationStatus
-    data object TranslatingText : TranslationStatus
     data object Done : TranslationStatus
 
     /**
@@ -60,8 +58,7 @@ sealed interface TranslationStatus {
     ) : TranslationStatus
 
     val isBusy: Boolean
-        get() = this is WaitingForPage || this is RecognizingText ||
-            this is ReadingPage || this is TranslatingText
+        get() = this is WaitingForPage || this is ReadingPage
 }
 
 /**
