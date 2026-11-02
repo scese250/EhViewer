@@ -336,6 +336,13 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
                             ReaderPageSheetMeta(
                                 retry = { pageLoader.retryPage(page.index) },
                                 retryOrigin = { pageLoader.retryPage(page.index, true) },
+                                retranslate = {
+                                    translatorState.resetPage(page.index)
+                                    launch { translatorState.translatePage(page.index) }
+                                }.takeIf {
+                                    translatorSettings.getGeminiApiKeys().isNotEmpty() &&
+                                        translatorSettings.autoTranslate
+                                },
                                 share = { launchIO { with(pageLoader) { shareImage(page, info) } } },
                                 copy = { launchIO { with(pageLoader) { copy(page) } } },
                                 save = { launchIO { with(pageLoader) { save(page) } } },
