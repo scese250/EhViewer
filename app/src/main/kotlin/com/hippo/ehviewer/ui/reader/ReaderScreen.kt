@@ -339,6 +339,7 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
                                 retranslate = {
                                     translatorState.resetPage(page.index)
                                     launch { translatorState.translatePage(page.index) }
+                                    Unit
                                 }.takeIf {
                                     translatorSettings.getGeminiApiKeys().isNotEmpty() &&
                                         translatorSettings.autoTranslate
