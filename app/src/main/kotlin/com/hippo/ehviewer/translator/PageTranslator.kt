@@ -144,6 +144,8 @@ object PageTranslator {
     }
 
     private fun cleanMangaText(text: String): String = text
+        .replace("\\n", " ")
+        .replace("\\r", " ")
         .replace(Regex("[\\r\\n]+"), " ")
         .replace(Regex("([¿¡])\\s+"), "$1")
         .replace(Regex("\\s+([!?,.:;])"), "$1")

@@ -222,6 +222,8 @@ fun TranslationOverlay(
                     bubble.translatedText
                 }
                 val displayText = rawText
+                    .replace("\\n", " ")
+                    .replace("\\r", " ")
                     .replace(Regex("[\\r\\n]+"), " ")
                     .replace(Regex("([¿¡])\\s+"), "$1")
                     .replace(Regex("\\s+([!?,.:;])"), "$1")
@@ -525,6 +527,8 @@ private fun DynamicBubbleView(
         bubble.translatedText
     }
     val displayText = rawText
+        .replace("\\n", " ")
+        .replace("\\r", " ")
         .replace(Regex("[\\r\\n]+"), " ")
         .replace(Regex("([¿¡])\\s+"), "$1")
         .replace(Regex("\\s+([!?,.:;])"), "$1")
