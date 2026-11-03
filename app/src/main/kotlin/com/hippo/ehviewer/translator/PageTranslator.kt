@@ -503,6 +503,25 @@ object PageTranslator {
                         putThinkingConfig(thinkingLevel)
                     },
                 )
+                put(
+                    "safetySettings",
+                    JSONArray().apply {
+                        listOf(
+                            "HARM_CATEGORY_HARASSMENT",
+                            "HARM_CATEGORY_HATE_SPEECH",
+                            "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                            "HARM_CATEGORY_DANGEROUS_CONTENT",
+                            "HARM_CATEGORY_CIVIC_INTEGRITY",
+                        ).forEach { category ->
+                            put(
+                                JSONObject().apply {
+                                    put("category", category)
+                                    put("threshold", "BLOCK_NONE")
+                                },
+                            )
+                        }
+                    },
+                )
             }
             return postGemini(
                 apiKeys,
