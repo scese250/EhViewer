@@ -1086,7 +1086,7 @@ object PageTranslator {
                 },
             )
             put("temperature", 0.1)
-            put("max_tokens", 8192)
+            put("max_tokens", 16384)
             when (thinkingLevel) {
                 TranslatorSettings.THINKING_LOW -> put("reasoning_effort", "low")
                 TranslatorSettings.THINKING_MEDIUM -> put("reasoning_effort", "medium")
@@ -1128,17 +1128,33 @@ object PageTranslator {
         if (choices.length() == 0) {
             throw TranslationFailure("Others AI returned empty choices", root.toString())
         }
-        val message = choices.optJSONObject(0)?.optJSONObject("message")
+        val choice = choices.optJSONObject(0)
+            ?: throw TranslationFailure("Others AI returned invalid choice", root.toString())
+        val message = choice.optJSONObject("message")
             ?: throw TranslationFailure("Others AI returned no message", root.toString())
-        val content = message.optString("content").trim()
-        if (content.isEmpty() || content == "null") {
-            val reasoning = message.optString("reasoning_content").trim()
-            if (reasoning.isNotEmpty() && reasoning != "null") {
-                return reasoning
-            }
-            throw TranslationFailure("Others AI returned empty content", root.toString())
+
+        val rawContent = if (message.isNull("content")) "" else message.optString("content", "").trim()
+        val content = if (rawContent.equals("null", ignoreCase = true)) "" else rawContent
+
+        val rawReasoning = if (message.isNull("reasoning_content")) "" else message.optString("reasoning_content", "").trim()
+        val reasoning = if (rawReasoning.equals("null", ignoreCase = true)) "" else rawReasoning
+
+        if (content.isNotEmpty()) {
+            return content
         }
-        return content
+        if (reasoning.isNotEmpty()) {
+            return reasoning
+        }
+
+        val finishReason = choice.optString("finish_reason")
+        if (finishReason.equals("length", ignoreCase = true)) {
+            throw TranslationFailure(
+                "El modelo agotó los tokens durante el razonamiento (finish_reason: length)",
+                root.toString(),
+            )
+        }
+
+        throw TranslationFailure("Others AI returned empty content", root.toString())
     }
 
     private fun postOpenAi(
