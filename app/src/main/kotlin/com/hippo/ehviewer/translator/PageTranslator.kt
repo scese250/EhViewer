@@ -64,9 +64,7 @@ object PageTranslator {
     /** Reported before each expensive step so the UI can show what is running. */
     enum class Phase { VISION, }
 
-    /** Largest side sent to the model: enough to read balloons, small enough to stay fast. */
-    private const val VISION_MAX_EDGE = 1600
-    private const val VISION_JPEG_QUALITY = 88
+    private const val VISION_JPEG_QUALITY = 100
     private const val GEMINI_READ_TIMEOUT_MS = 15_000
     private const val GEMINI_VISION_READ_TIMEOUT_MS = 60_000
     private const val MAX_EXTRA_BUBBLES = 4
@@ -441,11 +439,10 @@ object PageTranslator {
             } catch (e: OutOfMemoryError) {
                 error("Not enough memory to prepare the image")
             }
-            val scale = min(1f, VISION_MAX_EDGE.toFloat() / max(bitmap.width, bitmap.height))
             val size = EncodedVisionImage(
                 base64 = "",
-                sentWidth = (bitmap.width * scale).roundToInt().coerceAtLeast(1),
-                sentHeight = (bitmap.height * scale).roundToInt().coerceAtLeast(1),
+                sentWidth = bitmap.width,
+                sentHeight = bitmap.height,
             )
             val base64 = try {
                 ByteArrayOutputStream().use { stream ->
@@ -542,20 +539,13 @@ object PageTranslator {
     }
 
     private fun annotateForVision(bitmap: Bitmap): Bitmap {
-        val scale = min(1f, VISION_MAX_EDGE.toFloat() / max(bitmap.width, bitmap.height))
-        val width = (bitmap.width * scale).roundToInt().coerceAtLeast(1)
-        val height = (bitmap.height * scale).roundToInt().coerceAtLeast(1)
+        val width = bitmap.width
+        val height = bitmap.height
 
         // Never draw on the reader's bitmap: it is still pinned for display.
         val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
-        canvas.drawBitmap(
-            bitmap,
-            Matrix().apply {
-                setScale(width / bitmap.width.toFloat(), height / bitmap.height.toFloat())
-            },
-            Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG),
-        )
+        canvas.drawBitmap(bitmap, 0f, 0f, null)
         drawVisionGrid(canvas, width, height)
 
         return output
