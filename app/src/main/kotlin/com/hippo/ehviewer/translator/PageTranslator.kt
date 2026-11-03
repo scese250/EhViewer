@@ -1036,8 +1036,7 @@ object PageTranslator {
             base64 to size
         }
 
-        val cleanBaseUrl = baseUrl.trim().trimEnd('/')
-        val endpoint = if (cleanBaseUrl.endsWith("/chat/completions")) cleanBaseUrl else "$cleanBaseUrl/chat/completions"
+        val endpoint = resolveOpenAiEndpoint(baseUrl)
         val effectiveSystemPrompt = systemPrompt.ifBlank { TranslatorSettings.DEFAULT_SYSTEM_PROMPT }
         val formattedSysPrompt = TranslatorSettings.formatGeminiPrompt(effectiveSystemPrompt, sourceLang, targetLang)
         val userInstructionText = formatUserPrompt(userPrompt, sourceLang, targetLang)
@@ -1113,6 +1112,16 @@ object PageTranslator {
         )
     }
 
+    fun resolveOpenAiEndpoint(baseUrl: String): String {
+        val clean = baseUrl.trim().trimEnd('/')
+        if (clean.isBlank()) return ""
+        return when {
+            clean.endsWith("/chat/completions") -> clean
+            clean.endsWith("/v1") || clean.endsWith("/v1beta") -> "$clean/chat/completions"
+            else -> "$clean/v1/chat/completions"
+        }
+    }
+
     private fun extractOpenAiContent(root: JSONObject): String {
         val choices = root.optJSONArray("choices")
             ?: throw TranslationFailure("Others AI returned no choices", root.toString())
@@ -1122,7 +1131,11 @@ object PageTranslator {
         val message = choices.optJSONObject(0)?.optJSONObject("message")
             ?: throw TranslationFailure("Others AI returned no message", root.toString())
         val content = message.optString("content").trim()
-        if (content.isEmpty()) {
+        if (content.isEmpty() || content == "null") {
+            val reasoning = message.optString("reasoning_content").trim()
+            if (reasoning.isNotEmpty() && reasoning != "null") {
+                return reasoning
+            }
             throw TranslationFailure("Others AI returned empty content", root.toString())
         }
         return content
@@ -1160,9 +1173,14 @@ object PageTranslator {
                     return JSONObject(body)
                 }
                 val errorText = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                val responseMsg = if (responseCode == 404 && errorText.contains("404 page not found", ignoreCase = true)) {
+                    "${errorText.trim()} (Verifica el modelo y la Base URL. En proveedores como NVIDIA se requiere el prefijo, ej: mistralai/...)"
+                } else {
+                    errorText.ifBlank { "HTTP $responseCode" }
+                }
                 lastError = TranslationFailure(
                     message = "Others AI API ($responseCode)",
-                    rawResponse = errorText.ifBlank { "HTTP $responseCode" },
+                    rawResponse = responseMsg,
                 )
                 if (responseCode == 400 && request.has("reasoning_effort")) {
                     request.remove("reasoning_effort")
@@ -1217,13 +1235,9 @@ object PageTranslator {
                             )
                         },
                     )
-                    put("max_tokens", 10)
+                    put("max_tokens", 50)
                 }
-                val endpoint = if (cleanBaseUrl.endsWith("/chat/completions")) {
-                    cleanBaseUrl
-                } else {
-                    "$cleanBaseUrl/chat/completions"
-                }
+                val endpoint = resolveOpenAiEndpoint(cleanBaseUrl)
                 val url = URI.create(endpoint).toURL()
                 val conn = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
@@ -1240,7 +1254,10 @@ object PageTranslator {
                     successCount++
                 } else {
                     val err = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "Error ${conn.responseCode}"
-                    errors.add("Key #${index + 1}: $err")
+                    val hint = if (conn.responseCode == 404 && err.contains("404 page not found", ignoreCase = true)) {
+                        " (Verifica que el modelo incluya el prefijo del creador, ej: 'mistralai/$cleanModel' o 'nvidia/$cleanModel')"
+                    } else ""
+                    errors.add("Key #${index + 1}: ${err.trim()}$hint")
                 }
                 conn.disconnect()
             }.onFailure {
