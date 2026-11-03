@@ -246,6 +246,9 @@ dependencies {
 
     implementation(libs.telephoto.zoomable)
 
+    implementation(libs.play.services.mlkit.text.recognition.japanese)
+    implementation(libs.play.services.base)
+
     implementation(libs.ktor.client.okhttp)
 
     implementation(libs.bundles.kotlinx.serialization)

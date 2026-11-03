@@ -264,6 +264,10 @@ class ReaderTranslationState(
                     othersAiThinkingLevel = settings.othersAiThinkingLevel,
                     othersAiSystemPrompt = settings.othersAiSystemPrompt,
                     othersAiUserPrompt = settings.othersAiUserPrompt,
+                    ocrFallbackEnabled = settings.ocrFallbackEnabled,
+                    ocrUseOthersAiForRejectedText = settings.ocrUseOthersAiForRejectedText,
+                    ocrSystemPrompt = settings.ocrSystemPrompt,
+                    ocrUserPrompt = settings.ocrUserPrompt,
                     onPhase = { phase ->
                         statuses[index] = when (phase) {
                             PageTranslator.Phase.VISION -> TranslationStatus.ReadingPage

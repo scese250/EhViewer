@@ -126,6 +126,9 @@ splitties-systemservices = { module = "com.louiscad.splitties:splitties-systemse
 
 telephoto-zoomable = { module = "me.saket.telephoto:zoomable", version.ref = "telephoto" }
 
+play-services-base = { module = "com.google.android.gms:play-services-base", version = "18.5.0" }
+play-services-mlkit-text-recognition-japanese = { module = "com.google.android.gms:play-services-mlkit-text-recognition-japanese", version = "16.0.1" }
+
 androidx-junit = { module = "androidx.test.ext:junit", version.ref = "junit" }
 androidx-uiautomator = { module = "androidx.test.uiautomator:uiautomator", version.ref = "uiautomator" }
 androidx-benchmark-macro-junit4 = { module = "androidx.benchmark:benchmark-macro-junit4", version.ref = "benchmark" }

@@ -100,10 +100,18 @@ object PageTranslator {
         othersAiThinkingLevel: String = TranslatorSettings.THINKING_MINIMAL,
         othersAiSystemPrompt: String = TranslatorSettings.DEFAULT_SYSTEM_PROMPT,
         othersAiUserPrompt: String = "",
+        ocrFallbackEnabled: Boolean = false,
+        ocrUseOthersAiForRejectedText: Boolean = false,
+        ocrSystemPrompt: String = TranslatorSettings.DEFAULT_OCR_SYSTEM_PROMPT,
+        ocrUserPrompt: String = "",
         onPhase: (Phase) -> Unit = {},
     ): PageTranslation = withContext(Dispatchers.Default) {
         val canUseFallback = othersAiUseAsFallback &&
             othersAiBaseUrl.isNotBlank() &&
+            othersAiApiKeys.isNotEmpty() &&
+            othersAiModel.isNotBlank()
+
+        val canUseOthersAiText = othersAiBaseUrl.isNotBlank() &&
             othersAiApiKeys.isNotEmpty() &&
             othersAiModel.isNotBlank()
 
@@ -113,6 +121,7 @@ object PageTranslator {
 
         var bubbles: List<TranslatedBubble> = emptyList()
         var engineUsed = "Gemini"
+        var ocrTimeMs = 0L
 
         suspend fun readPage(): VisionResult = translateWithGeminiVision(
             bitmap = bitmap,
@@ -133,7 +142,106 @@ object PageTranslator {
                     engineUsed = "Gemini (${geminiModel.removePrefix("gemini-")})"
                     geminiResult
                 } catch (e: Exception) {
-                    if (canUseFallback && isGeminiImageRejected(e)) {
+                    if (isGeminiImageRejected(e)) {
+                        if (ocrFallbackEnabled && OcrManager.isModelAvailable()) {
+                            val ocrStart = System.currentTimeMillis()
+                            val ocrBlocks = OcrManager.extractTextBlocks(bitmap)
+                            ocrTimeMs = System.currentTimeMillis() - ocrStart
+                            if (ocrBlocks.isEmpty()) {
+                                engineUsed = "Google OCR (No text)"
+                                VisionResult(emptyList())
+                            } else {
+                                val texts = ocrBlocks.map { it.text }
+                                var translatedTexts: List<String>? = null
+                                var textEngine = "Gemini Text"
+                                try {
+                                    val geminiTexts = translateOcrTextsWithGemini(
+                                        texts = texts,
+                                        sourceLang = sourceLang,
+                                        targetLang = targetLang,
+                                        systemPrompt = ocrSystemPrompt,
+                                        userPrompt = ocrUserPrompt,
+                                        apiKeys = geminiApiKeys,
+                                        model = geminiModel,
+                                        thinkingLevel = thinkingLevel,
+                                    )
+                                    if (ocrUseOthersAiForRejectedText && canUseOthersAiText &&
+                                        geminiTexts.isNotEmpty() && geminiTexts.all { isReject(it) }
+                                    ) {
+                                        translatedTexts = translateOcrTextsWithOthersAi(
+                                            texts = texts,
+                                            sourceLang = sourceLang,
+                                            targetLang = targetLang,
+                                            systemPrompt = ocrSystemPrompt,
+                                            userPrompt = ocrUserPrompt,
+                                            baseUrl = othersAiBaseUrl,
+                                            apiKeys = othersAiApiKeys,
+                                            model = othersAiModel,
+                                            thinkingLevel = othersAiThinkingLevel,
+                                        )
+                                        textEngine = "Others AI Text ($othersAiModel)"
+                                    } else {
+                                        translatedTexts = geminiTexts
+                                    }
+                                } catch (textEx: Exception) {
+                                    if (ocrUseOthersAiForRejectedText && canUseOthersAiText) {
+                                        translatedTexts = translateOcrTextsWithOthersAi(
+                                            texts = texts,
+                                            sourceLang = sourceLang,
+                                            targetLang = targetLang,
+                                            systemPrompt = ocrSystemPrompt,
+                                            userPrompt = ocrUserPrompt,
+                                            baseUrl = othersAiBaseUrl,
+                                            apiKeys = othersAiApiKeys,
+                                            model = othersAiModel,
+                                            thinkingLevel = othersAiThinkingLevel,
+                                        )
+                                        textEngine = "Others AI Text ($othersAiModel)"
+                                    } else {
+                                        throw textEx
+                                    }
+                                }
+                                val bubblesList = mutableListOf<TranslatedBubble>()
+                                for (i in ocrBlocks.indices) {
+                                    val block = ocrBlocks[i]
+                                    val trans = translatedTexts?.getOrNull(i).orEmpty()
+                                    if (trans.isBlank() || isReject(trans)) continue
+                                    val clipped = Rect(block.boundingBox).apply {
+                                        left = left.coerceIn(0, bitmap.width)
+                                        top = top.coerceIn(0, bitmap.height)
+                                        right = right.coerceIn(0, bitmap.width)
+                                        bottom = bottom.coerceIn(0, bitmap.height)
+                                    }
+                                    if (clipped.width() < 4 || clipped.height() < 4) continue
+                                    bubblesList += TranslatedBubble(
+                                        id = bubblesList.size,
+                                        originalText = block.text,
+                                        translatedText = cleanMangaText(trans),
+                                        boundingBox = clipped,
+                                        exactBox = true,
+                                    )
+                                }
+                                engineUsed = "Google OCR + $textEngine"
+                                VisionResult(bubblesList)
+                            }
+                        } else if (canUseFallback) {
+                            val fallbackResult = translateWithOpenAiVision(
+                                bitmap = bitmap,
+                                sourceLang = sourceLang,
+                                targetLang = targetLang,
+                                systemPrompt = othersAiSystemPrompt,
+                                userPrompt = othersAiUserPrompt,
+                                baseUrl = othersAiBaseUrl,
+                                apiKeys = othersAiApiKeys,
+                                model = othersAiModel,
+                                thinkingLevel = othersAiThinkingLevel,
+                            )
+                            engineUsed = "Others AI ($othersAiModel)"
+                            fallbackResult
+                        } else {
+                            throw e
+                        }
+                    } else if (canUseFallback) {
                         val fallbackResult = translateWithOpenAiVision(
                             bitmap = bitmap,
                             sourceLang = sourceLang,
@@ -172,9 +280,9 @@ object PageTranslator {
         PageTranslation(
             pageIndex = pageIndex,
             bubbles = bubbles,
-            ocrDurationMs = 0L,
+            ocrDurationMs = ocrTimeMs,
             translateDurationMs = transTime,
-            totalDurationMs = transTime,
+            totalDurationMs = transTime + ocrTimeMs,
             engineName = engineUsed,
             bitmapWidth = bitmap.width,
             bitmapHeight = bitmap.height,
@@ -576,6 +684,182 @@ object PageTranslator {
             sentWidth = encodedImage.sentWidth,
             sentHeight = encodedImage.sentHeight,
         )
+    }
+
+    private suspend fun translateOcrTextsWithGemini(
+        texts: List<String>,
+        sourceLang: String,
+        targetLang: String,
+        systemPrompt: String,
+        userPrompt: String,
+        apiKeys: List<String>,
+        model: String,
+        thinkingLevel: String,
+    ): List<String> = slotsFor(apiKeys.size).withPermit {
+        withContext(Dispatchers.IO) {
+            val textsJson = JSONArray(texts).toString()
+            val userPromptFormatted = formatUserPrompt(userPrompt, sourceLang, targetLang)
+            val promptText = if (userPromptFormatted.isNotBlank()) {
+                "$textsJson\n\nAdditional instructions:\n$userPromptFormatted"
+            } else {
+                textsJson
+            }
+
+            val requestJson = JSONObject().apply {
+                put(
+                    "contents",
+                    JSONArray().apply {
+                        put(
+                            JSONObject().apply {
+                                put("role", "user")
+                                put(
+                                    "parts",
+                                    JSONArray().apply {
+                                        put(JSONObject().apply { put("text", promptText) })
+                                    },
+                                )
+                            },
+                        )
+                    },
+                )
+                val effectiveSystemPrompt = systemPrompt.ifBlank { TranslatorSettings.DEFAULT_OCR_SYSTEM_PROMPT }
+                put("systemInstruction", systemInstruction(effectiveSystemPrompt, sourceLang, targetLang))
+                put(
+                    "generationConfig",
+                    JSONObject().apply {
+                        put("temperature", 0.1)
+                        put("responseMimeType", "application/json")
+                        put("maxOutputTokens", MAX_OUTPUT_TOKENS)
+                        putThinkingConfig(thinkingLevel)
+                    },
+                )
+                put(
+                    "safetySettings",
+                    JSONArray().apply {
+                        listOf(
+                            "HARM_CATEGORY_HARASSMENT",
+                            "HARM_CATEGORY_HATE_SPEECH",
+                            "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                            "HARM_CATEGORY_DANGEROUS_CONTENT",
+                            "HARM_CATEGORY_CIVIC_INTEGRITY",
+                        ).forEach { category ->
+                            put(
+                                JSONObject().apply {
+                                    put("category", category)
+                                    put("threshold", "BLOCK_NONE")
+                                },
+                            )
+                        }
+                    },
+                )
+            }
+
+            val responseJson = postGemini(
+                apiKeys,
+                model,
+                requestJson,
+                readTimeoutFor(thinkingLevel, GEMINI_READ_TIMEOUT_MS),
+            )
+            val raw = candidateText(responseJson)
+            parseOcrTranslations(raw, texts.size)
+        }
+    }
+
+    private suspend fun translateOcrTextsWithOthersAi(
+        texts: List<String>,
+        sourceLang: String,
+        targetLang: String,
+        systemPrompt: String,
+        userPrompt: String,
+        baseUrl: String,
+        apiKeys: List<String>,
+        model: String,
+        thinkingLevel: String,
+    ): List<String> = withContext(Dispatchers.IO) {
+        val endpoint = resolveOpenAiEndpoint(baseUrl)
+        val effectiveSystemPrompt = systemPrompt.ifBlank { TranslatorSettings.DEFAULT_OCR_SYSTEM_PROMPT }
+        val formattedSysPrompt = TranslatorSettings.formatGeminiPrompt(effectiveSystemPrompt, sourceLang, targetLang)
+        val userPromptFormatted = formatUserPrompt(userPrompt, sourceLang, targetLang)
+        val textsJson = JSONArray(texts).toString()
+        val promptText = if (userPromptFormatted.isNotBlank()) {
+            "$textsJson\n\nAdditional instructions:\n$userPromptFormatted"
+        } else {
+            textsJson
+        }
+
+        val requestJson = JSONObject().apply {
+            put("model", model.trim())
+            put(
+                "messages",
+                JSONArray().apply {
+                    put(
+                        JSONObject().apply {
+                            put("role", "system")
+                            put("content", formattedSysPrompt)
+                        },
+                    )
+                    put(
+                        JSONObject().apply {
+                            put("role", "user")
+                            put("content", promptText)
+                        },
+                    )
+                },
+            )
+            put("temperature", 0.1)
+            put("max_tokens", 16384)
+            when (thinkingLevel) {
+                TranslatorSettings.THINKING_LOW -> put("reasoning_effort", "low")
+                TranslatorSettings.THINKING_MEDIUM -> put("reasoning_effort", "medium")
+                TranslatorSettings.THINKING_HIGH -> put("reasoning_effort", "high")
+            }
+        }
+
+        val responseJson = postOpenAi(
+            endpoint = endpoint,
+            apiKeys = apiKeys,
+            request = requestJson,
+            readTimeoutMs = readTimeoutFor(thinkingLevel, GEMINI_READ_TIMEOUT_MS),
+        )
+        val content = extractOpenAiContent(responseJson)
+        parseOcrTranslations(content, texts.size)
+    }
+
+    private fun parseOcrTranslations(raw: String, expectedCount: Int): List<String> {
+        val text = stripCodeFences(raw).trim()
+        val jsonArray = runCatching { JSONArray(text) }.getOrNull()
+            ?: run {
+                val start = text.indexOf('[')
+                val end = text.lastIndexOf(']')
+                if (start != -1 && end > start) {
+                    runCatching { JSONArray(text.substring(start, end + 1)) }.getOrNull()
+                } else {
+                    null
+                }
+            }
+            ?: run {
+                runCatching {
+                    val obj = JSONObject(text)
+                    val keys = obj.keys()
+                    while (keys.hasNext()) {
+                        val arr = obj.optJSONArray(keys.next())
+                        if (arr != null) return@runCatching arr
+                    }
+                    null
+                }.getOrNull()
+            }
+            ?: throw TranslationFailure("The model reply is not a valid JSON array", raw)
+
+        val result = mutableListOf<String>()
+        for (i in 0 until expectedCount) {
+            val translated = if (i < jsonArray.length()) {
+                cleanMangaText(jsonArray.optString(i, ""))
+            } else {
+                ""
+            }
+            result.add(translated)
+        }
+        return result
     }
 
     private fun annotateForVision(bitmap: Bitmap): Bitmap {

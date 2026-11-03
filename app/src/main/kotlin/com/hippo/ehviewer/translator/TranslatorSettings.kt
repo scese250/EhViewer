@@ -77,6 +77,30 @@ class TranslatorSettings(context: Context) {
         prefs.getString("others_ai_user_prompt", "").orEmpty(),
     )
 
+    var ocrModelDownloaded by mutableStateOf(prefs.getBoolean("ocr_model_downloaded", false))
+    var ocrFallbackEnabled by mutableStateOf(prefs.getBoolean("ocr_fallback_enabled", false))
+    var ocrUseOthersAiForRejectedText by mutableStateOf(
+        prefs.getBoolean("ocr_use_others_ai_rejected_text", false),
+    )
+    var ocrSystemPrompt by mutableStateOf(
+        run {
+            val saved = prefs.getString("ocr_system_prompt", null)
+            val version = prefs.getInt("ocr_system_prompt_version", 0)
+            if (saved.isNullOrBlank() || version < 1) {
+                prefs.edit()
+                    .putString("ocr_system_prompt", DEFAULT_OCR_SYSTEM_PROMPT)
+                    .putInt("ocr_system_prompt_version", 1)
+                    .apply()
+                DEFAULT_OCR_SYSTEM_PROMPT
+            } else {
+                saved
+            }
+        },
+    )
+    var ocrUserPrompt by mutableStateOf(
+        prefs.getString("ocr_user_prompt", "").orEmpty(),
+    )
+
     /**
      * Models pinned to the quick selector. The current model can be picked from
      * here, and every entry can be removed; the list is empty only if the user
@@ -212,6 +236,9 @@ class TranslatorSettings(context: Context) {
     }
 
     fun save() {
+        if (!ocrModelDownloaded) {
+            ocrFallbackEnabled = false
+        }
         // A field left empty must not reach the prompt: fall back to the
         // defaults, and turn a bare code into its name.
         sourceLang = normalizeLanguage(sourceLang, "Japanese")
@@ -234,6 +261,12 @@ class TranslatorSettings(context: Context) {
             .putString("others_ai_system_prompt", othersAiSystemPrompt)
             .putInt("others_ai_system_prompt_version", 1)
             .putString("others_ai_user_prompt", othersAiUserPrompt)
+            .putBoolean("ocr_model_downloaded", ocrModelDownloaded)
+            .putBoolean("ocr_fallback_enabled", ocrFallbackEnabled)
+            .putBoolean("ocr_use_others_ai_rejected_text", ocrUseOthersAiForRejectedText)
+            .putString("ocr_system_prompt", ocrSystemPrompt)
+            .putInt("ocr_system_prompt_version", 1)
+            .putString("ocr_user_prompt", ocrUserPrompt)
             .putString("thinking_level", thinkingLevel)
             .putString("bubble_style", bubbleStyle)
             .putFloat("outline_width", outlineWidth)
@@ -321,6 +354,18 @@ class TranslatorSettings(context: Context) {
             |
             |Reply with raw JSON only, without markdown fences or commentary:
             |{"bubbles":[{"ids":[],"box":[ymin,xmin,ymax,xmax],"source":"japanese text as printed","text":"{lang output} translation","kind":"dialogue"}],"extra":[{"box":[ymin,xmin,ymax,xmax],"source":"...","text":"...","kind":"sfx"}]}
+        """.trimMargin()
+
+        val DEFAULT_OCR_SYSTEM_PROMPT = """
+            |You are a professional manga translator.
+            |Your task is to translate extracted Japanese manga dialogue blocks into {lang output}.
+            |
+            |Rules:
+            |1. Translate each dialogue or sound effect block naturally, preserving tone, emotion, character personality, and manga nuances.
+            |2. Maintain reading flow and concise comic lettering phrasing suitable for speech bubbles.
+            |3. Do not add explanations, romanization, or notes.
+            |4. Return a raw JSON array of translated strings matching the exact order and length of the input list:
+            |["translated text 1", "translated text 2", ...]
         """.trimMargin()
 
         /** Codes older builds stored, so the language fields show a name. */

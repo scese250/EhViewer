@@ -23,6 +23,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Visibility
@@ -69,6 +71,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hippo.ehviewer.translator.OcrManager
 import com.hippo.ehviewer.translator.PageTranslation
 import com.hippo.ehviewer.translator.PageTranslator
 import com.hippo.ehviewer.translator.RetranslateProgress
@@ -81,6 +84,7 @@ import kotlinx.coroutines.launch
 
 private const val SECTION_LANGUAGES = "languages"
 private const val SECTION_AI = "ai"
+private const val SECTION_OCR = "ocr"
 private const val SECTION_STYLE = "style"
 private const val SECTION_FIT = "fit"
 private const val SECTION_PRELOAD = "preload"
@@ -120,6 +124,22 @@ fun TranslatorSettingsDialog(
     var confirmClearCache by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val keys = settings.getGeminiApiKeys()
+    val context = LocalContext.current
+    var isDownloadingModel by remember { mutableStateOf(false) }
+    var downloadProgress by remember { mutableIntStateOf(0) }
+    var downloadError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(openSection) {
+        if (openSection == SECTION_OCR) {
+            val available = OcrManager.checkModuleAvailability(context)
+            if (settings.ocrModelDownloaded != available) {
+                settings.ocrModelDownloaded = available
+                if (!available) {
+                    settings.ocrFallbackEnabled = false
+                }
+            }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -243,6 +263,9 @@ fun TranslatorSettingsDialog(
                     }
                     CategoryChip("IA", openSection == SECTION_AI) {
                         openSection = nextSection(openSection, SECTION_AI)
+                    }
+                    CategoryChip("OCR", openSection == SECTION_OCR) {
+                        openSection = nextSection(openSection, SECTION_OCR)
                     }
                     CategoryChip("Style", openSection == SECTION_STYLE) {
                         openSection = nextSection(openSection, SECTION_STYLE)
@@ -942,6 +965,165 @@ fun TranslatorSettingsDialog(
                     }
                 }
 
+                AnimatedVisibility(visible = openSection == SECTION_OCR) {
+                    Column {
+                        SectionTitle("Google OCR")
+
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            ),
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = "Google OCR (Japanese)",
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = if (settings.ocrModelDownloaded) {
+                                        "Status: Ready (Installed)"
+                                    } else {
+                                        "Status: Not downloaded (~10 MB)"
+                                    },
+                                    fontSize = 11.sp,
+                                    color = if (settings.ocrModelDownloaded) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            scope.launch {
+                                                isDownloadingModel = true
+                                                downloadError = null
+                                                downloadProgress = 0
+                                                val res = OcrManager.downloadModule(context) { progress ->
+                                                    downloadProgress = progress
+                                                }
+                                                isDownloadingModel = false
+                                                res.onSuccess {
+                                                    settings.ocrModelDownloaded = true
+                                                }.onFailure { e ->
+                                                    downloadError = e.message ?: "Download failed"
+                                                }
+                                            }
+                                        },
+                                        enabled = !isDownloadingModel,
+                                        modifier = Modifier.weight(1f),
+                                    ) {
+                                        if (isDownloadingModel) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(16.dp),
+                                                strokeWidth = 2.dp,
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = if (downloadProgress > 0) "$downloadProgress%" else "Downloading…",
+                                                fontSize = 11.sp,
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Default.Download,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp),
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = if (settings.ocrModelDownloaded) "Redownload" else "Download model",
+                                                fontSize = 11.sp,
+                                            )
+                                        }
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = {
+                                            OcrManager.deleteModule(context)
+                                            settings.ocrModelDownloaded = false
+                                            settings.ocrFallbackEnabled = false
+                                        },
+                                        enabled = settings.ocrModelDownloaded && !isDownloadingModel,
+                                        modifier = Modifier.weight(1f),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "Delete model",
+                                            fontSize = 11.sp,
+                                        )
+                                    }
+                                }
+
+                                downloadError?.let { err ->
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = err,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        SettingSwitch(
+                            title = "Use as fallback",
+                            subtitle = "When Gemini rejects an image, recognize Japanese text on-device with Google OCR and translate only the text",
+                            checked = settings.ocrFallbackEnabled && settings.ocrModelDownloaded,
+                            onCheckedChange = { settings.ocrFallbackEnabled = it },
+                            enabled = settings.ocrModelDownloaded,
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        SettingSwitch(
+                            title = "Use Others AI for rejected text by Gemini",
+                            subtitle = "If Gemini rejects the extracted text, use the model selected in Others AI to translate it",
+                            checked = settings.ocrUseOthersAiForRejectedText,
+                            onCheckedChange = { settings.ocrUseOthersAiForRejectedText = it },
+                            enabled = settings.ocrFallbackEnabled && settings.ocrModelDownloaded,
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        PromptEditor(
+                            title = "System prompt",
+                            value = settings.ocrSystemPrompt,
+                            onValueChange = { settings.ocrSystemPrompt = it },
+                            defaultValue = TranslatorSettings.DEFAULT_OCR_SYSTEM_PROMPT,
+                            fieldLabel = "Translator rules (system prompt)",
+                            hint = "💡 Sent as the system prompt for text-only OCR translation. Formats input text into output language.",
+                            minLines = 5,
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        PromptEditor(
+                            title = "User prompt",
+                            value = settings.ocrUserPrompt,
+                            onValueChange = { settings.ocrUserPrompt = it },
+                            defaultValue = "",
+                            fieldLabel = "Additional instructions (user prompt)",
+                            placeholder = "e.g. Keep honorifics; translate informal speech concisely.",
+                            hint = "💡 Sent along with the extracted text blocks for one-off tweaks.",
+                            minLines = 3,
+                        )
+                    }
+                }
+
                 AnimatedVisibility(visible = openSection == SECTION_STYLE) {
                     Column {
                         SectionTitle("Balloon style")
@@ -1471,6 +1653,7 @@ private fun SettingSwitch(
     subtitle: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1481,16 +1664,26 @@ private fun SettingSwitch(
                 text = title,
                 fontWeight = FontWeight.SemiBold,
                 style = MaterialTheme.typography.bodyMedium,
+                color = if (enabled) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                },
             )
             Text(
                 text = subtitle,
                 fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (enabled) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                },
             )
         }
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
+            enabled = enabled,
         )
     }
 }
