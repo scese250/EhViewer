@@ -257,6 +257,13 @@ class ReaderTranslationState(
                     geminiApiKeys = settings.getGeminiApiKeys(),
                     geminiModel = settings.geminiModel,
                     thinkingLevel = settings.thinkingLevel,
+                    othersAiUseAsFallback = settings.othersAiUseAsFallback,
+                    othersAiBaseUrl = settings.othersAiBaseUrl,
+                    othersAiApiKeys = settings.getOthersAiApiKeys(),
+                    othersAiModel = settings.othersAiModel,
+                    othersAiThinkingLevel = settings.othersAiThinkingLevel,
+                    othersAiSystemPrompt = settings.othersAiSystemPrompt,
+                    othersAiUserPrompt = settings.othersAiUserPrompt,
                     onPhase = { phase ->
                         statuses[index] = when (phase) {
                             PageTranslator.Phase.VISION -> TranslationStatus.ReadingPage

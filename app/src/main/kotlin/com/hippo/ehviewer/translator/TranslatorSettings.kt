@@ -43,6 +43,40 @@ class TranslatorSettings(context: Context) {
         prefs.getString("gemini_model", DEFAULT_GEMINI_MODEL) ?: DEFAULT_GEMINI_MODEL,
     )
 
+    var othersAiUseAsFallback by mutableStateOf(prefs.getBoolean("others_ai_use_as_fallback", false))
+    var othersAiBaseUrl by mutableStateOf(prefs.getString("others_ai_base_url", "").orEmpty())
+    var othersAiApiKeysRaw by mutableStateOf(prefs.getString("others_ai_api_keys", "").orEmpty())
+    var othersAiModel by mutableStateOf(prefs.getString("others_ai_model", "").orEmpty())
+    var othersAiModels by mutableStateOf(
+        prefs.getString("others_ai_models", null)?.let { raw ->
+            raw.split('\n')
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+        } ?: emptyList(),
+    )
+    var othersAiThinkingLevel by mutableStateOf(
+        prefs.getString("others_ai_thinking_level", THINKING_MINIMAL) ?: THINKING_MINIMAL,
+    )
+    var othersAiSystemPrompt by mutableStateOf(
+        run {
+            val saved = prefs.getString("others_ai_system_prompt", null)
+            val version = prefs.getInt("others_ai_system_prompt_version", 0)
+            if (saved.isNullOrBlank() || version < 1) {
+                prefs.edit()
+                    .putString("others_ai_system_prompt", DEFAULT_SYSTEM_PROMPT)
+                    .putInt("others_ai_system_prompt_version", 1)
+                    .apply()
+                DEFAULT_SYSTEM_PROMPT
+            } else {
+                saved
+            }
+        },
+    )
+    var othersAiUserPrompt by mutableStateOf(
+        prefs.getString("others_ai_user_prompt", "").orEmpty(),
+    )
+
     /**
      * Models pinned to the quick selector. The current model can be picked from
      * here, and every entry can be removed; the list is empty only if the user
@@ -82,10 +116,10 @@ class TranslatorSettings(context: Context) {
         run {
             val saved = prefs.getString("gemini_system_prompt", null)
             val version = prefs.getInt("gemini_system_prompt_version", 0)
-            if (saved.isNullOrBlank() || version < 2 || saved.contains("You are the translator and letterer of a manga page")) {
+            if (saved.isNullOrBlank() || version < 3 || saved.contains("You are the translator and letterer of a manga page")) {
                 prefs.edit()
                     .putString("gemini_system_prompt", DEFAULT_SYSTEM_PROMPT)
-                    .putInt("gemini_system_prompt_version", 2)
+                    .putInt("gemini_system_prompt_version", 3)
                     .apply()
                 DEFAULT_SYSTEM_PROMPT
             } else {
@@ -162,6 +196,21 @@ class TranslatorSettings(context: Context) {
         geminiModels = geminiModels - id
     }
 
+    fun getOthersAiApiKeys(): List<String> = othersAiApiKeysRaw
+        .split('\n', ',', ';')
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+
+    fun addOthersAiModel(id: String) {
+        val model = id.trim()
+        if (model.isEmpty() || model in othersAiModels) return
+        othersAiModels = othersAiModels + model
+    }
+
+    fun removeOthersAiModel(id: String) {
+        othersAiModels = othersAiModels - id
+    }
+
     fun save() {
         // A field left empty must not reach the prompt: fall back to the
         // defaults, and turn a bare code into its name.
@@ -175,7 +224,16 @@ class TranslatorSettings(context: Context) {
             .putString("source_lang", sourceLang)
             .putString("target_lang", targetLang)
             .putString("gemini_system_prompt", geminiSystemPrompt)
-            .putInt("gemini_system_prompt_version", 2)
+            .putInt("gemini_system_prompt_version", 3)
+            .putBoolean("others_ai_use_as_fallback", othersAiUseAsFallback)
+            .putString("others_ai_base_url", othersAiBaseUrl.trim())
+            .putString("others_ai_api_keys", othersAiApiKeysRaw)
+            .putString("others_ai_model", othersAiModel.trim())
+            .putString("others_ai_models", othersAiModels.joinToString("\n"))
+            .putString("others_ai_thinking_level", othersAiThinkingLevel)
+            .putString("others_ai_system_prompt", othersAiSystemPrompt)
+            .putInt("others_ai_system_prompt_version", 1)
+            .putString("others_ai_user_prompt", othersAiUserPrompt)
             .putString("thinking_level", thinkingLevel)
             .putString("bubble_style", bubbleStyle)
             .putFloat("outline_width", outlineWidth)
@@ -259,7 +317,7 @@ class TranslatorSettings(context: Context) {
             |4. If a sentence spans across multiple adjacent vertical columns in the same bubble, join them into a single entry covering all those columns.
             |5. Onomatopoeia painted on artwork must be returned in "extra" with "kind": "sfx" and "box" tightly covering the sound effect characters.
             |6. Ignore non-manga text: watermarks, scanlation credits, page numbers, store logos, and URLs.
-            |7. Do not add notes, romanisation or explanations.
+            |7. Do not add notes, romanisation, or explanations unless explicitly requested by the user.
             |
             |Reply with raw JSON only, without markdown fences or commentary:
             |{"bubbles":[{"ids":[],"box":[ymin,xmin,ymax,xmax],"source":"japanese text as printed","text":"{lang output} translation","kind":"dialogue"}],"extra":[{"box":[ymin,xmin,ymax,xmax],"source":"...","text":"...","kind":"sfx"}]}

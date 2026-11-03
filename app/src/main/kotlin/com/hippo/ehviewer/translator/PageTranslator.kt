@@ -93,21 +93,27 @@ object PageTranslator {
         geminiApiKeys: List<String> = emptyList(),
         geminiModel: String = TranslatorSettings.DEFAULT_GEMINI_MODEL,
         thinkingLevel: String = TranslatorSettings.THINKING_MINIMAL,
+        othersAiUseAsFallback: Boolean = false,
+        othersAiBaseUrl: String = "",
+        othersAiApiKeys: List<String> = emptyList(),
+        othersAiModel: String = "",
+        othersAiThinkingLevel: String = TranslatorSettings.THINKING_MINIMAL,
+        othersAiSystemPrompt: String = TranslatorSettings.DEFAULT_SYSTEM_PROMPT,
+        othersAiUserPrompt: String = "",
         onPhase: (Phase) -> Unit = {},
     ): PageTranslation = withContext(Dispatchers.Default) {
-        // The model is the only engine left: without a key there is nothing to
-        // call, so fail loudly instead of silently using another translator.
-        if (geminiApiKeys.isEmpty()) {
+        val canUseFallback = othersAiUseAsFallback &&
+            othersAiBaseUrl.isNotBlank() &&
+            othersAiApiKeys.isNotEmpty() &&
+            othersAiModel.isNotBlank()
+
+        if (geminiApiKeys.isEmpty() && !canUseFallback) {
             error("No Gemini API key: add one in the translation settings.")
         }
 
         var bubbles: List<TranslatedBubble> = emptyList()
         var engineUsed = "Gemini"
 
-        // The model is the only engine: it reads the page, measures every
-        // balloon and letters the translation in a single call. There is no
-        // on-device OCR and no text-only rescue any more; the other API keys are
-        // not a fallback but parallel workers on the following pages.
         suspend fun readPage(): VisionResult = translateWithGeminiVision(
             bitmap = bitmap,
             sourceLang = sourceLang,
@@ -121,12 +127,46 @@ object PageTranslator {
 
         val transTime = measureTimeMillis {
             onPhase(Phase.VISION)
-            // One request per page. An answer with no balloons comes back as an
-            // empty result and the reader retries it, so every retry of a page
-            // is counted in the same place instead of here and there.
-            val result = readPage()
+            val result = if (geminiApiKeys.isNotEmpty()) {
+                try {
+                    val geminiResult = readPage()
+                    engineUsed = "Gemini (${geminiModel.removePrefix("gemini-")})"
+                    geminiResult
+                } catch (e: Exception) {
+                    if (canUseFallback && isGeminiImageRejected(e)) {
+                        val fallbackResult = translateWithOpenAiVision(
+                            bitmap = bitmap,
+                            sourceLang = sourceLang,
+                            targetLang = targetLang,
+                            systemPrompt = othersAiSystemPrompt,
+                            userPrompt = othersAiUserPrompt,
+                            baseUrl = othersAiBaseUrl,
+                            apiKeys = othersAiApiKeys,
+                            model = othersAiModel,
+                            thinkingLevel = othersAiThinkingLevel,
+                        )
+                        engineUsed = "Others AI ($othersAiModel)"
+                        fallbackResult
+                    } else {
+                        throw e
+                    }
+                }
+            } else {
+                val fallbackResult = translateWithOpenAiVision(
+                    bitmap = bitmap,
+                    sourceLang = sourceLang,
+                    targetLang = targetLang,
+                    systemPrompt = othersAiSystemPrompt,
+                    userPrompt = othersAiUserPrompt,
+                    baseUrl = othersAiBaseUrl,
+                    apiKeys = othersAiApiKeys,
+                    model = othersAiModel,
+                    thinkingLevel = othersAiThinkingLevel,
+                )
+                engineUsed = "Others AI ($othersAiModel)"
+                fallbackResult
+            }
             bubbles = result.bubbles
-            engineUsed = "Gemini (${geminiModel.removePrefix("gemini-")})"
         }
 
         PageTranslation(
@@ -947,6 +987,272 @@ object PageTranslator {
 
     private fun containsJapanese(str: String): Boolean = str.any { ch ->
         ch in '\u3040'..'\u309F' || ch in '\u30A0'..'\u30FF' || ch in '\u4E00'..'\u9FAF'
+    }
+
+    private fun isGeminiImageRejected(e: Exception): Boolean {
+        val message = e.message.orEmpty()
+        val raw = (e as? TranslationFailure)?.rawResponse.orEmpty()
+        val combined = "$message $raw"
+        return combined.contains("blocked", ignoreCase = true) ||
+            combined.contains("SAFETY", ignoreCase = true) ||
+            combined.contains("PROHIBITED_CONTENT", ignoreCase = true) ||
+            combined.contains("blockReason", ignoreCase = true) ||
+            combined.contains("IMAGE_SAFETY", ignoreCase = true) ||
+            combined.contains("SPII", ignoreCase = true)
+    }
+
+    private suspend fun translateWithOpenAiVision(
+        bitmap: Bitmap,
+        sourceLang: String,
+        targetLang: String,
+        systemPrompt: String,
+        userPrompt: String = "",
+        baseUrl: String,
+        apiKeys: List<String>,
+        model: String,
+        thinkingLevel: String,
+    ): VisionResult = withContext(Dispatchers.IO) {
+        val (imageBase64, encodedImage) = annotationSlots.withPermit {
+            val annotated = try {
+                annotateForVision(bitmap)
+            } catch (e: OutOfMemoryError) {
+                error("Not enough memory to prepare the image")
+            }
+            val size = EncodedVisionImage(
+                base64 = "",
+                sentWidth = bitmap.width,
+                sentHeight = bitmap.height,
+            )
+            val base64 = try {
+                ByteArrayOutputStream().use { stream ->
+                    if (!annotated.compress(Bitmap.CompressFormat.JPEG, VISION_JPEG_QUALITY, stream)) {
+                        error("No se pudo comprimir la imagen")
+                    }
+                    Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+                }
+            } finally {
+                annotated.recycle()
+            }
+            base64 to size
+        }
+
+        val cleanBaseUrl = baseUrl.trim().trimEnd('/')
+        val endpoint = if (cleanBaseUrl.endsWith("/chat/completions")) cleanBaseUrl else "$cleanBaseUrl/chat/completions"
+        val effectiveSystemPrompt = systemPrompt.ifBlank { TranslatorSettings.DEFAULT_SYSTEM_PROMPT }
+        val formattedSysPrompt = TranslatorSettings.formatGeminiPrompt(effectiveSystemPrompt, sourceLang, targetLang)
+        val userInstructionText = formatUserPrompt(userPrompt, sourceLang, targetLang)
+
+        val userContentArray = JSONArray().apply {
+            val textPrompt = if (userInstructionText.isNotBlank()) {
+                "Translate all manga text on this page.\nAdditional instructions: $userInstructionText"
+            } else {
+                "Translate all manga text on this page."
+            }
+            put(
+                JSONObject().apply {
+                    put("type", "text")
+                    put("text", textPrompt)
+                },
+            )
+            put(
+                JSONObject().apply {
+                    put("type", "image_url")
+                    put(
+                        "image_url",
+                        JSONObject().apply {
+                            put("url", "data:image/jpeg;base64,$imageBase64")
+                        },
+                    )
+                },
+            )
+        }
+
+        val requestJson = JSONObject().apply {
+            put("model", model.trim())
+            put(
+                "messages",
+                JSONArray().apply {
+                    put(
+                        JSONObject().apply {
+                            put("role", "system")
+                            put("content", formattedSysPrompt)
+                        },
+                    )
+                    put(
+                        JSONObject().apply {
+                            put("role", "user")
+                            put("content", userContentArray)
+                        },
+                    )
+                },
+            )
+            put("temperature", 0.1)
+            put("max_tokens", 8192)
+            when (thinkingLevel) {
+                TranslatorSettings.THINKING_LOW -> put("reasoning_effort", "low")
+                TranslatorSettings.THINKING_MEDIUM -> put("reasoning_effort", "medium")
+                TranslatorSettings.THINKING_HIGH -> put("reasoning_effort", "high")
+            }
+        }
+
+        val responseJson = postOpenAi(
+            endpoint = endpoint,
+            apiKeys = apiKeys,
+            request = requestJson,
+            readTimeoutMs = readTimeoutFor(thinkingLevel, GEMINI_VISION_READ_TIMEOUT_MS),
+        )
+
+        val content = extractOpenAiContent(responseJson)
+        parseVisionResult(
+            raw = content,
+            width = bitmap.width,
+            height = bitmap.height,
+            maxExtras = MAX_EXTRA_BUBBLES * 2,
+            sentWidth = encodedImage.sentWidth,
+            sentHeight = encodedImage.sentHeight,
+        )
+    }
+
+    private fun extractOpenAiContent(root: JSONObject): String {
+        val choices = root.optJSONArray("choices")
+            ?: throw TranslationFailure("Others AI returned no choices", root.toString())
+        if (choices.length() == 0) {
+            throw TranslationFailure("Others AI returned empty choices", root.toString())
+        }
+        val message = choices.optJSONObject(0)?.optJSONObject("message")
+            ?: throw TranslationFailure("Others AI returned no message", root.toString())
+        val content = message.optString("content").trim()
+        if (content.isEmpty()) {
+            throw TranslationFailure("Others AI returned empty content", root.toString())
+        }
+        return content
+    }
+
+    private fun postOpenAi(
+        endpoint: String,
+        apiKeys: List<String>,
+        request: JSONObject,
+        readTimeoutMs: Int,
+    ): JSONObject {
+        if (apiKeys.isEmpty()) error("No API keys available for Others AI")
+        var lastError: Exception? = null
+        val totalKeys = apiKeys.size
+        val firstKey = keyCursor.getAndIncrement().mod(totalKeys)
+        var attempt = 0
+        while (attempt < totalKeys) {
+            val keyIndex = (firstKey + attempt).mod(totalKeys)
+            val conn = (URI.create(endpoint).toURL().openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Authorization", "Bearer ${apiKeys[keyIndex]}")
+                connectTimeout = 15_000
+                readTimeout = readTimeoutMs
+                doOutput = true
+            }
+
+            try {
+                conn.outputStream.use { os ->
+                    os.write(request.toString().toByteArray(Charsets.UTF_8))
+                }
+                val responseCode = conn.responseCode
+                if (responseCode == 200) {
+                    val body = conn.inputStream.bufferedReader().use { it.readText() }
+                    return JSONObject(body)
+                }
+                val errorText = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                lastError = TranslationFailure(
+                    message = "Others AI API ($responseCode)",
+                    rawResponse = errorText.ifBlank { "HTTP $responseCode" },
+                )
+                if (responseCode == 400 && request.has("reasoning_effort")) {
+                    request.remove("reasoning_effort")
+                    continue
+                }
+                if (responseCode in 400..499 && responseCode != 429) break
+            } catch (e: Exception) {
+                lastError = e
+            } finally {
+                conn.disconnect()
+            }
+            attempt++
+        }
+        throw lastError ?: TranslationFailure(
+            message = "Others AI API request failed",
+            rawResponse = "No response from the API",
+        )
+    }
+
+    suspend fun testOpenAiConnection(
+        baseUrl: String,
+        apiKeys: List<String>,
+        model: String,
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val cleanBaseUrl = baseUrl.trim().trimEnd('/')
+        if (cleanBaseUrl.isBlank()) {
+            return@withContext Result.failure(IllegalStateException("No has ingresado la Base URL"))
+        }
+        if (apiKeys.isEmpty()) {
+            return@withContext Result.failure(IllegalStateException("No has ingresado ninguna clave de API"))
+        }
+        val cleanModel = model.trim()
+        if (cleanModel.isBlank()) {
+            return@withContext Result.failure(IllegalStateException("No has ingresado el modelo"))
+        }
+
+        var successCount = 0
+        val errors = mutableListOf<String>()
+
+        for ((index, key) in apiKeys.withIndex()) {
+            runCatching {
+                val requestJson = JSONObject().apply {
+                    put("model", cleanModel)
+                    put(
+                        "messages",
+                        JSONArray().apply {
+                            put(
+                                JSONObject().apply {
+                                    put("role", "user")
+                                    put("content", "Reply with 'OK'.")
+                                },
+                            )
+                        },
+                    )
+                    put("max_tokens", 10)
+                }
+                val endpoint = if (cleanBaseUrl.endsWith("/chat/completions")) {
+                    cleanBaseUrl
+                } else {
+                    "$cleanBaseUrl/chat/completions"
+                }
+                val url = URI.create(endpoint).toURL()
+                val conn = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("Authorization", "Bearer $key")
+                    connectTimeout = 8000
+                    readTimeout = 8000
+                    doOutput = true
+                }
+                conn.outputStream.use { os ->
+                    os.write(requestJson.toString().toByteArray(Charsets.UTF_8))
+                }
+                if (conn.responseCode == 200) {
+                    successCount++
+                } else {
+                    val err = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "Error ${conn.responseCode}"
+                    errors.add("Key #${index + 1}: $err")
+                }
+                conn.disconnect()
+            }.onFailure {
+                errors.add("Key #${index + 1}: ${it.message}")
+            }
+        }
+
+        if (successCount > 0) {
+            Result.success("$successCount of ${apiKeys.size} keys work with $cleanModel")
+        } else {
+            Result.failure(IllegalStateException(errors.joinToString("\n")))
+        }
     }
 
     suspend fun testGeminiConnection(apiKeys: List<String>, model: String): Result<String> = withContext(Dispatchers.IO) {

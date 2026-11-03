@@ -26,7 +26,11 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.material3.Card
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Tab
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -103,6 +107,10 @@ fun TranslatorSettingsDialog(
     var isTestingKey by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
     var isTestSuccess by remember { mutableStateOf(false) }
+    var isTestingOthersKey by remember { mutableStateOf(false) }
+    var othersTestResult by remember { mutableStateOf<String?>(null) }
+    var isOthersTestSuccess by remember { mutableStateOf(false) }
+    var selectedAiTab by remember { mutableIntStateOf(0) }
     var openSection by remember { mutableStateOf<String?>(null) }
     var cacheStamp by remember { mutableIntStateOf(0) }
     var confirmClearCache by remember { mutableStateOf(false) }
@@ -207,7 +215,8 @@ fun TranslatorSettingsDialog(
 
                 // The model is the only engine now, so an empty key list is the
                 // one thing that stops the page from being translated.
-                if (keys.isEmpty()) {
+                val othersKeys = settings.getOthersAiApiKeys()
+                if (keys.isEmpty() && othersKeys.isEmpty()) {
                     TextButton(onClick = { openSection = SECTION_AI }) {
                         Text(
                             text = "No API key yet, add one in AI",
@@ -276,293 +285,635 @@ fun TranslatorSettingsDialog(
 
                 AnimatedVisibility(visible = openSection == SECTION_AI) {
                     Column {
-                        SectionTitle("Gemini AI")
-
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            ),
-                            modifier = Modifier.fillMaxWidth(),
+                        PrimaryTabRow(
+                            selectedTabIndex = selectedAiTab,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp),
                         ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(
-                                    text = "API keys:",
-                                    fontWeight = FontWeight.SemiBold,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
+                            Tab(
+                                selected = selectedAiTab == 0,
+                                onClick = { selectedAiTab = 0 },
+                                text = { Text("Gemini AI") },
+                            )
+                            Tab(
+                                selected = selectedAiTab == 1,
+                                onClick = { selectedAiTab = 1 },
+                                text = { Text("Others AI") },
+                            )
+                        }
 
-                                Spacer(modifier = Modifier.height(6.dp))
+                        if (selectedAiTab == 0) {
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        text = "API keys:",
+                                        fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
 
-                                // One field per key. The settings keep them as a
-                                // single text, so every edit is written back.
-                                val apiKeys = remember {
-                                    mutableStateListOf<String>().apply {
-                                        addAll(settings.getGeminiApiKeys().ifEmpty { listOf("") })
+                                    Spacer(modifier = Modifier.height(6.dp))
+
+                                    // One field per key. The settings keep them as a
+                                    // single text, so every edit is written back.
+                                    val apiKeys = remember {
+                                        mutableStateListOf<String>().apply {
+                                            addAll(settings.getGeminiApiKeys().ifEmpty { listOf("") })
+                                        }
                                     }
-                                }
-                                var revealedKey by remember { mutableStateOf(-1) }
-                                val publishKeys = {
-                                    // A field left empty is never stored: only the
-                                    // keys with text survive, so an accidental
-                                    // "+" does not leave a blank entry behind.
-                                    settings.geminiApiKeysRaw = apiKeys
-                                        .map { it.trim() }
-                                        .filter { it.isNotEmpty() }
-                                        .joinToString("\n")
-                                    testResult = null
-                                }
+                                    var revealedKey by remember { mutableStateOf(-1) }
+                                    val publishKeys = {
+                                        // A field left empty is never stored: only the
+                                        // keys with text survive, so an accidental
+                                        // "+" does not leave a blank entry behind.
+                                        settings.geminiApiKeysRaw = apiKeys
+                                            .map { it.trim() }
+                                            .filter { it.isNotEmpty() }
+                                            .joinToString("\n")
+                                        testResult = null
+                                    }
 
-                                apiKeys.forEachIndexed { index, key ->
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(
-                                            text = "${index + 1}",
-                                            modifier = Modifier.width(26.dp),
-                                            textAlign = TextAlign.Center,
-                                            fontWeight = FontWeight.SemiBold,
-                                            style = MaterialTheme.typography.bodySmall,
-                                        )
-                                        OutlinedTextField(
-                                            value = key,
-                                            onValueChange = { value ->
-                                                val parts = value
-                                                    .split('\n', '\r', ',', ';')
-                                                    .map { it.trim() }
-                                                    .filter { it.isNotEmpty() }
-                                                if (parts.size > 1) {
-                                                    // Several keys pasted at once:
-                                                    // each one gets its own field.
-                                                    apiKeys[index] = parts.first()
-                                                    apiKeys.addAll(index + 1, parts.drop(1))
+                                    apiKeys.forEachIndexed { index, key ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Text(
+                                                text = "${index + 1}",
+                                                modifier = Modifier.width(26.dp),
+                                                textAlign = TextAlign.Center,
+                                                fontWeight = FontWeight.SemiBold,
+                                                style = MaterialTheme.typography.bodySmall,
+                                            )
+                                            OutlinedTextField(
+                                                value = key,
+                                                onValueChange = { value ->
+                                                    val parts = value
+                                                        .split('\n', '\r', ',', ';')
+                                                        .map { it.trim() }
+                                                        .filter { it.isNotEmpty() }
+                                                    if (parts.size > 1) {
+                                                        // Several keys pasted at once:
+                                                        // each one gets its own field.
+                                                        apiKeys[index] = parts.first()
+                                                        apiKeys.addAll(index + 1, parts.drop(1))
+                                                    } else {
+                                                        apiKeys[index] = value.filterNot { it == '\n' || it == '\r' }
+                                                    }
+                                                    publishKeys()
+                                                },
+                                                modifier = Modifier.weight(1f),
+                                                singleLine = true,
+                                                placeholder = { Text("AIzaSy...") },
+                                                visualTransformation = if (revealedKey == index) {
+                                                    VisualTransformation.None
                                                 } else {
-                                                    apiKeys[index] = value.filterNot { it == '\n' || it == '\r' }
-                                                }
-                                                publishKeys()
-                                            },
-                                            modifier = Modifier.weight(1f),
-                                            singleLine = true,
-                                            placeholder = { Text("AIzaSy...") },
-                                            visualTransformation = if (revealedKey == index) {
-                                                VisualTransformation.None
-                                            } else {
-                                                PasswordVisualTransformation()
-                                            },
-                                            trailingIcon = {
-                                                IconButton(
-                                                    onClick = {
-                                                        revealedKey = if (revealedKey == index) -1 else index
-                                                    },
-                                                ) {
-                                                    Icon(
-                                                        imageVector = if (revealedKey == index) {
-                                                            Icons.Filled.VisibilityOff
-                                                        } else {
-                                                            Icons.Filled.Visibility
+                                                    PasswordVisualTransformation()
+                                                },
+                                                trailingIcon = {
+                                                    IconButton(
+                                                        onClick = {
+                                                            revealedKey = if (revealedKey == index) -1 else index
                                                         },
-                                                        contentDescription = if (revealedKey == index) {
-                                                            "Hide key"
-                                                        } else {
-                                                            "Show key"
-                                                        },
-                                                    )
-                                                }
-                                            },
-                                        )
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = if (revealedKey == index) {
+                                                                Icons.Filled.VisibilityOff
+                                                            } else {
+                                                                Icons.Filled.Visibility
+                                                            },
+                                                            contentDescription = if (revealedKey == index) {
+                                                                "Hide key"
+                                                            } else {
+                                                                "Show key"
+                                                            },
+                                                        )
+                                                    }
+                                                },
+                                            )
+                                            IconButton(
+                                                onClick = {
+                                                    if (apiKeys.size == 1) {
+                                                        apiKeys[0] = ""
+                                                    } else {
+                                                        apiKeys.removeAt(index)
+                                                    }
+                                                    revealedKey = -1
+                                                    publishKeys()
+                                                },
+                                            ) {
+                                                Icon(
+                                                    Icons.Filled.Close,
+                                                    contentDescription = "Remove key ${index + 1}",
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    // A single "+" under the last field: adding a key
+                                    // always appends one at the end of the list.
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(start = 26.dp, end = 48.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
                                         IconButton(
                                             onClick = {
-                                                if (apiKeys.size == 1) {
-                                                    apiKeys[0] = ""
-                                                } else {
-                                                    apiKeys.removeAt(index)
-                                                }
+                                                apiKeys.add("")
                                                 revealedKey = -1
                                                 publishKeys()
                                             },
                                         ) {
-                                            Icon(
-                                                Icons.Filled.Close,
-                                                contentDescription = "Remove key ${index + 1}",
-                                            )
+                                            Icon(Icons.Filled.Add, contentDescription = "Add another key")
                                         }
                                     }
-                                }
 
-                                // A single "+" under the last field: adding a key
-                                // always appends one at the end of the list.
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(start = 26.dp, end = 48.dp),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    IconButton(
-                                        onClick = {
-                                            apiKeys.add("")
-                                            revealedKey = -1
-                                            publishKeys()
-                                        },
-                                    ) {
-                                        Icon(Icons.Filled.Add, contentDescription = "Add another key")
-                                    }
-                                }
-
-                                Text(
-                                    text = "API keys work in parallel, so translation is faster.",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-
-                                Spacer(modifier = Modifier.height(10.dp))
-
-                                Text(
-                                    text = "Gemini model:",
-                                    fontWeight = FontWeight.SemiBold,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-
-                                OutlinedTextField(
-                                    value = settings.geminiModel,
-                                    onValueChange = { settings.geminiModel = it.trim() },
-                                    label = { Text("Model ID") },
-                                    placeholder = { Text(TranslatorSettings.DEFAULT_GEMINI_MODEL) },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    singleLine = true,
-                                    trailingIcon = {
-                                        IconButton(
-                                            onClick = { settings.addGeminiModel(settings.geminiModel) },
-                                            enabled = settings.geminiModel.isNotBlank(),
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Add,
-                                                contentDescription = "Add to the quick selector",
-                                                modifier = Modifier.size(20.dp),
-                                            )
-                                        }
-                                    },
-                                )
-
-                                Spacer(modifier = Modifier.height(6.dp))
-
-                                if (settings.geminiModels.isEmpty()) {
                                     Text(
-                                        text = "Quick selector is empty: type a model ID and tap + to save it.",
+                                        text = "API keys work in parallel, so translation is faster.",
                                         fontSize = 11.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
-                                } else {
-                                    FlowRow(
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                                        modifier = Modifier.fillMaxWidth(),
-                                    ) {
-                                        settings.geminiModels.forEach { model ->
-                                            FilterChip(
-                                                selected = settings.geminiModel == model,
-                                                onClick = { settings.geminiModel = model },
-                                                label = { Text(model, fontSize = 11.sp, maxLines = 1) },
-                                                trailingIcon = {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Close,
-                                                        contentDescription = "Remove $model from the quick selector",
-                                                        modifier = Modifier
-                                                            .size(18.dp)
-                                                            .clickable { settings.removeGeminiModel(model) },
-                                                    )
-                                                },
-                                            )
-                                        }
-                                    }
-                                }
 
-                                Spacer(modifier = Modifier.height(10.dp))
+                                    Spacer(modifier = Modifier.height(10.dp))
 
-                                SettingChips(
-                                    label = "Thinking",
-                                    options = TranslatorSettings.THINKING_LEVELS,
-                                    selected = settings.thinkingLevel,
-                                    onSelect = { settings.thinkingLevel = it },
-                                )
-
-                                Spacer(modifier = Modifier.height(10.dp))
-
-                                PromptEditor(
-                                    title = "System instructions",
-                                    value = settings.geminiSystemPrompt,
-                                    onValueChange = { settings.geminiSystemPrompt = it },
-                                    defaultValue = TranslatorSettings.DEFAULT_SYSTEM_PROMPT,
-                                    fieldLabel = "Translator rules (system prompt)",
-                                    hint = "💡 Sent as the system prompt; the image goes as the user turn. " +
-                                        "This is where pronouns and per-panel gender, leaving signs untranslated " +
-                                        "and the REJECT live.",
-                                    minLines = 5,
-                                )
-
-                                Spacer(modifier = Modifier.height(4.dp))
-
-                                PromptEditor(
-                                    title = "User instructions",
-                                    value = settings.geminiUserPrompt,
-                                    onValueChange = { settings.geminiUserPrompt = it },
-                                    defaultValue = TranslatorSettings.DEFAULT_USER_PROMPT,
-                                    fieldLabel = "Additional instructions (user prompt)",
-                                    placeholder = "e.g. Keep the -san and -kun honorifics; never use formal speech.",
-                                    hint = "💡 Sent in the user turn, along with the page and the task. " +
-                                        "Use it for one-off tweaks (tone, names, terms) without touching the system rules.",
-                                    minLines = 3,
-                                )
-
-                                Spacer(modifier = Modifier.height(10.dp))
-
-                                OutlinedButton(
-                                    onClick = {
-                                        scope.launch {
-                                            isTestingKey = true
-                                            testResult = null
-                                            val res = PageTranslator.testGeminiConnection(
-                                                apiKeys = settings.getGeminiApiKeys(),
-                                                model = settings.geminiModel,
-                                            )
-                                            isTestingKey = false
-                                            res.onSuccess {
-                                                isTestSuccess = true
-                                                testResult = it
-                                            }.onFailure {
-                                                isTestSuccess = false
-                                                testResult = it.message
-                                            }
-                                        }
-                                    },
-                                    enabled = !isTestingKey && keys.isNotEmpty(),
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) {
-                                    if (isTestingKey) {
-                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Testing connection…")
-                                    } else {
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(18.dp),
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Test API keys")
-                                    }
-                                }
-
-                                testResult?.let { msg ->
-                                    Spacer(modifier = Modifier.height(6.dp))
                                     Text(
-                                        text = msg,
-                                        fontSize = 11.sp,
-                                        color = if (isTestSuccess) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            MaterialTheme.colorScheme.error
+                                        text = "Gemini model:",
+                                        fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+
+                                    OutlinedTextField(
+                                        value = settings.geminiModel,
+                                        onValueChange = { settings.geminiModel = it.trim() },
+                                        label = { Text("Model ID") },
+                                        placeholder = { Text(TranslatorSettings.DEFAULT_GEMINI_MODEL) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true,
+                                        trailingIcon = {
+                                            IconButton(
+                                                onClick = { settings.addGeminiModel(settings.geminiModel) },
+                                                enabled = settings.geminiModel.isNotBlank(),
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Add,
+                                                    contentDescription = "Add to the quick selector",
+                                                    modifier = Modifier.size(20.dp),
+                                                )
+                                            }
                                         },
                                     )
+
+                                    Spacer(modifier = Modifier.height(6.dp))
+
+                                    if (settings.geminiModels.isEmpty()) {
+                                        Text(
+                                            text = "Quick selector is empty: type a model ID and tap + to save it.",
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    } else {
+                                        FlowRow(
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                                            modifier = Modifier.fillMaxWidth(),
+                                        ) {
+                                            settings.geminiModels.forEach { model ->
+                                                FilterChip(
+                                                    selected = settings.geminiModel == model,
+                                                    onClick = { settings.geminiModel = model },
+                                                    label = { Text(model, fontSize = 11.sp, maxLines = 1) },
+                                                    trailingIcon = {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Close,
+                                                            contentDescription = "Remove $model from the quick selector",
+                                                            modifier = Modifier
+                                                                .size(18.dp)
+                                                                .clickable { settings.removeGeminiModel(model) },
+                                                        )
+                                                    },
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    SettingChips(
+                                        label = "Thinking",
+                                        options = TranslatorSettings.THINKING_LEVELS,
+                                        selected = settings.thinkingLevel,
+                                        onSelect = { settings.thinkingLevel = it },
+                                    )
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    PromptEditor(
+                                        title = "System instructions",
+                                        value = settings.geminiSystemPrompt,
+                                        onValueChange = { settings.geminiSystemPrompt = it },
+                                        defaultValue = TranslatorSettings.DEFAULT_SYSTEM_PROMPT,
+                                        fieldLabel = "Translator rules (system prompt)",
+                                        hint = "💡 Sent as the system prompt; the image goes as the user turn. " +
+                                            "This is where pronouns and per-panel gender, leaving signs untranslated " +
+                                            "and the REJECT live.",
+                                        minLines = 5,
+                                    )
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    PromptEditor(
+                                        title = "User instructions",
+                                        value = settings.geminiUserPrompt,
+                                        onValueChange = { settings.geminiUserPrompt = it },
+                                        defaultValue = TranslatorSettings.DEFAULT_USER_PROMPT,
+                                        fieldLabel = "Additional instructions (user prompt)",
+                                        placeholder = "e.g. Keep the -san and -kun honorifics; never use formal speech.",
+                                        hint = "💡 Sent in the user turn, along with the page and the task. " +
+                                            "Use it for one-off tweaks (tone, names, terms) without touching the system rules.",
+                                        minLines = 3,
+                                    )
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    OutlinedButton(
+                                        onClick = {
+                                            scope.launch {
+                                                isTestingKey = true
+                                                testResult = null
+                                                val res = PageTranslator.testGeminiConnection(
+                                                    apiKeys = settings.getGeminiApiKeys(),
+                                                    model = settings.geminiModel,
+                                                )
+                                                isTestingKey = false
+                                                res.onSuccess {
+                                                    isTestSuccess = true
+                                                    testResult = it
+                                                }.onFailure {
+                                                    isTestSuccess = false
+                                                    testResult = it.message
+                                                }
+                                            }
+                                        },
+                                        enabled = !isTestingKey && keys.isNotEmpty(),
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        if (isTestingKey) {
+                                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("Testing connection…")
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("Test API keys")
+                                        }
+                                    }
+
+                                    testResult?.let { msg ->
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = msg,
+                                            fontSize = 11.sp,
+                                            color = if (isTestSuccess) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.error
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    SettingSwitch(
+                                        title = "Use as fallback",
+                                        subtitle = "Models here will be used when image is rejected by Gemini",
+                                        checked = settings.othersAiUseAsFallback,
+                                        onCheckedChange = { settings.othersAiUseAsFallback = it },
+                                    )
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    Text(
+                                        text = "Base URL:",
+                                        fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+
+                                    Spacer(modifier = Modifier.height(6.dp))
+
+                                    OutlinedTextField(
+                                        value = settings.othersAiBaseUrl,
+                                        onValueChange = { settings.othersAiBaseUrl = it.trim() },
+                                        placeholder = { Text("https://integrate.api.nvidia.com/v1") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true,
+                                    )
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                                        val dynamicSp = (maxWidth.value / 34f).coerceIn(8.5f, 11f).sp
+                                        Text(
+                                            text = "OpenAI URLs only allowed · https://*.com/v1",
+                                            fontStyle = FontStyle.Italic,
+                                            fontSize = dynamicSp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    Text(
+                                        text = "API keys:",
+                                        fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+
+                                    Spacer(modifier = Modifier.height(6.dp))
+
+                                    val othersApiKeys = remember {
+                                        mutableStateListOf<String>().apply {
+                                            addAll(settings.getOthersAiApiKeys().ifEmpty { listOf("") })
+                                        }
+                                    }
+                                    var revealedOthersKey by remember { mutableStateOf(-1) }
+                                    val publishOthersKeys = {
+                                        settings.othersAiApiKeysRaw = othersApiKeys
+                                            .map { it.trim() }
+                                            .filter { it.isNotEmpty() }
+                                            .joinToString("\n")
+                                        othersTestResult = null
+                                    }
+
+                                    othersApiKeys.forEachIndexed { index, key ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Text(
+                                                text = "${index + 1}",
+                                                modifier = Modifier.width(26.dp),
+                                                textAlign = TextAlign.Center,
+                                                fontWeight = FontWeight.SemiBold,
+                                                style = MaterialTheme.typography.bodySmall,
+                                            )
+                                            OutlinedTextField(
+                                                value = key,
+                                                onValueChange = { value ->
+                                                    val parts = value
+                                                        .split('\n', '\r', ',', ';')
+                                                        .map { it.trim() }
+                                                        .filter { it.isNotEmpty() }
+                                                    if (parts.size > 1) {
+                                                        othersApiKeys[index] = parts.first()
+                                                        othersApiKeys.addAll(index + 1, parts.drop(1))
+                                                    } else {
+                                                        othersApiKeys[index] = value.filterNot { it == '\n' || it == '\r' }
+                                                    }
+                                                    publishOthersKeys()
+                                                },
+                                                modifier = Modifier.weight(1f),
+                                                singleLine = true,
+                                                placeholder = { Text("nvapi-... or sk-...") },
+                                                visualTransformation = if (revealedOthersKey == index) {
+                                                    VisualTransformation.None
+                                                } else {
+                                                    PasswordVisualTransformation()
+                                                },
+                                                trailingIcon = {
+                                                    IconButton(
+                                                        onClick = {
+                                                            revealedOthersKey = if (revealedOthersKey == index) -1 else index
+                                                        },
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = if (revealedOthersKey == index) {
+                                                                Icons.Filled.VisibilityOff
+                                                            } else {
+                                                                Icons.Filled.Visibility
+                                                            },
+                                                            contentDescription = if (revealedOthersKey == index) {
+                                                                "Hide key"
+                                                            } else {
+                                                                "Show key"
+                                                            },
+                                                        )
+                                                    }
+                                                },
+                                            )
+                                            IconButton(
+                                                onClick = {
+                                                    if (othersApiKeys.size == 1) {
+                                                        othersApiKeys[0] = ""
+                                                    } else {
+                                                        othersApiKeys.removeAt(index)
+                                                    }
+                                                    revealedOthersKey = -1
+                                                    publishOthersKeys()
+                                                },
+                                            ) {
+                                                Icon(
+                                                    Icons.Filled.Close,
+                                                    contentDescription = "Remove key ${index + 1}",
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(start = 26.dp, end = 48.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        IconButton(
+                                            onClick = {
+                                                othersApiKeys.add("")
+                                                revealedOthersKey = -1
+                                                publishOthersKeys()
+                                            },
+                                        ) {
+                                            Icon(Icons.Filled.Add, contentDescription = "Add another key")
+                                        }
+                                    }
+
+                                    Text(
+                                        text = "API keys work in parallel, so translation is faster.",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    Text(
+                                        text = "AI model:",
+                                        fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+
+                                    OutlinedTextField(
+                                        value = settings.othersAiModel,
+                                        onValueChange = { settings.othersAiModel = it.trim() },
+                                        label = { Text("Model ID") },
+                                        placeholder = { Text("mistralai/mistral-large-4-1t-a52b") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true,
+                                        trailingIcon = {
+                                            IconButton(
+                                                onClick = { settings.addOthersAiModel(settings.othersAiModel) },
+                                                enabled = settings.othersAiModel.isNotBlank(),
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Add,
+                                                    contentDescription = "Add to the quick selector",
+                                                    modifier = Modifier.size(20.dp),
+                                                )
+                                            }
+                                        },
+                                    )
+
+                                    Spacer(modifier = Modifier.height(6.dp))
+
+                                    if (settings.othersAiModels.isEmpty()) {
+                                        Text(
+                                            text = "Quick selector is empty: type a model ID and tap + to save it.",
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    } else {
+                                        FlowRow(
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                                            modifier = Modifier.fillMaxWidth(),
+                                        ) {
+                                            settings.othersAiModels.forEach { model ->
+                                                FilterChip(
+                                                    selected = settings.othersAiModel == model,
+                                                    onClick = { settings.othersAiModel = model },
+                                                    label = { Text(model, fontSize = 11.sp, maxLines = 1) },
+                                                    trailingIcon = {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Close,
+                                                            contentDescription = "Remove $model from the quick selector",
+                                                            modifier = Modifier
+                                                                .size(18.dp)
+                                                                .clickable { settings.removeOthersAiModel(model) },
+                                                        )
+                                                    },
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    SettingChips(
+                                        label = "Thinking",
+                                        options = TranslatorSettings.THINKING_LEVELS,
+                                        selected = settings.othersAiThinkingLevel,
+                                        onSelect = { settings.othersAiThinkingLevel = it },
+                                    )
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    PromptEditor(
+                                        title = "System instructions",
+                                        value = settings.othersAiSystemPrompt,
+                                        onValueChange = { settings.othersAiSystemPrompt = it },
+                                        defaultValue = TranslatorSettings.DEFAULT_SYSTEM_PROMPT,
+                                        fieldLabel = "Translator rules (system prompt)",
+                                        hint = "💡 Sent as the system prompt; the image goes as the user turn. " +
+                                            "This is where pronouns and per-panel gender, leaving signs untranslated " +
+                                            "and the REJECT live.",
+                                        minLines = 5,
+                                    )
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    PromptEditor(
+                                        title = "User instructions",
+                                        value = settings.othersAiUserPrompt,
+                                        onValueChange = { settings.othersAiUserPrompt = it },
+                                        defaultValue = TranslatorSettings.DEFAULT_USER_PROMPT,
+                                        fieldLabel = "Additional instructions (user prompt)",
+                                        placeholder = "e.g. Keep the -san and -kun honorifics; never use formal speech.",
+                                        hint = "💡 Sent in the user turn, along with the page and the task. " +
+                                            "Use it for one-off tweaks (tone, names, terms) without touching the system rules.",
+                                        minLines = 3,
+                                    )
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    val currentOthersKeys = settings.getOthersAiApiKeys()
+                                    OutlinedButton(
+                                        onClick = {
+                                            scope.launch {
+                                                isTestingOthersKey = true
+                                                othersTestResult = null
+                                                val res = PageTranslator.testOpenAiConnection(
+                                                    baseUrl = settings.othersAiBaseUrl,
+                                                    apiKeys = settings.getOthersAiApiKeys(),
+                                                    model = settings.othersAiModel,
+                                                )
+                                                isTestingOthersKey = false
+                                                res.onSuccess {
+                                                    isOthersTestSuccess = true
+                                                    othersTestResult = it
+                                                }.onFailure {
+                                                    isOthersTestSuccess = false
+                                                    othersTestResult = it.message
+                                                }
+                                            }
+                                        },
+                                        enabled = !isTestingOthersKey && currentOthersKeys.isNotEmpty() && settings.othersAiBaseUrl.isNotBlank() && settings.othersAiModel.isNotBlank(),
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        if (isTestingOthersKey) {
+                                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("Testing connection…")
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("Test API keys")
+                                        }
+                                    }
+
+                                    othersTestResult?.let { msg ->
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = msg,
+                                            fontSize = 11.sp,
+                                            color = if (isOthersTestSuccess) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.error
+                                            },
+                                        )
+                                    }
                                 }
                             }
                         }
