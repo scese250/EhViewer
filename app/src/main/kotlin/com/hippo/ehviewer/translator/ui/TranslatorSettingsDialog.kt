@@ -495,7 +495,15 @@ fun TranslatorSettingsDialog(
                                                 FilterChip(
                                                     selected = settings.geminiModel == model,
                                                     onClick = { settings.geminiModel = model },
-                                                    label = { Text(model, fontSize = 11.sp, maxLines = 1) },
+                                                    label = {
+                                                        Text(
+                                                            text = model,
+                                                            fontSize = 11.sp,
+                                                            maxLines = 1,
+                                                            softWrap = false,
+                                                            overflow = TextOverflow.Ellipsis,
+                                                        )
+                                                    },
                                                     trailingIcon = {
                                                         Icon(
                                                             imageVector = Icons.Default.Close,
@@ -815,7 +823,15 @@ fun TranslatorSettingsDialog(
                                                 FilterChip(
                                                     selected = settings.othersAiModel == model,
                                                     onClick = { settings.othersAiModel = model },
-                                                    label = { Text(model, fontSize = 11.sp, maxLines = 1) },
+                                                    label = {
+                                                        Text(
+                                                            text = model,
+                                                            fontSize = 11.sp,
+                                                            maxLines = 1,
+                                                            softWrap = false,
+                                                            overflow = TextOverflow.Ellipsis,
+                                                        )
+                                                    },
                                                     trailingIcon = {
                                                         Icon(
                                                             imageVector = Icons.Default.Close,

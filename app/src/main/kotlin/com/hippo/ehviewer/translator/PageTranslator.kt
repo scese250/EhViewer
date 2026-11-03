@@ -1256,7 +1256,9 @@ object PageTranslator {
                     val err = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "Error ${conn.responseCode}"
                     val hint = if (conn.responseCode == 404 && err.contains("404 page not found", ignoreCase = true)) {
                         " (Verifica que el modelo incluya el prefijo del creador, ej: 'mistralai/$cleanModel' o 'nvidia/$cleanModel')"
-                    } else ""
+                    } else {
+                        ""
+                    }
                     errors.add("Key #${index + 1}: ${err.trim()}$hint")
                 }
                 conn.disconnect()
