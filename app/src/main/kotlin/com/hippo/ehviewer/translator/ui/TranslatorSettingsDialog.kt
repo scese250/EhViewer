@@ -1,6 +1,7 @@
 package com.hippo.ehviewer.translator.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -37,10 +39,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -54,7 +56,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -285,11 +289,15 @@ fun TranslatorSettingsDialog(
 
                 AnimatedVisibility(visible = openSection == SECTION_AI) {
                     Column {
-                        PrimaryTabRow(
+                        TabRow(
                             selectedTabIndex = selectedAiTab,
+                            containerColor = Color.Transparent,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(bottom = 8.dp),
+                                .padding(bottom = 8.dp)
+                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                                .clip(RoundedCornerShape(8.dp)),
+                            divider = {},
                         ) {
                             Tab(
                                 selected = selectedAiTab == 0,
@@ -617,26 +625,24 @@ fun TranslatorSettingsDialog(
 
                                     Spacer(modifier = Modifier.height(6.dp))
 
-                                    OutlinedTextField(
-                                        value = settings.othersAiBaseUrl,
-                                        onValueChange = { settings.othersAiBaseUrl = it.trim() },
-                                        placeholder = { Text("https://integrate.api.nvidia.com/v1") },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true,
-                                    )
-
-                                    Spacer(modifier = Modifier.height(4.dp))
-
                                     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                                         val dynamicSp = (maxWidth.value / 34f).coerceIn(8.5f, 11f).sp
-                                        Text(
-                                            text = "OpenAI URLs only allowed · https://*.com/v1",
-                                            fontStyle = FontStyle.Italic,
-                                            fontSize = dynamicSp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                            maxLines = 1,
-                                            softWrap = false,
-                                            overflow = TextOverflow.Ellipsis,
+                                        OutlinedTextField(
+                                            value = settings.othersAiBaseUrl,
+                                            onValueChange = { settings.othersAiBaseUrl = it.trim() },
+                                            placeholder = {
+                                                Text(
+                                                    text = "OpenAI URLs only allowed · https://*.com/v1",
+                                                    fontStyle = FontStyle.Italic,
+                                                    fontSize = dynamicSp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                                    maxLines = 1,
+                                                    softWrap = false,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true,
                                         )
                                     }
 
@@ -693,7 +699,7 @@ fun TranslatorSettingsDialog(
                                                 },
                                                 modifier = Modifier.weight(1f),
                                                 singleLine = true,
-                                                placeholder = { Text("nvapi-... or sk-...") },
+                                                placeholder = { Text("AIzaSy... / sk-...") },
                                                 visualTransformation = if (revealedOthersKey == index) {
                                                     VisualTransformation.None
                                                 } else {
@@ -774,7 +780,7 @@ fun TranslatorSettingsDialog(
                                         value = settings.othersAiModel,
                                         onValueChange = { settings.othersAiModel = it.trim() },
                                         label = { Text("Model ID") },
-                                        placeholder = { Text("mistralai/mistral-large-4-1t-a52b") },
+                                        placeholder = { Text("Model ID") },
                                         modifier = Modifier.fillMaxWidth(),
                                         singleLine = true,
                                         trailingIcon = {
