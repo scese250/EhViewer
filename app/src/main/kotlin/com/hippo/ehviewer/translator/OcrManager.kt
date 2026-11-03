@@ -31,16 +31,10 @@ object OcrManager {
     @Volatile
     private var modelAvailableOverride: Boolean? = null
 
-    var isModelAvailable: Boolean
-        get() = modelAvailableOverride ?: runCatching {
-            val prefs = appCtx.getSharedPreferences("manga_translator_prefs", Context.MODE_PRIVATE)
-            prefs.getBoolean("ocr_model_downloaded", false)
-        }.getOrDefault(false)
-        internal set(value) {
-            modelAvailableOverride = value
-        }
-
-    fun isModelAvailable(): Boolean = isModelAvailable
+    fun isModelAvailable(): Boolean = modelAvailableOverride ?: runCatching {
+        val prefs = appCtx.getSharedPreferences("manga_translator_prefs", Context.MODE_PRIVATE)
+        prefs.getBoolean("ocr_model_downloaded", false)
+    }.getOrDefault(false)
 
     private var recognizer: TextRecognizer? = null
 
@@ -55,7 +49,7 @@ object OcrManager {
             val client = ModuleInstall.getClient(context)
             val response = client.areModulesAvailable(getRecognizer()).awaitTask()
             val available = response.areModulesAvailable()
-            isModelAvailable = available
+            modelAvailableOverride = available
             available
         } catch (_: Exception) {
             false
@@ -69,7 +63,7 @@ object OcrManager {
         try {
             val availability = client.areModulesAvailable(rec).awaitTask()
             if (availability.areModulesAvailable()) {
-                isModelAvailable = true
+                modelAvailableOverride = true
                 onProgress(100)
                 return@withContext Result.success(Unit)
             }
@@ -108,7 +102,7 @@ object OcrManager {
             } else {
                 completion.await()
             }
-            isModelAvailable = true
+            modelAvailableOverride = true
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -128,7 +122,7 @@ object OcrManager {
         } catch (_: Exception) {
         }
         recognizer = null
-        isModelAvailable = false
+        modelAvailableOverride = false
     }
 
     suspend fun extractTextBlocks(bitmap: Bitmap): List<OcrTextBlock> = withContext(Dispatchers.Default) {
