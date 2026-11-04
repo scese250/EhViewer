@@ -1564,8 +1564,9 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
                 when {
                     isOcr -> "OCR was used. Took $timeStr No text was found on this page."
                     isOtherAi -> "Other AI was used. Took $timeStr No text was found on this page."
-                    else -> "The AI found no text on this page. Nothing was saved for it, so it is tried again " +
-                        "the next time you open it."
+                    else ->
+                        "The AI found no text on this page. Nothing was saved for it, so it is tried again " +
+                            "the next time you open it."
                 }
             } else {
                 when {
