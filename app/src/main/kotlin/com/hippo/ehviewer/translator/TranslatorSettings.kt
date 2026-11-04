@@ -86,10 +86,10 @@ class TranslatorSettings(context: Context) {
         run {
             val saved = prefs.getString("ocr_system_prompt", null)
             val version = prefs.getInt("ocr_system_prompt_version", 0)
-            if (saved.isNullOrBlank() || version < 1) {
+            if (saved.isNullOrBlank() || version < 2) {
                 prefs.edit()
                     .putString("ocr_system_prompt", DEFAULT_OCR_SYSTEM_PROMPT)
-                    .putInt("ocr_system_prompt_version", 1)
+                    .putInt("ocr_system_prompt_version", 2)
                     .apply()
                 DEFAULT_OCR_SYSTEM_PROMPT
             } else {
@@ -361,10 +361,11 @@ class TranslatorSettings(context: Context) {
             |Your task is to translate extracted Japanese manga dialogue blocks into {lang output}.
             |
             |Rules:
-            |1. Translate each dialogue or sound effect block naturally, preserving tone, emotion, character personality, and manga nuances.
-            |2. Maintain reading flow and concise comic lettering phrasing suitable for speech bubbles.
-            |3. Do not add explanations, romanization, or notes.
-            |4. Return a raw JSON array of translated strings matching the exact order and length of the input list:
+            |1. The input Japanese text is extracted by OCR and may contain recognition inaccuracies, misread characters, or missing accents. Infer the intended words and translate them accurately according to the manga context and narrative flow.
+            |2. Translate each dialogue or sound effect block naturally, preserving tone, emotion, character personality, and manga nuances.
+            |3. Maintain reading flow and concise comic lettering phrasing suitable for speech bubbles.
+            |4. Do not add explanations, romanization, or notes.
+            |5. Return a raw JSON array of translated strings matching the exact order and length of the input list:
             |["translated text 1", "translated text 2", ...]
         """.trimMargin()
 

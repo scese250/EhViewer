@@ -134,6 +134,7 @@ object PageTranslator {
             thinkingLevel = thinkingLevel,
         )
 
+        var fallbackType: String? = null
         val transTime = measureTimeMillis {
             onPhase(Phase.VISION)
             val result = if (geminiApiKeys.isNotEmpty()) {
@@ -144,6 +145,7 @@ object PageTranslator {
                 } catch (e: Exception) {
                     if (isGeminiImageRejected(e)) {
                         if (ocrFallbackEnabled && OcrManager.isModelAvailable()) {
+                            fallbackType = PageTranslation.FALLBACK_OCR
                             val ocrStart = System.currentTimeMillis()
                             val ocrBlocks = OcrManager.extractTextBlocks(bitmap)
                             ocrTimeMs = System.currentTimeMillis() - ocrStart
@@ -225,6 +227,7 @@ object PageTranslator {
                                 VisionResult(bubblesList)
                             }
                         } else if (canUseFallback) {
+                            fallbackType = PageTranslation.FALLBACK_OTHER_AI
                             val fallbackResult = translateWithOpenAiVision(
                                 bitmap = bitmap,
                                 sourceLang = sourceLang,
@@ -242,6 +245,7 @@ object PageTranslator {
                             throw e
                         }
                     } else if (canUseFallback) {
+                        fallbackType = PageTranslation.FALLBACK_OTHER_AI
                         val fallbackResult = translateWithOpenAiVision(
                             bitmap = bitmap,
                             sourceLang = sourceLang,
@@ -282,10 +286,11 @@ object PageTranslator {
             bubbles = bubbles,
             ocrDurationMs = ocrTimeMs,
             translateDurationMs = transTime,
-            totalDurationMs = transTime + ocrTimeMs,
+            totalDurationMs = transTime,
             engineName = engineUsed,
             bitmapWidth = bitmap.width,
             bitmapHeight = bitmap.height,
+            fallbackType = fallbackType,
         )
     }
 

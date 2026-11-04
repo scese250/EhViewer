@@ -1555,12 +1555,24 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
         TranslationStatus.WaitingForPage -> "Waiting for the image to download and decode."
         TranslationStatus.ReadingPage -> "Gemini is translating"
         TranslationStatus.Done -> translation?.let { page ->
+            val seconds = page.translateDurationMs / 1000.0
+            val timeStr = "${String.format(Locale.US, "%.1f", seconds)}s."
+            val isOcr = page.fallbackType == PageTranslation.FALLBACK_OCR ||
+                page.engineName.contains("OCR", ignoreCase = true)
+            val isOtherAi = page.fallbackType == PageTranslation.FALLBACK_OTHER_AI
             if (page.bubbles.isEmpty()) {
-                "The AI found no text on this page. Nothing was saved for it, so it is tried again " +
-                    "the next time you open it."
+                when {
+                    isOcr -> "OCR was used. Took $timeStr No text was found on this page."
+                    isOtherAi -> "Other AI was used. Took $timeStr No text was found on this page."
+                    else -> "The AI found no text on this page. Nothing was saved for it, so it is tried again " +
+                        "the next time you open it."
+                }
             } else {
-                val seconds = page.translateDurationMs / 1000.0
-                "Translation is ready. Took ${String.format(Locale.US, "%.1f", seconds)}s."
+                when {
+                    isOtherAi -> "Other AI was used. Took $timeStr"
+                    isOcr -> "OCR was used. Took $timeStr"
+                    else -> "Translation is ready. Took $timeStr"
+                }
             }
         } ?: "Page translated."
         is TranslationStatus.Failed -> status.message

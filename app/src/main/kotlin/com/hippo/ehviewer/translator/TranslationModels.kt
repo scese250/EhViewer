@@ -38,4 +38,10 @@ data class PageTranslation(
     val bitmapWidth: Int = 0,
     /** Height of the Bitmap used when this translation was produced. */
     val bitmapHeight: Int = 0,
-)
+    val fallbackType: String? = null,
+) {
+    companion object {
+        const val FALLBACK_OTHER_AI = "other_ai"
+        const val FALLBACK_OCR = "ocr"
+    }
+}

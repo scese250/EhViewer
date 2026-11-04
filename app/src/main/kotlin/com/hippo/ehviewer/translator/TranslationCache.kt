@@ -169,6 +169,7 @@ object TranslationCache {
                     put("tr", translation.translateDurationMs)
                     put("total", translation.totalDurationMs)
                     put("engine", translation.engineName)
+                    translation.fallbackType?.let { put("fb", it) }
                     put(
                         "bubbles",
                         JSONArray().apply {
@@ -267,6 +268,7 @@ object TranslationCache {
             engineName = item.optString("engine", "Gemini"),
             bitmapWidth = item.optInt("bw", 0),
             bitmapHeight = item.optInt("bh", 0),
+            fallbackType = item.optString("fb").takeIf { it.isNotEmpty() },
         )
     }.getOrNull()
 }
