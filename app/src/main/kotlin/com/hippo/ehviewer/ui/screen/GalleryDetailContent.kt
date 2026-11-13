@@ -523,13 +523,13 @@ fun BelowHeader(galleryDetail: GalleryDetail, voteTag: VoteTag) {
             icon = Icons.Default.Search,
             text = stringResource(id = R.string.similar_gallery),
             onClick = {
-                val keyword = EhUtils.extractTitle(galleryDetail.title)
+                val keyword = EhUtils.extractSimilarSearchKeyword(galleryDetail.title, galleryDetail.titleJpn)
                 val artistTag = galleryDetail.tagGroups.artistTag()
                 if (null != keyword) {
                     navigate(
                         ListUrlBuilder(
                             mode = ListUrlBuilder.MODE_NORMAL,
-                            keyword = "\"" + keyword + "\"",
+                            keyword = keyword,
                         ).asDst(),
                     )
                 } else if (artistTag != null) {

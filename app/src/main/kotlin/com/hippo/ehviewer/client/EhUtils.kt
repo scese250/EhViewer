@@ -190,6 +190,29 @@ object EhUtils {
         return title.substringBeforeLast('|').trim().ifEmpty { null }
     }
 
+    fun extractSimilarSearchKeyword(title: String?, titleJpn: String?): String? {
+        val cleanTitle = extractTitle(title)?.replace("\"", "")?.trim()?.ifEmpty { null }
+        val cleanTitleJpn = extractTitle(titleJpn)?.replace("\"", "")?.trim()?.ifEmpty { null }
+
+        return when {
+            cleanTitle != null && cleanTitleJpn != null && !cleanTitle.equals(cleanTitleJpn, ignoreCase = true) -> {
+                val combined = "~\"$cleanTitle\" ~\"$cleanTitleJpn\""
+                if (combined.length <= 190) {
+                    combined
+                } else if (cleanTitle.length <= 188) {
+                    "\"$cleanTitle\""
+                } else if (cleanTitleJpn.length <= 188) {
+                    "\"$cleanTitleJpn\""
+                } else {
+                    "\"${cleanTitle.take(186)}\""
+                }
+            }
+            cleanTitle != null -> "\"$cleanTitle\""
+            cleanTitleJpn != null -> "\"$cleanTitleJpn\""
+            else -> null
+        }
+    }
+
     context(ctx: Context)
     suspend fun downloadArchive(galleryDetail: GalleryDetail, archive: Archive) {
         val gid = galleryDetail.gid
