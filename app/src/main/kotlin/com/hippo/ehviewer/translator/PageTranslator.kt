@@ -154,6 +154,7 @@ object PageTranslator {
         )
 
         var fallbackType: String? = null
+        var resolvedModelNumber: Int? = null
 
         suspend fun runOcrFallback(textWithOthersAiFirst: Boolean): VisionResult {
             fallbackType = PageTranslation.FALLBACK_OCR
@@ -314,7 +315,6 @@ object PageTranslator {
 
                 var successResult: VisionResult? = null
                 var lastOthersException: Exception? = null
-                var resolvedModelNumber: Int? = null
 
                 for ((idx, modelCandidate) in modelsToTry.withIndex()) {
                     try {
@@ -349,6 +349,7 @@ object PageTranslator {
                 if (successResult != null) {
                     successResult
                 } else {
+                    resolvedModelNumber = null
                     if (geminiUseAsFallback && canUseGemini) {
                         try {
                             val geminiResult = readPage()
