@@ -165,7 +165,7 @@ fun TranslatorSettingsDialog(
                     .verticalScroll(rememberScrollState()),
             ) {
                 // Log de la traducción de esta página.
-                TranslationStatusCard(status = status, translation = translation)
+                TranslationStatusCard(status = status, translation = translation, settings = settings)
 
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -1532,7 +1532,16 @@ fun TranslatorSettingsDialog(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
 
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        SettingSwitch(
+                            title = "Single API batch",
+                            subtitle = "Translate in parallel using the same API in the main translator",
+                            checked = settings.singleApiBatch,
+                            onCheckedChange = { settings.singleApiBatch = it },
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
 
                         if (batchLimit > 1) {
                             Row(
@@ -1704,7 +1713,11 @@ private fun SettingChips(
 }
 
 @Composable
-private fun TranslationStatusCard(status: TranslationStatus, translation: PageTranslation?) {
+private fun TranslationStatusCard(
+    status: TranslationStatus,
+    translation: PageTranslation?,
+    settings: TranslatorSettings,
+) {
     val context = LocalContext.current
     val container = when (status) {
         is TranslationStatus.Failed -> MaterialTheme.colorScheme.errorContainer
@@ -1726,27 +1739,29 @@ private fun TranslationStatusCard(status: TranslationStatus, translation: PageTr
     val detail = when (status) {
         TranslationStatus.Idle -> "This page has not been translated yet."
         TranslationStatus.WaitingForPage -> "Waiting for the image to download and decode."
-        TranslationStatus.ReadingPage -> "Gemini is translating"
+        TranslationStatus.ReadingPage -> if (settings.othersAiUseAsMain) "Others AI is translating" else "Gemini is translating"
         TranslationStatus.Done -> translation?.let { page ->
             val seconds = page.translateDurationMs / 1000.0
             val timeStr = "${String.format(Locale.US, "%.1f", seconds)}s."
             val isOcr = page.fallbackType == PageTranslation.FALLBACK_OCR ||
                 page.engineName.contains("OCR", ignoreCase = true)
-            val isOtherAi = page.fallbackType == PageTranslation.FALLBACK_OTHER_AI
+            val isGeminiFallback = page.fallbackType == PageTranslation.FALLBACK_GEMINI
+            val isOtherAiFallback = page.fallbackType == PageTranslation.FALLBACK_OTHER_AI
+
+            val engineLabel = when {
+                isGeminiFallback -> "Gemini fallback used."
+                isOcr -> "OCR fallback used."
+                page.modelNumber != null -> "Others AI #${page.modelNumber} used."
+                isOtherAiFallback -> "Others AI fallback used."
+                page.engineName.contains("Others AI", ignoreCase = true) -> "Others AI used."
+                else -> "Gemini used."
+            }
+
+            val baseMessage = "$engineLabel Took $timeStr"
             if (page.bubbles.isEmpty()) {
-                when {
-                    isOcr -> "OCR was used. Took $timeStr No text was found on this page."
-                    isOtherAi -> "Other AI was used. Took $timeStr No text was found on this page."
-                    else ->
-                        "The AI found no text on this page. Nothing was saved for it, so it is tried again " +
-                            "the next time you open it."
-                }
+                "$baseMessage No text was found on this page."
             } else {
-                when {
-                    isOtherAi -> "Other AI was used. Took $timeStr"
-                    isOcr -> "OCR was used. Took $timeStr"
-                    else -> "Translation is ready. Took $timeStr"
-                }
+                baseMessage
             }
         } ?: "Page translated."
         is TranslationStatus.Failed -> status.message

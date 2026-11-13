@@ -36,6 +36,13 @@ object PageTranslator {
      * the previous one, so two pages running at the same time never share a key.
      */
     private val keyCursor = AtomicInteger(0)
+    private val activeGeminiKeyIndex = AtomicInteger(0)
+    private val activeOthersKeyIndex = AtomicInteger(0)
+
+    fun resetActiveKeys() {
+        activeGeminiKeyIndex.set(0)
+        activeOthersKeyIndex.set(0)
+    }
 
     /**
      * One slot per API key. The keys split the pages between them instead of
@@ -108,6 +115,8 @@ object PageTranslator {
         ocrUseOthersAiForRejectedText: Boolean = false,
         ocrSystemPrompt: String = TranslatorSettings.DEFAULT_OCR_SYSTEM_PROMPT,
         ocrUserPrompt: String = "",
+        singleApiBatch: Boolean = false,
+        batchSize: Int = 3,
         onPhase: (Phase) -> Unit = {},
     ): PageTranslation = withContext(Dispatchers.Default) {
         val effectiveOthersModel = othersAiModel.ifBlank { othersAiModels.firstOrNull().orEmpty() }
@@ -140,6 +149,8 @@ object PageTranslator {
             apiKeys = geminiApiKeys,
             model = geminiModel,
             thinkingLevel = thinkingLevel,
+            singleApiBatch = singleApiBatch,
+            batchSize = batchSize,
         )
 
         var fallbackType: String? = null
@@ -169,6 +180,8 @@ object PageTranslator {
                         apiKeys = othersAiApiKeys,
                         model = effectiveOthersModel,
                         thinkingLevel = othersAiThinkingLevel,
+                        singleApiBatch = singleApiBatch,
+                        batchSize = batchSize,
                     )
                     if (ocrUseOthersAiForRejectedText && canUseGemini &&
                         othersTexts.isNotEmpty() && othersTexts.all { isReject(it) }
@@ -182,6 +195,8 @@ object PageTranslator {
                             apiKeys = geminiApiKeys,
                             model = geminiModel,
                             thinkingLevel = thinkingLevel,
+                            singleApiBatch = singleApiBatch,
+                            batchSize = batchSize,
                         )
                         textEngine = "Gemini Text"
                     } else {
@@ -198,6 +213,8 @@ object PageTranslator {
                             apiKeys = geminiApiKeys,
                             model = geminiModel,
                             thinkingLevel = thinkingLevel,
+                            singleApiBatch = singleApiBatch,
+                            batchSize = batchSize,
                         )
                         textEngine = "Gemini Text"
                     } else {
@@ -215,6 +232,8 @@ object PageTranslator {
                         apiKeys = geminiApiKeys,
                         model = geminiModel,
                         thinkingLevel = thinkingLevel,
+                        singleApiBatch = singleApiBatch,
+                        batchSize = batchSize,
                     )
                     if (ocrUseOthersAiForRejectedText && canUseOthersAi &&
                         geminiTexts.isNotEmpty() && geminiTexts.all { isReject(it) }
@@ -229,6 +248,8 @@ object PageTranslator {
                             apiKeys = othersAiApiKeys,
                             model = effectiveOthersModel,
                             thinkingLevel = othersAiThinkingLevel,
+                            singleApiBatch = singleApiBatch,
+                            batchSize = batchSize,
                         )
                         textEngine = "Others AI Text ($effectiveOthersModel)"
                     } else {
@@ -246,6 +267,8 @@ object PageTranslator {
                             apiKeys = othersAiApiKeys,
                             model = effectiveOthersModel,
                             thinkingLevel = othersAiThinkingLevel,
+                            singleApiBatch = singleApiBatch,
+                            batchSize = batchSize,
                         )
                         textEngine = "Others AI Text ($effectiveOthersModel)"
                     } else {
@@ -291,8 +314,9 @@ object PageTranslator {
 
                 var successResult: VisionResult? = null
                 var lastOthersException: Exception? = null
+                var resolvedModelNumber: Int? = null
 
-                for (modelCandidate in modelsToTry) {
+                for ((idx, modelCandidate) in modelsToTry.withIndex()) {
                     try {
                         val openAiRes = translateWithOpenAiVision(
                             bitmap = bitmap,
@@ -304,8 +328,17 @@ object PageTranslator {
                             apiKeys = othersAiApiKeys,
                             model = modelCandidate,
                             thinkingLevel = othersAiThinkingLevel,
+                            singleApiBatch = singleApiBatch,
+                            batchSize = batchSize,
                         )
-                        engineUsed = "Others AI ($modelCandidate)"
+                        val num = if (othersAiModels.isNotEmpty()) {
+                            val found = othersAiModels.indexOf(modelCandidate)
+                            if (found >= 0) found + 1 else idx + 1
+                        } else {
+                            1
+                        }
+                        resolvedModelNumber = num
+                        engineUsed = "Others AI #$num ($modelCandidate)"
                         successResult = openAiRes
                         break
                     } catch (e: Exception) {
@@ -357,6 +390,8 @@ object PageTranslator {
                                 apiKeys = othersAiApiKeys,
                                 model = effectiveOthersModel,
                                 thinkingLevel = othersAiThinkingLevel,
+                                singleApiBatch = singleApiBatch,
+                                batchSize = batchSize,
                             )
                             engineUsed = "Others AI ($effectiveOthersModel)"
                             fallbackResult
@@ -375,6 +410,8 @@ object PageTranslator {
                             apiKeys = othersAiApiKeys,
                             model = effectiveOthersModel,
                             thinkingLevel = othersAiThinkingLevel,
+                            singleApiBatch = singleApiBatch,
+                            batchSize = batchSize,
                         )
                         engineUsed = "Others AI ($effectiveOthersModel)"
                         fallbackResult
@@ -393,6 +430,8 @@ object PageTranslator {
                     apiKeys = othersAiApiKeys,
                     model = effectiveOthersModel,
                     thinkingLevel = othersAiThinkingLevel,
+                    singleApiBatch = singleApiBatch,
+                    batchSize = batchSize,
                 )
                 engineUsed = "Others AI ($effectiveOthersModel)"
                 fallbackResult
@@ -409,6 +448,7 @@ object PageTranslator {
             engineName = engineUsed,
             bitmapWidth = bitmap.width,
             bitmapHeight = bitmap.height,
+            modelNumber = resolvedModelNumber,
             fallbackType = fallbackType,
         )
     }
@@ -460,6 +500,7 @@ object PageTranslator {
         model: String,
         request: JSONObject,
         readTimeoutMs: Int,
+        singleApiBatch: Boolean = false,
     ): JSONObject {
         if (apiKeys.isEmpty()) error("No API keys available")
 
@@ -474,12 +515,14 @@ object PageTranslator {
         var retriedSmallerOutput = false
         val askedOutputTokens = generationConfig?.optInt("maxOutputTokens", 0) ?: 0
 
-        // Each call starts on the key after the previous one, so the pages that
-        // run at the same time work on different keys.
-        val firstKey = keyCursor.getAndIncrement().mod(totalKeys)
+        val startKey = if (singleApiBatch) {
+            activeGeminiKeyIndex.get().mod(totalKeys)
+        } else {
+            keyCursor.getAndIncrement().mod(totalKeys)
+        }
         var attempt = 0
         while (attempt < totalKeys) {
-            val keyIndex = (firstKey + attempt).mod(totalKeys)
+            val keyIndex = (startKey + attempt).mod(totalKeys)
             val urlString = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=${apiKeys[keyIndex]}"
             val conn = (URI.create(urlString).toURL().openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
@@ -522,11 +565,17 @@ object PageTranslator {
                     generationConfig?.put("maxOutputTokens", FALLBACK_OUTPUT_TOKENS)
                     continue
                 }
+                if (singleApiBatch) {
+                    activeGeminiKeyIndex.compareAndSet(keyIndex, (keyIndex + 1).mod(totalKeys))
+                }
                 // A malformed request or an unknown model fails the same way
                 // with every key: don't burn the timeout once per key.
                 if (responseCode in 400..499 && responseCode != 429) break
             } catch (e: Exception) {
                 lastError = e
+                if (singleApiBatch) {
+                    activeGeminiKeyIndex.compareAndSet(keyIndex, (keyIndex + 1).mod(totalKeys))
+                }
             } finally {
                 conn.disconnect()
             }
@@ -676,7 +725,9 @@ object PageTranslator {
         apiKeys: List<String>,
         model: String,
         thinkingLevel: String,
-    ): VisionResult = slotsFor(apiKeys.size).withPermit {
+        singleApiBatch: Boolean = false,
+        batchSize: Int = 3,
+    ): VisionResult = slotsFor(if (singleApiBatch) batchSize else apiKeys.size).withPermit {
         translateWithGeminiVisionOnKey(
             bitmap = bitmap,
             sourceLang = sourceLang,
@@ -686,6 +737,7 @@ object PageTranslator {
             apiKeys = apiKeys,
             model = model,
             thinkingLevel = thinkingLevel,
+            singleApiBatch = singleApiBatch,
         )
     }
 
@@ -702,6 +754,7 @@ object PageTranslator {
         apiKeys: List<String>,
         model: String,
         thinkingLevel: String,
+        singleApiBatch: Boolean = false,
     ): VisionResult = withContext(Dispatchers.IO) {
         // The coordinate grid is drawn so the model has a visual ruler to report
         // accurate coordinates.
@@ -793,10 +846,11 @@ object PageTranslator {
                 )
             }
             return postGemini(
-                apiKeys,
-                model,
-                requestJson,
-                readTimeoutFor(thinkingLevel, GEMINI_VISION_READ_TIMEOUT_MS),
+                apiKeys = apiKeys,
+                model = model,
+                request = requestJson,
+                readTimeoutMs = readTimeoutFor(thinkingLevel, GEMINI_VISION_READ_TIMEOUT_MS),
+                singleApiBatch = singleApiBatch,
             )
         }
 
@@ -819,7 +873,9 @@ object PageTranslator {
         apiKeys: List<String>,
         model: String,
         thinkingLevel: String,
-    ): List<String> = slotsFor(apiKeys.size).withPermit {
+        singleApiBatch: Boolean = false,
+        batchSize: Int = 3,
+    ): List<String> = slotsFor(if (singleApiBatch) batchSize else apiKeys.size).withPermit {
         withContext(Dispatchers.IO) {
             val textsJson = JSONArray(texts).toString()
             val userPromptFormatted = formatUserPrompt(userPrompt, sourceLang, targetLang)
@@ -879,10 +935,11 @@ object PageTranslator {
             }
 
             val responseJson = postGemini(
-                apiKeys,
-                model,
-                requestJson,
-                readTimeoutFor(thinkingLevel, GEMINI_READ_TIMEOUT_MS),
+                apiKeys = apiKeys,
+                model = model,
+                request = requestJson,
+                readTimeoutMs = readTimeoutFor(thinkingLevel, GEMINI_READ_TIMEOUT_MS),
+                singleApiBatch = singleApiBatch,
             )
             val raw = candidateText(responseJson)
             parseOcrTranslations(raw, texts.size)
@@ -899,54 +956,59 @@ object PageTranslator {
         apiKeys: List<String>,
         model: String,
         thinkingLevel: String,
-    ): List<String> = withContext(Dispatchers.IO) {
-        val endpoint = resolveOpenAiEndpoint(baseUrl)
-        val effectiveSystemPrompt = systemPrompt.ifBlank { TranslatorSettings.DEFAULT_OCR_SYSTEM_PROMPT }
-        val formattedSysPrompt = TranslatorSettings.formatGeminiPrompt(effectiveSystemPrompt, sourceLang, targetLang)
-        val userPromptFormatted = formatUserPrompt(userPrompt, sourceLang, targetLang)
-        val textsJson = JSONArray(texts).toString()
-        val promptText = if (userPromptFormatted.isNotBlank()) {
-            "$textsJson\n\nAdditional instructions:\n$userPromptFormatted"
-        } else {
-            textsJson
-        }
-
-        val requestJson = JSONObject().apply {
-            put("model", model.trim())
-            put(
-                "messages",
-                JSONArray().apply {
-                    put(
-                        JSONObject().apply {
-                            put("role", "system")
-                            put("content", formattedSysPrompt)
-                        },
-                    )
-                    put(
-                        JSONObject().apply {
-                            put("role", "user")
-                            put("content", promptText)
-                        },
-                    )
-                },
-            )
-            put("temperature", 0.1)
-            put("max_tokens", 16384)
-            when (thinkingLevel) {
-                TranslatorSettings.THINKING_LOW -> put("reasoning_effort", "low")
-                TranslatorSettings.THINKING_MEDIUM -> put("reasoning_effort", "medium")
-                TranslatorSettings.THINKING_HIGH -> put("reasoning_effort", "high")
+        singleApiBatch: Boolean = false,
+        batchSize: Int = 3,
+    ): List<String> = slotsFor(if (singleApiBatch) batchSize else apiKeys.size).withPermit {
+        withContext(Dispatchers.IO) {
+            val endpoint = resolveOpenAiEndpoint(baseUrl)
+            val effectiveSystemPrompt = systemPrompt.ifBlank { TranslatorSettings.DEFAULT_OCR_SYSTEM_PROMPT }
+            val formattedSysPrompt = TranslatorSettings.formatGeminiPrompt(effectiveSystemPrompt, sourceLang, targetLang)
+            val userPromptFormatted = formatUserPrompt(userPrompt, sourceLang, targetLang)
+            val textsJson = JSONArray(texts).toString()
+            val promptText = if (userPromptFormatted.isNotBlank()) {
+                "$textsJson\n\nAdditional instructions:\n$userPromptFormatted"
+            } else {
+                textsJson
             }
-        }
 
-        val responseJson = postOpenAi(
-            endpoint = endpoint,
-            apiKeys = apiKeys,
-            request = requestJson,
-            readTimeoutMs = readTimeoutFor(thinkingLevel, GEMINI_READ_TIMEOUT_MS),
-        )
-        val content = extractOpenAiContent(responseJson)
-        parseOcrTranslations(content, texts.size)
+            val requestJson = JSONObject().apply {
+                put("model", model.trim())
+                put(
+                    "messages",
+                    JSONArray().apply {
+                        put(
+                            JSONObject().apply {
+                                put("role", "system")
+                                put("content", formattedSysPrompt)
+                            },
+                        )
+                        put(
+                            JSONObject().apply {
+                                put("role", "user")
+                                put("content", promptText)
+                            },
+                        )
+                    },
+                )
+                put("temperature", 0.1)
+                put("max_tokens", 16384)
+                when (thinkingLevel) {
+                    TranslatorSettings.THINKING_LOW -> put("reasoning_effort", "low")
+                    TranslatorSettings.THINKING_MEDIUM -> put("reasoning_effort", "medium")
+                    TranslatorSettings.THINKING_HIGH -> put("reasoning_effort", "high")
+                }
+            }
+
+            val responseJson = postOpenAi(
+                endpoint = endpoint,
+                apiKeys = apiKeys,
+                request = requestJson,
+                readTimeoutMs = readTimeoutFor(thinkingLevel, GEMINI_READ_TIMEOUT_MS),
+                singleApiBatch = singleApiBatch,
+            )
+            val content = extractOpenAiContent(responseJson)
+            parseOcrTranslations(content, texts.size)
+        }
     }
 
     private fun parseOcrTranslations(raw: String, expectedCount: Int): List<String> {
@@ -1419,105 +1481,110 @@ object PageTranslator {
         apiKeys: List<String>,
         model: String,
         thinkingLevel: String,
-    ): VisionResult = withContext(Dispatchers.IO) {
-        val (imageBase64, encodedImage) = annotationSlots.withPermit {
-            val annotated = try {
-                annotateForVision(bitmap)
-            } catch (e: OutOfMemoryError) {
-                error("Not enough memory to prepare the image")
-            }
-            val size = EncodedVisionImage(
-                base64 = "",
-                sentWidth = bitmap.width,
-                sentHeight = bitmap.height,
-            )
-            val base64 = try {
-                ByteArrayOutputStream().use { stream ->
-                    if (!annotated.compress(Bitmap.CompressFormat.JPEG, VISION_JPEG_QUALITY, stream)) {
-                        error("No se pudo comprimir la imagen")
-                    }
-                    Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+        singleApiBatch: Boolean = false,
+        batchSize: Int = 3,
+    ): VisionResult = slotsFor(if (singleApiBatch) batchSize else apiKeys.size).withPermit {
+        withContext(Dispatchers.IO) {
+            val (imageBase64, encodedImage) = annotationSlots.withPermit {
+                val annotated = try {
+                    annotateForVision(bitmap)
+                } catch (e: OutOfMemoryError) {
+                    error("Not enough memory to prepare the image")
                 }
-            } finally {
-                annotated.recycle()
+                val size = EncodedVisionImage(
+                    base64 = "",
+                    sentWidth = bitmap.width,
+                    sentHeight = bitmap.height,
+                )
+                val base64 = try {
+                    ByteArrayOutputStream().use { stream ->
+                        if (!annotated.compress(Bitmap.CompressFormat.JPEG, VISION_JPEG_QUALITY, stream)) {
+                            error("No se pudo comprimir la imagen")
+                        }
+                        Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+                    }
+                } finally {
+                    annotated.recycle()
+                }
+                base64 to size
             }
-            base64 to size
-        }
 
-        val endpoint = resolveOpenAiEndpoint(baseUrl)
-        val effectiveSystemPrompt = systemPrompt.ifBlank { TranslatorSettings.DEFAULT_SYSTEM_PROMPT }
-        val formattedSysPrompt = TranslatorSettings.formatGeminiPrompt(effectiveSystemPrompt, sourceLang, targetLang)
-        val userInstructionText = formatUserPrompt(userPrompt, sourceLang, targetLang)
+            val endpoint = resolveOpenAiEndpoint(baseUrl)
+            val effectiveSystemPrompt = systemPrompt.ifBlank { TranslatorSettings.DEFAULT_SYSTEM_PROMPT }
+            val formattedSysPrompt = TranslatorSettings.formatGeminiPrompt(effectiveSystemPrompt, sourceLang, targetLang)
+            val userInstructionText = formatUserPrompt(userPrompt, sourceLang, targetLang)
 
-        val userContentArray = JSONArray().apply {
-            val textPrompt = if (userInstructionText.isNotBlank()) {
-                "Translate all manga text on this page.\nAdditional instructions: $userInstructionText"
-            } else {
-                "Translate all manga text on this page."
+            val userContentArray = JSONArray().apply {
+                val textPrompt = if (userInstructionText.isNotBlank()) {
+                    "Translate all manga text on this page.\nAdditional instructions: $userInstructionText"
+                } else {
+                    "Translate all manga text on this page."
+                }
+                put(
+                    JSONObject().apply {
+                        put("type", "text")
+                        put("text", textPrompt)
+                    },
+                )
+                put(
+                    JSONObject().apply {
+                        put("type", "image_url")
+                        put(
+                            "image_url",
+                            JSONObject().apply {
+                                put("url", "data:image/jpeg;base64,$imageBase64")
+                            },
+                        )
+                    },
+                )
             }
-            put(
-                JSONObject().apply {
-                    put("type", "text")
-                    put("text", textPrompt)
-                },
-            )
-            put(
-                JSONObject().apply {
-                    put("type", "image_url")
-                    put(
-                        "image_url",
-                        JSONObject().apply {
-                            put("url", "data:image/jpeg;base64,$imageBase64")
-                        },
-                    )
-                },
-            )
-        }
 
-        val requestJson = JSONObject().apply {
-            put("model", model.trim())
-            put(
-                "messages",
-                JSONArray().apply {
-                    put(
-                        JSONObject().apply {
-                            put("role", "system")
-                            put("content", formattedSysPrompt)
-                        },
-                    )
-                    put(
-                        JSONObject().apply {
-                            put("role", "user")
-                            put("content", userContentArray)
-                        },
-                    )
-                },
-            )
-            put("temperature", 0.1)
-            put("max_tokens", 16384)
-            when (thinkingLevel) {
-                TranslatorSettings.THINKING_LOW -> put("reasoning_effort", "low")
-                TranslatorSettings.THINKING_MEDIUM -> put("reasoning_effort", "medium")
-                TranslatorSettings.THINKING_HIGH -> put("reasoning_effort", "high")
+            val requestJson = JSONObject().apply {
+                put("model", model.trim())
+                put(
+                    "messages",
+                    JSONArray().apply {
+                        put(
+                            JSONObject().apply {
+                                put("role", "system")
+                                put("content", formattedSysPrompt)
+                            },
+                        )
+                        put(
+                            JSONObject().apply {
+                                put("role", "user")
+                                put("content", userContentArray)
+                            },
+                        )
+                    },
+                )
+                put("temperature", 0.1)
+                put("max_tokens", 16384)
+                when (thinkingLevel) {
+                    TranslatorSettings.THINKING_LOW -> put("reasoning_effort", "low")
+                    TranslatorSettings.THINKING_MEDIUM -> put("reasoning_effort", "medium")
+                    TranslatorSettings.THINKING_HIGH -> put("reasoning_effort", "high")
+                }
             }
+
+            val responseJson = postOpenAi(
+                endpoint = endpoint,
+                apiKeys = apiKeys,
+                request = requestJson,
+                readTimeoutMs = readTimeoutFor(thinkingLevel, GEMINI_VISION_READ_TIMEOUT_MS),
+                singleApiBatch = singleApiBatch,
+            )
+
+            val content = extractOpenAiContent(responseJson)
+            parseVisionResult(
+                raw = content,
+                width = bitmap.width,
+                height = bitmap.height,
+                maxExtras = MAX_EXTRA_BUBBLES * 2,
+                sentWidth = encodedImage.sentWidth,
+                sentHeight = encodedImage.sentHeight,
+            )
         }
-
-        val responseJson = postOpenAi(
-            endpoint = endpoint,
-            apiKeys = apiKeys,
-            request = requestJson,
-            readTimeoutMs = readTimeoutFor(thinkingLevel, GEMINI_VISION_READ_TIMEOUT_MS),
-        )
-
-        val content = extractOpenAiContent(responseJson)
-        parseVisionResult(
-            raw = content,
-            width = bitmap.width,
-            height = bitmap.height,
-            maxExtras = MAX_EXTRA_BUBBLES * 2,
-            sentWidth = encodedImage.sentWidth,
-            sentHeight = encodedImage.sentHeight,
-        )
     }
 
     fun resolveOpenAiEndpoint(baseUrl: String): String {
@@ -1570,14 +1637,19 @@ object PageTranslator {
         apiKeys: List<String>,
         request: JSONObject,
         readTimeoutMs: Int,
+        singleApiBatch: Boolean = false,
     ): JSONObject {
         if (apiKeys.isEmpty()) error("No API keys available for Others AI")
         var lastError: Exception? = null
         val totalKeys = apiKeys.size
-        val firstKey = keyCursor.getAndIncrement().mod(totalKeys)
+        val startKey = if (singleApiBatch) {
+            activeOthersKeyIndex.get().mod(totalKeys)
+        } else {
+            keyCursor.getAndIncrement().mod(totalKeys)
+        }
         var attempt = 0
         while (attempt < totalKeys) {
-            val keyIndex = (firstKey + attempt).mod(totalKeys)
+            val keyIndex = (startKey + attempt).mod(totalKeys)
             val conn = (URI.create(endpoint).toURL().openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
@@ -1610,9 +1682,15 @@ object PageTranslator {
                     request.remove("reasoning_effort")
                     continue
                 }
+                if (singleApiBatch) {
+                    activeOthersKeyIndex.compareAndSet(keyIndex, (keyIndex + 1).mod(totalKeys))
+                }
                 if (responseCode in 400..499 && responseCode != 429) break
             } catch (e: Exception) {
                 lastError = e
+                if (singleApiBatch) {
+                    activeOthersKeyIndex.compareAndSet(keyIndex, (keyIndex + 1).mod(totalKeys))
+                }
             } finally {
                 conn.disconnect()
             }

@@ -38,6 +38,7 @@ data class PageTranslation(
     val bitmapWidth: Int = 0,
     /** Height of the Bitmap used when this translation was produced. */
     val bitmapHeight: Int = 0,
+    val modelNumber: Int? = null,
     val fallbackType: String? = null,
 ) {
     companion object {

@@ -79,6 +79,10 @@ class ReaderTranslationState(
     val pageLoader: PageLoader,
     val settings: TranslatorSettings,
 ) {
+    init {
+        PageTranslator.resetActiveKeys()
+    }
+
     val translations = mutableStateMapOf<Int, PageTranslation>()
 
     /** Non-null while the manual "redo translation" batch is running. */
@@ -272,6 +276,8 @@ class ReaderTranslationState(
                     ocrUseOthersAiForRejectedText = settings.ocrUseOthersAiForRejectedText,
                     ocrSystemPrompt = settings.ocrSystemPrompt,
                     ocrUserPrompt = settings.ocrUserPrompt,
+                    singleApiBatch = settings.singleApiBatch,
+                    batchSize = settings.batchSize,
                     onPhase = { phase ->
                         statuses[index] = when (phase) {
                             PageTranslator.Phase.VISION -> TranslationStatus.ReadingPage
@@ -434,9 +440,8 @@ class ReaderTranslationState(
      */
     suspend fun autoTranslate(currentPages: Flow<Int>, maxAhead: Int) {
         val target = MutableStateFlow<Int?>(null)
-        // One page per API key: the keys split the window between them, so the
-        // pages ahead translate in parallel instead of one after another.
-        val parallel = settings.getGeminiApiKeys().size.coerceAtLeast(1)
+        val mainKeys = if (settings.othersAiUseAsMain) settings.getOthersAiApiKeys() else settings.getGeminiApiKeys()
+        val parallel = if (settings.singleApiBatch) maxAhead.coerceAtLeast(1) else mainKeys.size.coerceAtLeast(1)
         coroutineScope {
             launch { currentPages.collect { target.value = it } }
             val inFlight = mutableSetOf<Int>()

@@ -125,6 +125,7 @@ class TranslatorSettings(context: Context) {
     var bubbleOpacity by mutableFloatStateOf(prefs.getFloat("bubble_opacity", 1.0f))
     var autoTranslate by mutableStateOf(prefs.getBoolean("auto_translate", false))
     var batchSize by mutableIntStateOf(prefs.getInt("batch_size", 3))
+    var singleApiBatch by mutableStateOf(prefs.getBoolean("single_api_batch", false))
 
     /**
      * Reasoning budget requested from Gemini ("minimal", "low", "medium" or
@@ -294,6 +295,8 @@ class TranslatorSettings(context: Context) {
         bubbleOpacity = prefs.getFloat("bubble_opacity", 1.0f)
         autoTranslate = prefs.getBoolean("auto_translate", false)
         batchSize = prefs.getInt("batch_size", 3)
+        singleApiBatch = prefs.getBoolean("single_api_batch", false)
+        PageTranslator.resetActiveKeys()
         thinkingLevel = prefs.getString("thinking_level", THINKING_MINIMAL) ?: THINKING_MINIMAL
 
         bubbleOrientation = prefs.getString("bubble_orientation", ORIENTATION_VERTICAL) ?: ORIENTATION_VERTICAL
@@ -367,8 +370,10 @@ class TranslatorSettings(context: Context) {
             .putBoolean("show_sfx", showSfx)
             .putBoolean("auto_translate", autoTranslate)
             .putInt("batch_size", batchSize)
+            .putBoolean("single_api_batch", singleApiBatch)
             .apply()
 
+        PageTranslator.resetActiveKeys()
         revision++
     }
 
