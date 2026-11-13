@@ -1,8 +1,10 @@
 package com.hippo.ehviewer.translator.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -25,7 +28,9 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -42,6 +47,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -50,6 +56,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +68,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -104,6 +112,7 @@ fun TranslatorSettingsDialog(
     retranslateProgress: RetranslateProgress?,
     onTranslateCurrent: () -> Unit,
     onRetranslateNext: (Int) -> Unit,
+    onCancel: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val batchLimit = maxBatchSize.coerceAtLeast(1)
@@ -342,6 +351,45 @@ fun TranslatorSettingsDialog(
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
                                 Column(modifier = Modifier.padding(12.dp)) {
+                                    if (settings.othersAiUseAsMain) {
+                                        Card(
+                                            colors = CardDefaults.cardColors(
+                                                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f),
+                                            ),
+                                            modifier = Modifier.fillMaxWidth(),
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(10.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Info,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.error,
+                                                    modifier = Modifier.size(20.dp),
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    text = "Gemini is disabled",
+                                                    fontWeight = FontWeight.Bold,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                                )
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(8.dp))
+
+                                        SettingSwitch(
+                                            title = "Use as fallback",
+                                            subtitle = "Used as fallback if Others AI rejects the image",
+                                            checked = settings.geminiUseAsFallback,
+                                            onCheckedChange = { settings.geminiUseAsFallback = it },
+                                        )
+
+                                        Spacer(modifier = Modifier.height(10.dp))
+                                    }
+
                                     Text(
                                         text = "API keys:",
                                         fontWeight = FontWeight.SemiBold,
@@ -640,11 +688,30 @@ fun TranslatorSettingsDialog(
                             ) {
                                 Column(modifier = Modifier.padding(12.dp)) {
                                     SettingSwitch(
-                                        title = "Use as fallback",
-                                        subtitle = "Models here will be used when image is rejected by Gemini",
-                                        checked = settings.othersAiUseAsFallback,
-                                        onCheckedChange = { settings.othersAiUseAsFallback = it },
+                                        title = "Use as main translator",
+                                        subtitle = "Enabling this will disable Gemini AI.",
+                                        checked = settings.othersAiUseAsMain,
+                                        onCheckedChange = { settings.othersAiUseAsMain = it },
                                     )
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    SettingSwitch(
+                                        title = "Allow fallback on models",
+                                        subtitle = "If an image is rejected by the first model,  it will retry to the next one and so.",
+                                        checked = settings.othersAiAllowModelFallback,
+                                        onCheckedChange = { settings.othersAiAllowModelFallback = it },
+                                    )
+
+                                    if (!settings.othersAiUseAsMain) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        SettingSwitch(
+                                            title = "Use as fallback",
+                                            subtitle = "Models here will be used when image is rejected by Gemini",
+                                            checked = settings.othersAiUseAsFallback,
+                                            onCheckedChange = { settings.othersAiUseAsFallback = it },
+                                        )
+                                    }
 
                                     Spacer(modifier = Modifier.height(10.dp))
 
@@ -807,21 +874,28 @@ fun TranslatorSettingsDialog(
                                         style = MaterialTheme.typography.bodySmall,
                                     )
 
+                                    var newOthersModelInput by remember { mutableStateOf("") }
+
                                     OutlinedTextField(
-                                        value = settings.othersAiModel,
-                                        onValueChange = { settings.othersAiModel = it.trim() },
+                                        value = newOthersModelInput,
+                                        onValueChange = { newOthersModelInput = it.trim() },
                                         label = { Text("Model ID") },
-                                        placeholder = { Text("Model ID") },
+                                        placeholder = { Text("e.g. gpt-4o, claude-3-5-sonnet") },
                                         modifier = Modifier.fillMaxWidth(),
                                         singleLine = true,
                                         trailingIcon = {
                                             IconButton(
-                                                onClick = { settings.addOthersAiModel(settings.othersAiModel) },
-                                                enabled = settings.othersAiModel.isNotBlank(),
+                                                onClick = {
+                                                    if (newOthersModelInput.isNotBlank()) {
+                                                        settings.addOthersAiModel(newOthersModelInput)
+                                                        newOthersModelInput = ""
+                                                    }
+                                                },
+                                                enabled = newOthersModelInput.isNotBlank(),
                                             ) {
                                                 Icon(
                                                     imageVector = Icons.Default.Add,
-                                                    contentDescription = "Add to the quick selector",
+                                                    contentDescription = "Add to the list",
                                                     modifier = Modifier.size(20.dp),
                                                 )
                                             }
@@ -832,39 +906,118 @@ fun TranslatorSettingsDialog(
 
                                     if (settings.othersAiModels.isEmpty()) {
                                         Text(
-                                            text = "Quick selector is empty: type a model ID and tap + to save it.",
+                                            text = "No models added: type a model ID and tap + to add it.",
                                             fontSize = 11.sp,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
                                     } else {
-                                        FlowRow(
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                                        Column(
+                                            verticalArrangement = Arrangement.spacedBy(4.dp),
                                             modifier = Modifier.fillMaxWidth(),
                                         ) {
-                                            settings.othersAiModels.forEach { model ->
-                                                FilterChip(
-                                                    selected = settings.othersAiModel == model,
-                                                    onClick = { settings.othersAiModel = model },
-                                                    label = {
+                                            settings.othersAiModels.forEachIndexed { index, model ->
+                                                var dragOffsetY by remember { mutableFloatStateOf(0f) }
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .background(
+                                                            color = if (index == 0) {
+                                                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                                                            } else {
+                                                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                                                            },
+                                                            shape = RoundedCornerShape(8.dp),
+                                                        )
+                                                        .border(
+                                                            width = 1.dp,
+                                                            color = if (index == 0) {
+                                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                                                            } else {
+                                                                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                                                            },
+                                                            shape = RoundedCornerShape(8.dp),
+                                                        )
+                                                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.DragIndicator,
+                                                        contentDescription = "Drag to reorder",
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier
+                                                            .size(24.dp)
+                                                            .pointerInput(index, settings.othersAiModels.size) {
+                                                                detectVerticalDragGestures(
+                                                                    onDragStart = { dragOffsetY = 0f },
+                                                                    onDragEnd = { dragOffsetY = 0f },
+                                                                    onDragCancel = { dragOffsetY = 0f },
+                                                                    onVerticalDrag = { change, dragAmount ->
+                                                                        change.consume()
+                                                                        dragOffsetY += dragAmount
+                                                                        val threshold = 36.dp.toPx()
+                                                                        if (dragOffsetY > threshold && index < settings.othersAiModels.size - 1) {
+                                                                            settings.moveOthersAiModel(index, index + 1)
+                                                                            dragOffsetY = 0f
+                                                                        } else if (dragOffsetY < -threshold && index > 0) {
+                                                                            settings.moveOthersAiModel(index, index - 1)
+                                                                            dragOffsetY = 0f
+                                                                        }
+                                                                    },
+                                                                )
+                                                            },
+                                                    )
+
+                                                    Spacer(modifier = Modifier.width(6.dp))
+
+                                                    Row(
+                                                        modifier = Modifier.weight(1f),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                    ) {
                                                         Text(
                                                             text = model,
-                                                            fontSize = 11.sp,
+                                                            fontSize = 12.sp,
+                                                            fontWeight = if (index == 0) FontWeight.SemiBold else FontWeight.Normal,
                                                             maxLines = 1,
-                                                            softWrap = false,
                                                             overflow = TextOverflow.Ellipsis,
+                                                            modifier = Modifier.weight(1f),
                                                         )
-                                                    },
-                                                    trailingIcon = {
-                                                        Icon(
-                                                            imageVector = Icons.Default.Close,
-                                                            contentDescription = "Remove $model from the quick selector",
-                                                            modifier = Modifier
-                                                                .size(18.dp)
-                                                                .clickable { settings.removeOthersAiModel(model) },
-                                                        )
-                                                    },
-                                                )
+                                                        IconButton(
+                                                            onClick = { settings.removeOthersAiModel(model) },
+                                                            modifier = Modifier.size(24.dp),
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Close,
+                                                                contentDescription = "Remove $model",
+                                                                modifier = Modifier.size(16.dp),
+                                                            )
+                                                        }
+                                                    }
+
+                                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                                    Surface(
+                                                        shape = CircleShape,
+                                                        color = if (index == 0) {
+                                                            MaterialTheme.colorScheme.primary
+                                                        } else {
+                                                            MaterialTheme.colorScheme.secondaryContainer
+                                                        },
+                                                        modifier = Modifier.size(24.dp),
+                                                    ) {
+                                                        Box(contentAlignment = Alignment.Center) {
+                                                            Text(
+                                                                text = "#${index + 1}",
+                                                                fontSize = 10.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = if (index == 0) {
+                                                                    MaterialTheme.colorScheme.onPrimary
+                                                                } else {
+                                                                    MaterialTheme.colorScheme.onSecondaryContainer
+                                                                },
+                                                            )
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -909,6 +1062,7 @@ fun TranslatorSettingsDialog(
                                     Spacer(modifier = Modifier.height(10.dp))
 
                                     val currentOthersKeys = settings.getOthersAiApiKeys()
+                                    val testModel = settings.othersAiModel.ifBlank { settings.othersAiModels.firstOrNull().orEmpty() }
                                     OutlinedButton(
                                         onClick = {
                                             scope.launch {
@@ -917,7 +1071,7 @@ fun TranslatorSettingsDialog(
                                                 val res = PageTranslator.testOpenAiConnection(
                                                     baseUrl = settings.othersAiBaseUrl,
                                                     apiKeys = settings.getOthersAiApiKeys(),
-                                                    model = settings.othersAiModel,
+                                                    model = testModel,
                                                 )
                                                 isTestingOthersKey = false
                                                 res.onSuccess {
@@ -929,7 +1083,7 @@ fun TranslatorSettingsDialog(
                                                 }
                                             }
                                         },
-                                        enabled = !isTestingOthersKey && currentOthersKeys.isNotEmpty() && settings.othersAiBaseUrl.isNotBlank() && settings.othersAiModel.isNotBlank(),
+                                        enabled = !isTestingOthersKey && currentOthersKeys.isNotEmpty() && settings.othersAiBaseUrl.isNotBlank() && testModel.isNotBlank(),
                                         modifier = Modifier.fillMaxWidth(),
                                     ) {
                                         if (isTestingOthersKey) {
@@ -1081,7 +1235,11 @@ fun TranslatorSettingsDialog(
 
                         SettingSwitch(
                             title = "Use as fallback",
-                            subtitle = "When Gemini rejects an image, recognize Japanese text on-device with Google OCR and translate only the text",
+                            subtitle = if (settings.othersAiUseAsMain) {
+                                "When the model rejects an image, recognize Japanese text on-device with Google OCR and translate only the text"
+                            } else {
+                                "When Gemini rejects an image, recognize Japanese text on-device with Google OCR and translate only the text"
+                            },
                             checked = settings.ocrFallbackEnabled && settings.ocrModelDownloaded,
                             onCheckedChange = { settings.ocrFallbackEnabled = it },
                             enabled = settings.ocrModelDownloaded,
@@ -1090,8 +1248,16 @@ fun TranslatorSettingsDialog(
                         Spacer(modifier = Modifier.height(4.dp))
 
                         SettingSwitch(
-                            title = "Use Others AI for rejected text by Gemini",
-                            subtitle = "If Gemini rejects the extracted text, use the model selected in Others AI to translate it",
+                            title = if (settings.othersAiUseAsMain) {
+                                "Use Gemini for rejected text by Others AI"
+                            } else {
+                                "Use Others AI for rejected text by Gemini"
+                            },
+                            subtitle = if (settings.othersAiUseAsMain) {
+                                "If the model rejects the extracted text, use the model selected in Gemini to translate it"
+                            } else {
+                                "If Gemini rejects the extracted text, use the model selected in Others AI to translate it"
+                            },
                             checked = settings.ocrUseOthersAiForRejectedText,
                             onCheckedChange = { settings.ocrUseOthersAiForRejectedText = it },
                             enabled = settings.ocrFallbackEnabled && settings.ocrModelDownloaded,
@@ -1396,6 +1562,13 @@ fun TranslatorSettingsDialog(
                 onClick = onDismiss,
             ) {
                 Text("Done")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onCancel,
+            ) {
+                Text("Cancel")
             }
         },
     )

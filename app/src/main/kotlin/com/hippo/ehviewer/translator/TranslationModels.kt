@@ -43,5 +43,6 @@ data class PageTranslation(
     companion object {
         const val FALLBACK_OTHER_AI = "other_ai"
         const val FALLBACK_OCR = "ocr"
+        const val FALLBACK_GEMINI = "gemini"
     }
 }

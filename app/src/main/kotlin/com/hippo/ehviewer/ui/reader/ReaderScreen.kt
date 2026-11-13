@@ -486,6 +486,10 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
                 // them again with the current settings.
                 launch { translatorState.retranslateFollowing(currentPage, count) }
             },
+            onCancel = {
+                translatorSettings.reload()
+                showTranslationSettings = false
+            },
             onDismiss = {
                 translatorSettings.save()
                 showTranslationSettings = false

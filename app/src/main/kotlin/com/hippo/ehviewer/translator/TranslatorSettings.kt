@@ -42,7 +42,10 @@ class TranslatorSettings(context: Context) {
     var geminiModel by mutableStateOf(
         prefs.getString("gemini_model", DEFAULT_GEMINI_MODEL) ?: DEFAULT_GEMINI_MODEL,
     )
+    var geminiUseAsFallback by mutableStateOf(prefs.getBoolean("gemini_use_as_fallback", false))
 
+    var othersAiUseAsMain by mutableStateOf(prefs.getBoolean("others_ai_use_as_main", false))
+    var othersAiAllowModelFallback by mutableStateOf(prefs.getBoolean("others_ai_allow_model_fallback", true))
     var othersAiUseAsFallback by mutableStateOf(prefs.getBoolean("others_ai_use_as_fallback", false))
     var othersAiBaseUrl by mutableStateOf(prefs.getString("others_ai_base_url", "").orEmpty())
     var othersAiApiKeysRaw by mutableStateOf(prefs.getString("others_ai_api_keys", "").orEmpty())
@@ -229,10 +232,85 @@ class TranslatorSettings(context: Context) {
         val model = id.trim()
         if (model.isEmpty() || model in othersAiModels) return
         othersAiModels = othersAiModels + model
+        if (othersAiModel.isBlank()) {
+            othersAiModel = model
+        }
     }
 
     fun removeOthersAiModel(id: String) {
         othersAiModels = othersAiModels - id
+        if (othersAiModel == id) {
+            othersAiModel = othersAiModels.firstOrNull().orEmpty()
+        }
+    }
+
+    fun moveOthersAiModel(fromIndex: Int, toIndex: Int) {
+        if (fromIndex !in othersAiModels.indices || toIndex !in othersAiModels.indices || fromIndex == toIndex) return
+        val updated = othersAiModels.toMutableList()
+        val item = updated.removeAt(fromIndex)
+        updated.add(toIndex, item)
+        othersAiModels = updated
+        othersAiModel = updated.firstOrNull().orEmpty()
+    }
+
+    fun reload() {
+        geminiApiKeysRaw = prefs.getString("gemini_api_keys", "").orEmpty()
+        geminiModel = prefs.getString("gemini_model", DEFAULT_GEMINI_MODEL) ?: DEFAULT_GEMINI_MODEL
+        geminiModels = prefs.getString("gemini_models", null)?.let { raw ->
+            raw.split('\n')
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+        } ?: listOf(DEFAULT_GEMINI_MODEL)
+        geminiUserPrompt = prefs.getString("gemini_user_prompt", "").orEmpty()
+        geminiSystemPrompt = prefs.getString("gemini_system_prompt", DEFAULT_SYSTEM_PROMPT) ?: DEFAULT_SYSTEM_PROMPT
+        geminiUseAsFallback = prefs.getBoolean("gemini_use_as_fallback", false)
+
+        othersAiUseAsMain = prefs.getBoolean("others_ai_use_as_main", false)
+        othersAiAllowModelFallback = prefs.getBoolean("others_ai_allow_model_fallback", true)
+        othersAiUseAsFallback = prefs.getBoolean("others_ai_use_as_fallback", false)
+        othersAiBaseUrl = prefs.getString("others_ai_base_url", "").orEmpty()
+        othersAiApiKeysRaw = prefs.getString("others_ai_api_keys", "").orEmpty()
+        othersAiModel = prefs.getString("others_ai_model", "").orEmpty()
+        othersAiModels = prefs.getString("others_ai_models", null)?.let { raw ->
+            raw.split('\n')
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+        } ?: emptyList()
+        othersAiThinkingLevel = prefs.getString("others_ai_thinking_level", THINKING_MINIMAL) ?: THINKING_MINIMAL
+        othersAiSystemPrompt = prefs.getString("others_ai_system_prompt", DEFAULT_SYSTEM_PROMPT) ?: DEFAULT_SYSTEM_PROMPT
+        othersAiUserPrompt = prefs.getString("others_ai_user_prompt", "").orEmpty()
+
+        ocrModelDownloaded = prefs.getBoolean("ocr_model_downloaded", false)
+        ocrFallbackEnabled = prefs.getBoolean("ocr_fallback_enabled", false)
+        ocrUseOthersAiForRejectedText = prefs.getBoolean("ocr_use_others_ai_rejected_text", false)
+        ocrSystemPrompt = prefs.getString("ocr_system_prompt", DEFAULT_OCR_SYSTEM_PROMPT) ?: DEFAULT_OCR_SYSTEM_PROMPT
+        ocrUserPrompt = prefs.getString("ocr_user_prompt", "").orEmpty()
+
+        sourceLang = prefs.getString("source_lang", "Japanese") ?: "Japanese"
+        targetLang = prefs.getString("target_lang", "English") ?: "English"
+        globalBubbleScale = prefs.getFloat("global_bubble_scale", 1.0f)
+        bubbleOpacity = prefs.getFloat("bubble_opacity", 1.0f)
+        autoTranslate = prefs.getBoolean("auto_translate", false)
+        batchSize = prefs.getInt("batch_size", 3)
+        thinkingLevel = prefs.getString("thinking_level", THINKING_MINIMAL) ?: THINKING_MINIMAL
+
+        bubbleOrientation = prefs.getString("bubble_orientation", ORIENTATION_VERTICAL) ?: ORIENTATION_VERTICAL
+        showSfx = prefs.getBoolean("show_sfx", true)
+        bubbleShape = prefs.getString("bubble_shape", SHAPE_OVAL) ?: SHAPE_OVAL
+        bubbleStyle = prefs.getString("bubble_style", STYLE_FILL) ?: STYLE_FILL
+        outlineWidth = prefs.getFloat("outline_width", 3.0f)
+        bubblePadding = prefs.getString("bubble_padding", PADDING_COMPACT) ?: PADDING_COMPACT
+
+        uppercaseScanlation = prefs.getBoolean("uppercase_scanlation", true)
+        preventCollisions = prefs.getBoolean("prevent_collisions", true)
+        collisionGap = prefs.getFloat("collision_gap", 0f)
+        collisionIterations = prefs.getInt("collision_iterations", 40)
+        maxCollisionShiftRatio = prefs.getFloat("max_collision_shift_ratio", 0.30f)
+        borderThickness = prefs.getFloat("border_thickness", 1.2f)
+        isManipulationMode = prefs.getBoolean("is_manipulation_mode", false)
+        standardFontSizeSp = prefs.getFloat("standard_font_size_sp", 12f)
     }
 
     fun save() {
@@ -252,6 +330,9 @@ class TranslatorSettings(context: Context) {
             .putString("target_lang", targetLang)
             .putString("gemini_system_prompt", geminiSystemPrompt)
             .putInt("gemini_system_prompt_version", 3)
+            .putBoolean("gemini_use_as_fallback", geminiUseAsFallback)
+            .putBoolean("others_ai_use_as_main", othersAiUseAsMain)
+            .putBoolean("others_ai_allow_model_fallback", othersAiAllowModelFallback)
             .putBoolean("others_ai_use_as_fallback", othersAiUseAsFallback)
             .putString("others_ai_base_url", othersAiBaseUrl.trim())
             .putString("others_ai_api_keys", othersAiApiKeysRaw)
