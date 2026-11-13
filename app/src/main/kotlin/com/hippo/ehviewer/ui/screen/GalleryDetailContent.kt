@@ -4,7 +4,12 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import androidx.annotation.StringRes
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.MutatorMutex
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -25,6 +30,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FolderZip
@@ -37,6 +43,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -53,6 +60,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.LocalPinnableContainer
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
@@ -519,36 +527,113 @@ fun BelowHeader(galleryDetail: GalleryDetail, voteTag: VoteTag) {
             }
             Text(text = favButtonText)
         }
-        EhIconButton(
-            icon = Icons.Default.Search,
-            text = stringResource(id = R.string.similar_gallery),
-            onClick = {
-                val keyword = EhUtils.extractSimilarSearchKeyword(galleryDetail.title, galleryDetail.titleJpn)
-                val artistTag = galleryDetail.tagGroups.artistTag()
-                if (null != keyword) {
-                    navigate(
-                        ListUrlBuilder(
-                            mode = ListUrlBuilder.MODE_NORMAL,
-                            keyword = keyword,
-                        ).asDst(),
-                    )
-                } else if (artistTag != null) {
-                    navigate(
-                        ListUrlBuilder(
-                            mode = ListUrlBuilder.MODE_TAG,
-                            keyword = artistTag,
-                        ).asDst(),
-                    )
-                } else if (null != galleryDetail.uploader) {
-                    navigate(
-                        ListUrlBuilder(
-                            mode = ListUrlBuilder.MODE_UPLOADER,
-                            keyword = galleryDetail.uploader,
-                        ).asDst(),
-                    )
+        val artistTag = galleryDetail.tagGroups.artistTag()
+        val titleKeyword = remember(galleryDetail.title) { EhUtils.extractTitle(galleryDetail.title) }
+        val titleJpnKeyword = remember(galleryDetail.titleJpn) { EhUtils.extractTitle(galleryDetail.titleJpn) }
+        val hasBothTitles = !titleKeyword.isNullOrBlank() && !titleJpnKeyword.isNullOrBlank() &&
+            !titleKeyword.equals(titleJpnKeyword, ignoreCase = true)
+        var showSimilarOptions by remember { mutableStateOf(false) }
+
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            FilledTertiaryIconButton(
+                onClick = {
+                    if (hasBothTitles) {
+                        showSimilarOptions = !showSimilarOptions
+                    } else {
+                        val keyword = titleKeyword ?: titleJpnKeyword
+                        if (null != keyword) {
+                            navigate(
+                                ListUrlBuilder(
+                                    mode = ListUrlBuilder.MODE_NORMAL,
+                                    keyword = "\"" + keyword + "\"",
+                                ).asDst(),
+                            )
+                        } else if (artistTag != null) {
+                            navigate(
+                                ListUrlBuilder(
+                                    mode = ListUrlBuilder.MODE_TAG,
+                                    keyword = artistTag,
+                                ).asDst(),
+                            )
+                        } else if (null != galleryDetail.uploader) {
+                            navigate(
+                                ListUrlBuilder(
+                                    mode = ListUrlBuilder.MODE_UPLOADER,
+                                    keyword = galleryDetail.uploader,
+                                ).asDst(),
+                            )
+                        }
+                    }
+                },
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = null,
+                )
+            }
+            Text(text = stringResource(id = R.string.similar_gallery))
+
+            AnimatedVisibility(
+                visible = showSimilarOptions,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+            ) {
+                Column(
+                    modifier = Modifier.padding(top = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Surface(
+                        onClick = {
+                            showSimilarOptions = false
+                            if (titleKeyword != null) {
+                                navigate(
+                                    ListUrlBuilder(
+                                        mode = ListUrlBuilder.MODE_NORMAL,
+                                        keyword = "\"" + titleKeyword + "\"",
+                                    ).asDst(),
+                                )
+                            }
+                        },
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shadowElevation = 3.dp,
+                    ) {
+                        Text(
+                            text = "Title",
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                    }
+                    Surface(
+                        onClick = {
+                            showSimilarOptions = false
+                            if (titleJpnKeyword != null) {
+                                navigate(
+                                    ListUrlBuilder(
+                                        mode = ListUrlBuilder.MODE_NORMAL,
+                                        keyword = "\"" + titleJpnKeyword + "\"",
+                                    ).asDst(),
+                                )
+                            }
+                        },
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shadowElevation = 3.dp,
+                    ) {
+                        Text(
+                            text = "JAP Title",
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                    }
                 }
-            },
-        )
+            }
+        }
         val signInFirst = stringResource(R.string.sign_in_first)
         val noArchive = stringResource(R.string.no_archives)
         val downloadStarted = stringResource(R.string.download_archive_started)
